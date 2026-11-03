@@ -1,0 +1,180 @@
+import { type FC, useMemo } from 'react';
+import { Route, Switch } from 'react-router-dom';
+
+import { c, msgid } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { usePopperAnchor } from '@proton/atoms/Popper/usePopperAnchor';
+import Dropdown from '@proton/components/components/dropdown/Dropdown';
+import DropdownMenu from '@proton/components/components/dropdown/DropdownMenu';
+import { IcExclamationFilled } from '@proton/icons/icons/IcExclamationFilled';
+
+import { useMemoSelector } from '../../../hooks/useMemoSelector';
+import { itemEq } from '../../../lib/items/item.predicates';
+import { getItemKey } from '../../../lib/items/item.utils';
+import { selectSelectedItems } from '../../../store/selectors/items';
+import type { ItemRevision, SelectedItem } from '../../../types/data/items';
+import { not } from '../../../utils/fp/predicates';
+import { ItemTag } from '../../Item/List/ItemTag';
+import { Card } from '../../Layout/Card/Card';
+import { CardContent } from '../../Layout/Card/CardContent';
+import { CardIcon } from '../../Layout/Card/CardIcon';
+import { DropdownMenuButton } from '../../Layout/Dropdown/DropdownMenuButton';
+import { useSelectItem } from '../../Navigation/NavigationActions';
+import { getLocalPath } from '../../Navigation/routing';
+import { useMonitor } from '../MonitorContext';
+
+const BTN_STYLES = {
+    '--button-default-background-color': 'var(--interaction-weak-major-1)',
+    '--button-hover-background-color': 'var(--interaction-weak-major-2)',
+    '--button-active-background-color': 'var(--interaction-weak-major-2)',
+    '--button-default-text-color': 'var(--interaction-weak-contrast)',
+    '--button-hover-text-color': 'var(--interaction-weak-contrast)',
+    '--button-active-text-color': 'var(--interaction-weak-contrast)',
+};
+
+const DuplicatePasswordReport: FC<SelectedItem> = (item) => {
+    const { duplicates } = useMonitor();
+    const selectItem = useSelectItem();
+
+    const matches = useMemo(() => {
+        const group = duplicates.data.find((group) => group.some(itemEq(item))) ?? [];
+        return group?.filter(not(itemEq(item))) ?? [];
+    }, [duplicates.data]);
+
+    const others = useMemoSelector(selectSelectedItems, [matches]);
+    const total = others.length;
+
+    const { anchorRef, isOpen, toggle, close } = usePopperAnchor<HTMLButtonElement>();
+
+    const handleClick = (item: ItemRevision) => () =>
+        selectItem(item.shareId, item.itemId, { scope: 'monitor/duplicates' });
+
+    return total > 0 ? (
+        <Card className="mb-2" type="warning">
+            <CardContent
+                icon={<CardIcon icon={IcExclamationFilled} className="self-start mt-0.5" />}
+                titleClassname="color-interaction-norm-major-2 text-lg text-semibold"
+                subtitleClassname="color-interaction-norm-major-2"
+                title={c('Description').ngettext(
+                    msgid`${total} other login uses the same password`,
+                    `${total} other logins use the same password`,
+                    total
+                )}
+                subtitle={
+                    total <= 5 ? (
+                        <div className="flex gap-2 mt-2 flex-nowrap overflow-overlay">
+                            {others.map((item) => (
+                                <Button
+                                    key={getItemKey(item)}
+                                    className="flex shrink-0 border-none"
+                                    style={BTN_STYLES}
+                                    size="small"
+                                    onClick={handleClick(item)}
+                                >
+                                    <ItemTag {...item} />
+                                </Button>
+                            ))}
+                        </div>
+                    ) : (
+                        <Button
+                            shape="solid"
+                            color="norm"
+                            className="button-xs mt-1"
+                            size="small"
+                            pill
+                            style={BTN_STYLES}
+                            onClick={toggle}
+                            ref={anchorRef}
+                        >
+                            {c('Action').t`See all`}
+                            <Dropdown
+                                isOpen={isOpen}
+                                anchorRef={anchorRef}
+                                onClose={close}
+                                originalPlacement="bottom-start"
+                            >
+                                <DropdownMenu>
+                                    {others.map((item) => (
+                                        <DropdownMenuButton
+                                            key={getItemKey(item)}
+                                            label={<ItemTag {...item} />}
+                                            onClick={handleClick(item)}
+                                        />
+                                    ))}
+                                </DropdownMenu>
+                            </Dropdown>
+                        </Button>
+                    )
+                }
+            />
+        </Card>
+    ) : null;
+};
+
+const WeakPasswordReport: FC<SelectedItem> = (item) => {
+    const { insecure } = useMonitor();
+    const isWeak = insecure.data.some(itemEq(item));
+
+    return (
+        isWeak && (
+            <Card className="mb-2" type="warning">
+                <CardContent
+                    icon={<CardIcon icon={IcExclamationFilled} className="self-start mt-0.5" />}
+                    titleClassname="color-interaction-norm-major-2 text-lg text-semibold"
+                    subtitleClassname="color-interaction-norm-major-2"
+                    title={c('Title').t`Weak password`}
+                    subtitle={c('Description')
+                        .t`This account is vulnerable, visit the service and change your password.`}
+                />
+            </Card>
+        )
+    );
+};
+
+const CompromisedPasswordReport: FC<SelectedItem> = (item) => {
+    const { compromised } = useMonitor();
+    const isCompromised = compromised.data.some(itemEq(item));
+
+    return (
+        isCompromised && (
+            <Card className="mb-2" type="danger">
+                <CardContent
+                    icon={<CardIcon icon={IcExclamationFilled} className="self-start mt-0.5" />}
+                    titleClassname="color-interaction-norm-major-2 text-lg text-semibold"
+                    subtitleClassname="color-interaction-norm-major-2"
+                    title={c('Title').t`Compromised password`}
+                    subtitle={c('Description')
+                        .t`This login password appears in a data breach. Please visit the service and change the password.`}
+                />
+            </Card>
+        )
+    );
+};
+
+const Missing2FAReport: FC<SelectedItem> = (item) => {
+    const { missing2FAs } = useMonitor();
+    const isMissing2FA = missing2FAs.data.some(itemEq(item));
+
+    return (
+        isMissing2FA && (
+            <Card className="mb-2" type="primary">
+                <CardContent
+                    icon={<CardIcon icon={IcExclamationFilled} className="self-start mt-0.5" />}
+                    titleClassname="text-lg text-semibold"
+                    title={c('Title').t`Set up 2FA for more security`}
+                    subtitle={c('Description').t`This service offers 2FA. Enable it for added account security.`}
+                />
+            </Card>
+        )
+    );
+};
+
+export const ItemReport: FC<SelectedItem> = (item) => (
+    <Switch>
+        <Route path={getLocalPath('monitor/duplicates')} render={() => <DuplicatePasswordReport {...item} />} />
+        <Route path={getLocalPath('monitor/weak')} render={() => <WeakPasswordReport {...item} />} />
+        <Route path={getLocalPath('monitor/compromised')} render={() => <CompromisedPasswordReport {...item} />} />
+        <Route path={getLocalPath('monitor/2fa')} render={() => <Missing2FAReport {...item} />} />
+    </Switch>
+);

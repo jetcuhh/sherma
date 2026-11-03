@@ -1,0 +1,54 @@
+import { useInactiveKeys } from '@proton/account/inactiveKeys/hooks';
+import { useIsSentinelUser } from '@proton/account/recovery/sentinelHooks';
+import { FeatureCode } from '@proton/features/interface';
+import useFeature from '@proton/features/useFeature';
+
+import useModalState from '../../components/modalTwo/useModalState';
+import useSearchParamsEffect from '../../hooks/useSearchParamsEffect';
+import ReactivateKeysModal from '../keys/reactivateKeys/ReactivateKeysModal';
+import { SettingsLayoutVariant } from '../layout/interface';
+import RecoverDataBanner from './RecoverDataBanner';
+import RecoverDataConfirmModal from './RecoverDataConfirmModal';
+import RecoveryScoreBanner from './RecoveryScoreBanner/RecoveryScoreBanner';
+import SentinelBanner from './SentinelBanner/SentinelBanner';
+
+interface Props {
+    variant?: SettingsLayoutVariant;
+}
+export const OverviewSectionV2 = ({ variant = SettingsLayoutVariant.Card }: Props) => {
+    const keyReactivationRequests = useInactiveKeys();
+
+    const [reactivateKeyProps, setReactivateKeyModalOpen, renderReactivateKeys] = useModalState();
+    const [confirmProps, setDismissConfirmModalOpen, renderConfirm] = useModalState();
+
+    const { feature: hasDismissedRecoverDataCard } = useFeature(FeatureCode.DismissedRecoverDataCard);
+
+    useSearchParamsEffect(
+        (params) => {
+            if (params.get('action') === 'recover-data' && keyReactivationRequests.length) {
+                setReactivateKeyModalOpen(true);
+                params.delete('action');
+                return params;
+            }
+        },
+        [keyReactivationRequests.length]
+    );
+
+    const [{ isSentinelUser }] = useIsSentinelUser();
+
+    return (
+        <div className="flex flex-column gap-8">
+            {renderReactivateKeys && (
+                <ReactivateKeysModal keyReactivationRequests={keyReactivationRequests} {...reactivateKeyProps} />
+            )}
+            {renderConfirm && <RecoverDataConfirmModal {...confirmProps} />}
+            {!!keyReactivationRequests.length && hasDismissedRecoverDataCard?.Value === false && (
+                <RecoverDataBanner
+                    onReactivate={() => setReactivateKeyModalOpen(true)}
+                    onDismiss={() => setDismissConfirmModalOpen(true)}
+                />
+            )}
+            {isSentinelUser ? <SentinelBanner variant={variant} /> : <RecoveryScoreBanner variant={variant} />}
+        </div>
+    );
+};

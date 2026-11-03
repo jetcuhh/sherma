@@ -1,0 +1,115 @@
+import type { FeatureFlagState } from '@proton/pass/store/reducers';
+import { type ProxiedSettings, getInitialSettings } from '@proton/pass/store/reducers/settings';
+import type { PassFeature } from '@proton/pass/types/api/features';
+import type { PassElementsConfig } from '@proton/pass/types/utils/dom';
+import { AppStatus } from '@proton/pass/types/worker/state';
+import { logger } from '@proton/pass/utils/logger';
+import noop from '@proton/utils/noop';
+
+import { ExtensionContext } from '../../../lib/context/extension-context';
+import { computeFeatures } from '../../../lib/utils/features';
+import { createAutofillService } from '../services/autofill/autofill.service';
+import { createAutosaveRelay } from '../services/autosave/autosave.relay';
+import { createAutosaveService } from '../services/autosave/autosave.service';
+import type { ClientController } from '../services/client/client.controller';
+import { createDetectorService } from '../services/detector/detector.service';
+import { IGNORED_TAGS } from '../services/detector/detector.utils';
+import { createFormManager } from '../services/form/form.manager';
+import { createInlineRelay } from '../services/inline/inline.relay';
+import { createInlineService } from '../services/inline/inline.service';
+import { createPasskeyService } from '../services/webauthn/passkey.service';
+import { CSContext } from './context';
+import type { CSContextState, ContentScriptContext } from './types';
+
+export type ContentScriptContextFactoryOptions = {
+    scriptId: string;
+    mainFrame: boolean;
+    elements: PassElementsConfig;
+    controller: ClientController;
+    destroy: (options: { reason: string }) => void;
+};
+
+export const createContentScriptContext = (options: ContentScriptContextFactoryOptions): ContentScriptContext => {
+    const state: CSContextState = {
+        authorized: false,
+        booted: false,
+        localID: undefined,
+        ready: false,
+        stale: false,
+        status: AppStatus.IDLE,
+        UID: undefined,
+    };
+
+    /** Add the custom elements to the ignored nodes to ignore
+     * any mutation/transition events inside the form manager */
+    IGNORED_TAGS.add(options.elements.control.toUpperCase());
+    IGNORED_TAGS.add(options.elements.root.toUpperCase());
+
+    const settings: ProxiedSettings = getInitialSettings();
+    const featureFlags: FeatureFlagState = {};
+
+    const context: ContentScriptContext = CSContext.set({
+        elements: options.elements,
+        mainFrame: options.mainFrame,
+        scriptId: options.scriptId,
+        channel: options.controller.channel,
+        observer: options.controller.observer,
+
+        service: {
+            autofill: createAutofillService(options),
+
+            autosave: options.mainFrame ? createAutosaveService() : createAutosaveRelay(),
+
+            detector: createDetectorService({
+                root: document,
+                onBottleneck: ({ detectionTime }) => {
+                    logger.info(`[Detector] Prediction bottleneck detected [${detectionTime}ms]`);
+                    context.destroy({ reason: 'bottleneck' });
+                    options.controller.destroy();
+                },
+            }),
+
+            formManager: createFormManager({
+                channel: options.controller.channel,
+                onDetection: async (forms) => {
+                    /* attach or detach dropdown based on the detection results */
+                    if (forms.length === 0) context.service.inline.dropdown.destroy();
+                    else {
+                        context.service.inline.dropdown.attach();
+                        await context.service.autofill.sync().catch(noop);
+                    }
+
+                    /** Always prompt for OTP autofill before autosave to support
+                     * OTP -> autosave sequence on SPA websites */
+                    const promptedOTP = await context.service.autofill.evaluateOTP(forms);
+                    await (!promptedOTP && context.service.autosave.reconciliate());
+                },
+            }),
+
+            inline: options.mainFrame ? createInlineService(options) : createInlineRelay(options),
+            passkey: options.mainFrame ? createPasskeyService() : undefined,
+        },
+
+        destroy: options.destroy,
+        getExtensionContext: () => ExtensionContext.read(),
+        getFeatureFlags: () => featureFlags,
+        getFeatures: () => {
+            const ctx = context.getExtensionContext();
+            const frameUrl = ctx?.frameUrl ?? null;
+            const tabUrl = ctx?.tabUrl ?? null;
+            return computeFeatures(settings, frameUrl, tabUrl);
+        },
+        getSettings: () => settings,
+        getState: () => state,
+
+        setFeatureFlags: (update) => {
+            (Object.keys(featureFlags) as PassFeature[]).forEach((key) => delete featureFlags[key]);
+            return Object.assign(featureFlags, update);
+        },
+
+        setSettings: (update) => Object.assign(settings, update),
+        setState: (update) => Object.assign(state, update),
+    });
+
+    return context;
+};

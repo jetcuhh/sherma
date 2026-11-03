@@ -1,0 +1,30 @@
+import type { ComponentPropsWithoutRef } from 'react';
+
+import getVariableFromThemeColor from '@proton/colors/get-variable-from-theme-color';
+import { ThemeColor } from '@proton/colors/types';
+import clsx from '@proton/utils/clsx';
+
+import './NotificationDot.scss';
+
+export interface NotificationDotProps extends ComponentPropsWithoutRef<'span'> {
+    /**
+     * Controls the color of the dot.
+     */
+    color?: ThemeColor;
+    /**
+     * Adds sr-only text for vocalization
+     */
+    alt?: String;
+}
+
+export const NotificationDot = ({ color = ThemeColor.Norm, className, alt, ...rest }: NotificationDotProps) => {
+    return (
+        <span
+            className={clsx(className, 'notification-dot rounded-50')}
+            style={{ backgroundColor: `var(${getVariableFromThemeColor(color)})` }}
+            {...rest}
+        >
+            {alt && <span className="sr-only">{alt}</span>}
+        </span>
+    );
+};

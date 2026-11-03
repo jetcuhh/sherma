@@ -1,0 +1,7 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "lib": ["dom", "dom.iterable", "esnext", "WebWorker"]
+    },
+    "exclude": ["**/node_modules/*", "**/dist/*", "**/.*/", "e2e"]
+}

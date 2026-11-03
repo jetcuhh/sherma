@@ -1,0 +1,207 @@
+import type { GroupFlags, GroupMemberType, GroupPermissions, ProxyInstances } from '../interfaces/Group';
+
+interface GroupParameters {
+    Name: string;
+    Email: string;
+    ParentGroup?: string;
+    Permissions: number;
+    Description: string;
+    Flags: GroupFlags;
+}
+
+export const createGroup = (groupParams: GroupParameters) => ({
+    method: 'post',
+    url: 'core/v4/groups',
+    data: {
+        ...groupParams,
+    },
+});
+
+export const editGroup = (groupID: string, groupParams: Partial<GroupParameters>) => ({
+    method: 'put',
+    url: `core/v4/groups/${groupID}`,
+    data: {
+        ...groupParams,
+    },
+});
+
+export const deleteGroup = (groupID: string) => ({
+    method: 'delete',
+    url: `core/v4/groups/${groupID}`,
+});
+
+export const getGroups = () => ({
+    method: 'get',
+    url: 'core/v4/groups',
+});
+
+export const getGroup = (groupID: string) => ({
+    method: 'get',
+    url: `core/v4/groups/${groupID}`,
+});
+
+export const getGroupMembers = (groupID: string) => ({
+    method: 'get',
+    url: `core/v4/groups/${groupID}/members`,
+});
+
+export const getGroupMember = (memberID: string) => ({
+    method: 'get',
+    url: `core/v4/groups/members/${memberID}`,
+});
+
+interface AddGroupMemberParameters {
+    GroupID: string;
+    Email: string;
+    AddressSignaturePacket: string;
+}
+
+interface AddExternalGroupMemberParameters extends AddGroupMemberParameters {
+    Type: GroupMemberType.External;
+}
+
+interface BaseAddInternalGroupMemberParameters extends AddGroupMemberParameters {
+    Type: GroupMemberType.Internal;
+    GroupMemberAddressPrivateKey: string;
+    AddressSignaturePacket: string;
+    ProxyInstances: ProxyInstances[];
+}
+
+interface AddInternalNonPrivateGroupMemberParameters extends BaseAddInternalGroupMemberParameters {
+    Token: string;
+    Signature: string;
+}
+
+interface AddInternalGroupMemberParameters extends BaseAddInternalGroupMemberParameters {
+    GroupMemberAddressPrivateKey: string;
+    ActivationToken: string;
+}
+
+export const addGroupMember = (
+    data:
+        AddExternalGroupMemberParameters | AddInternalNonPrivateGroupMemberParameters | AddInternalGroupMemberParameters
+) => ({
+    method: 'post',
+    url: 'core/v4/groups/members',
+    data,
+});
+
+interface AddGroupMemberKeysBaseParameters {
+    Email: string;
+    AddressSignaturePacket: string;
+}
+
+interface AddInternalGroupMemberKeysBaseParameters extends AddGroupMemberKeysBaseParameters {
+    GroupMemberAddressPrivateKey: string;
+    ProxyInstances: ProxyInstances[];
+}
+
+interface AddInternalNonPrivateGroupMemberKeysParameters extends AddInternalGroupMemberKeysBaseParameters {
+    Token: string;
+    Signature: string;
+}
+
+interface AddInternalGroupMemberKeysParameters extends AddInternalGroupMemberKeysBaseParameters {
+    ActivationToken: string;
+}
+
+export const addGroupMemberKeys = (
+    groupMemberID: string,
+    data:
+        | AddGroupMemberKeysBaseParameters
+        | AddInternalNonPrivateGroupMemberKeysParameters
+        | AddInternalGroupMemberKeysParameters
+) => ({
+    method: 'post',
+    url: `core/v4/groups/members/${groupMemberID}/keys`,
+    data,
+});
+
+export const updateGroupMember = (
+    groupMemberID: string,
+    groupMemberParams: { GroupID: string; Permissions: GroupPermissions }
+) => ({
+    method: 'put',
+    url: `core/v4/groups/members/${groupMemberID}`,
+    data: {
+        ...groupMemberParams,
+    },
+});
+
+export const deleteGroupMember = (groupMemberID: string) => ({
+    method: 'delete',
+    url: `core/v4/groups/members/${groupMemberID}`,
+});
+
+export const resumeGroupMember = (groupMemberID: string) => ({
+    method: 'put',
+    url: `core/v4/groups/members/${groupMemberID}/resume`,
+});
+
+export const reinviteGroupMember = (groupMemberID: string) => ({
+    method: 'put',
+    url: `core/v4/groups/${groupMemberID}/reinvite`,
+});
+
+export const getGroupMembership = () => ({
+    method: 'get',
+    url: `core/v4/groups/members/internal`,
+});
+
+export const getExternalGroupMemberships = (jwt: string) => ({
+    method: 'get',
+    url: `core/v4/groups/members/external/${jwt}`,
+});
+
+export const acceptExternalGroupMembership = (jwt: string, groupID: string | null = null) => ({
+    method: 'put',
+    url: `core/v4/groups/external/${jwt}`,
+    params: groupID ? { GroupID: groupID } : {},
+});
+
+export const declineExternalGroupMembership = (jwt: string, groupID: string | null = null) => ({
+    method: 'delete',
+    url: `core/v4/groups/external/${jwt}`,
+    params: groupID ? { GroupID: groupID } : {},
+});
+
+export interface InviteGroupOwnerParameters {
+    GroupMemberID: string;
+    EncryptionAddress: string;
+    TokenKeyPacket: string;
+    TokenSignaturePacket: string;
+}
+
+export const inviteGroupOwner = (inviteGroupOwnerParams: InviteGroupOwnerParameters) => ({
+    method: 'post',
+    url: 'core/v4/groups/owners/invites',
+    data: inviteGroupOwnerParams,
+});
+
+export const getGroupOwnerInvites = () => ({
+    method: 'get',
+    url: 'core/v4/groups/owners/invites',
+});
+
+export interface AcceptGroupOwnerInviteParameters {
+    TokenKeyPacket: string;
+    TokenSignaturePacket: string;
+}
+
+export const acceptGroupOwnerInvite = (inviteID: string, params: AcceptGroupOwnerInviteParameters) => ({
+    method: 'post',
+    url: `core/v4/groups/owners/accept/${inviteID}`,
+    data: params,
+});
+
+export interface AddGroupOwnerParameters {
+    MemberID: string;
+    TokenKeyPacket: string;
+    TokenSignaturePacket: string;
+}
+
+export const addGroupOwner = (groupMemberID: string, params: AddGroupOwnerParameters) => ({
+    method: 'post',
+    url: `core/v4/groups/owners/add/${groupMemberID}`,
+    data: params,
+});

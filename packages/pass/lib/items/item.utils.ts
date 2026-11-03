@@ -1,0 +1,319 @@
+import { CCFieldType } from '@protontech/autofill/types';
+import { c, msgid } from 'ttag';
+
+import { MAX_ITEM_NAME_LENGTH } from '../../constants';
+import type { Draft } from '../../store/reducers/drafts';
+import type {
+    DeobfuscatedItem,
+    DeobfuscatedItemExtraField,
+    ItemRevision,
+    ItemSortFilter,
+    LoginItem,
+    SelectedItem,
+    SelectedRevision,
+    UniqueItem,
+} from '../../types/data/items';
+import type { BulkSelectionDTO } from '../../types/data/items.dto';
+import type { ItemType } from '../../types/protobuf';
+import type { Maybe, MaybeNull } from '../../types/utils';
+import type { CCItemData, CCItemPreview, IdentityItemPreview, LoginItemPreview } from '../../types/worker/data';
+import { arrayInterpolate } from '../../utils/array/interpolate';
+import { deobfuscate, deobfuscateCCField } from '../../utils/obfuscate/xor';
+import { UNIX_DAY, UNIX_MONTH, UNIX_WEEK } from '../../utils/time/constants';
+import { getEpoch } from '../../utils/time/epoch';
+import PassUI from '../core/ui.proxy';
+import type { FolderScope } from '../folders/folder.utils';
+import { parseOTPValue } from '../otp/otp';
+import { getFirstUrl } from '../urls/utils/autofill';
+import { hasUserIdentifier, isEditItemDraft, isExtraOTPField } from './item.predicates';
+
+export const compoundItemFilters: Partial<Record<ItemType, ItemType[]>> = {
+    custom: ['custom', 'sshKey', 'wifi'],
+};
+
+const SEPARATOR = '::';
+const toKey = (...args: (string | number)[]) => args.join(SEPARATOR);
+
+export const getItemRevisionKey = <T extends SelectedRevision>({ shareId, itemId, revision }: T) =>
+    toKey(shareId, itemId, revision);
+
+export const getItemKey = <T extends UniqueItem>({ shareId, itemId }: T) => toKey(shareId, itemId);
+
+export const fromItemKey = (key: string): UniqueItem => {
+    const [shareId, itemId] = key.split(SEPARATOR);
+    return { itemId, shareId };
+};
+
+export const getFolderKey = (shareId: string, folderId: MaybeNull<string>) => `${shareId}${SEPARATOR}${folderId ?? ''}`;
+
+export const fromFolderKey = (key: string): { shareId: string; folderId: MaybeNull<string> } => {
+    const [shareId, folderId] = key.split(SEPARATOR);
+    return { shareId, folderId: folderId || null };
+};
+
+export const intoSelectedItem = ({ shareId, itemId }: ItemRevision): SelectedItem => ({ shareId, itemId });
+
+export const getItemEntityID = (
+    payload:
+        | { optimisticId: string; itemId?: string; shareId: string }
+        | { optimisticId?: string; itemId: string; shareId: string }
+) => toKey(payload.shareId, payload?.optimisticId ?? payload.itemId!);
+
+export const flattenItemsByShareId = (itemsByShareId: {
+    [shareId: string]: { [itemId: string]: ItemRevision };
+}): ItemRevision[] => Object.values(itemsByShareId).flatMap(Object.values);
+
+export const interpolateRecentItems =
+    <T extends ItemRevision>(items: T[]) =>
+    (shouldInterpolate: boolean) => {
+        type DateCluster = { label: string; boundary: number };
+        const now = getEpoch();
+
+        return arrayInterpolate<T, DateCluster>(items, {
+            clusters: shouldInterpolate
+                ? [
+                      {
+                          // translator: label means items that have been added or edited in last 24 hours from the current moment
+                          label: c('Label').t`Today`,
+                          boundary: now - UNIX_DAY,
+                      },
+                      {
+                          // translator: label means items that have been added or edited in last 7 days from the current moment
+                          label: c('Label').t`Last week`,
+                          boundary: now - UNIX_WEEK,
+                      },
+                      {
+                          // translator: label means items that have been added or edited in last 14 days from the current moment
+                          label: c('Label').t`Last 2 weeks`,
+                          boundary: now - UNIX_WEEK * 2,
+                      },
+                      {
+                          // translator: label means items that have been added or edited in last 4 weeks from the current moment
+                          label: c('Label').t`Last month`,
+                          boundary: now - UNIX_MONTH,
+                      },
+                  ]
+                : [],
+            fallbackCluster: {
+                // translator: label means items that have been added or edited more than a month ago (4 weeks) from the current moment
+                label: c('Label').t`More than a month`,
+                boundary: 0,
+            },
+            shouldInterpolate: ({ lastUseTime, modifyTime }, { boundary }) =>
+                Math.max(lastUseTime ?? modifyTime, modifyTime) > boundary,
+        });
+    };
+
+export const filterItemsByShareId =
+    (shareId?: MaybeNull<string>) =>
+    <T extends ItemRevision>(items: T[]) => {
+        if (!shareId) return items;
+        return items.filter((item) => shareId === item.shareId);
+    };
+
+/** Keeps only the items belonging to one of the scope's folder ids,
+ * `null` matching the items that are in no folder, ie. the vault root.
+ * Items cached before folders shipped have no `folderId`, so a missing
+ * value is treated as the root. */
+export const filterItemsByFolderIds =
+    (folderIds: FolderScope) =>
+    <T extends ItemRevision>(items: T[]) =>
+        items.filter((item) => folderIds.has(item.folderId ?? null));
+
+export const filterItemsByType =
+    (itemType?: MaybeNull<ItemType>) =>
+    <T extends ItemRevision>(items: T[]) => {
+        if (!itemType) return items;
+        const compoundFilters = compoundItemFilters[itemType] ?? [itemType];
+        return items.filter((item) => compoundFilters.includes(item.data.type));
+    };
+
+export const filterItemsByUserIdentifier = (email: string) => (items: LoginItem[]) =>
+    items.reduce<LoginItem[]>((acc, item) => {
+        if (hasUserIdentifier(email)(item)) acc.push(item);
+        return acc;
+    }, []);
+
+/** `relevant` only ranks while a search is active; with no search it degrades to `recent` */
+export const intoDisplayedSortFilter = (sort: ItemSortFilter, hasSearch: boolean): ItemSortFilter =>
+    sort === 'relevant' && !hasSearch ? 'recent' : sort;
+
+export const sortItems =
+    (sort?: MaybeNull<ItemSortFilter>) =>
+    <T extends ItemRevision>(items: T[]) => {
+        if (!sort) return items;
+
+        return items.slice().sort((a, b) => {
+            switch (sort) {
+                case 'createTimeASC':
+                    return a.createTime - b.createTime;
+                case 'createTimeDESC':
+                    return b.createTime - a.createTime;
+                /* `relevant` orders by relevance only while searching (see
+                 * `searchItems`); with no active search it falls back to recency */
+                case 'relevant':
+                case 'recent':
+                    return (
+                        Math.max(b.lastUseTime ?? b.modifyTime, b.modifyTime) -
+                        Math.max(a.lastUseTime ?? a.modifyTime, a.modifyTime)
+                    );
+                case 'titleASC':
+                    return a.data.metadata.name.localeCompare(b.data.metadata.name);
+            }
+        });
+    };
+
+/** Filters the drafts for a given a shareId. If itemIds are provided it will
+ * also try to match for these specifics items */
+export const matchDraftsForShare = (drafts: Draft[], shareId: string, itemIds?: string[]) =>
+    drafts.filter((draft) => {
+        if (isEditItemDraft(draft) && draft.shareId === shareId) {
+            return itemIds === undefined || itemIds.includes(draft.itemId);
+        }
+
+        return false;
+    });
+
+/** Returns the username in priority if not empty, otherwise the email. This priority matters for autofill. */
+export const intoUserIdentifier = (item: ItemRevision<'login'>): string =>
+    deobfuscate(item.data.content.itemUsername) || deobfuscate(item.data.content.itemEmail);
+
+export const intoLoginItemPreview = (item: ItemRevision<'login'>): LoginItemPreview => ({
+    itemId: item.itemId,
+    shareId: item.shareId,
+    name: item.data.metadata.name,
+    userIdentifier: intoUserIdentifier(item),
+    url: getFirstUrl(item.data.content.autofillUrls) ?? undefined,
+});
+
+export const intoIdentityItemPreview = (item: ItemRevision<'identity'>): IdentityItemPreview => ({
+    itemId: item.itemId,
+    shareId: item.shareId,
+    name: item.data.metadata.name,
+    fullName: item.data.content.fullName,
+});
+
+export const intoCCItemPreview = (item: ItemRevision<'creditCard'>): CCItemPreview => ({
+    itemId: item.itemId,
+    shareId: item.shareId,
+    name: item.data.metadata.name,
+    obfuscatedNumber: deobfuscateCCField(item.data.content.number, true),
+    expirationDate: item.data.content.expirationDate,
+    cardType: item.data.content.cardType,
+});
+
+/** Generates frame-appropriate credit card data for autofill operations.
+ * Applies security restrictions based on context:
+ * - Always removes PIN field (never autofilled)
+ * - Cross-origin: strips number and CVV to prevent data leakage
+ * - Deduplication: removes fields already autofilled in previous frames */
+export const intoAutofillableCCItem = (
+    item: CCItemData,
+    autofilled: Set<CCFieldType>,
+    crossOrigin: boolean
+): Partial<CCItemData> => {
+    const data: Partial<CCItemData> = { ...item };
+    delete data.pin;
+
+    if (crossOrigin) {
+        delete data.number;
+        delete data.verificationNumber;
+    }
+
+    if (autofilled.has(CCFieldType.NUMBER)) delete data.number;
+    if (autofilled.has(CCFieldType.CSC)) delete data.verificationNumber;
+
+    return data;
+};
+
+export const getSanitizedUserIdentifiers = async ({
+    itemEmail,
+    itemUsername,
+}: Pick<DeobfuscatedItem<'login'>['content'], 'itemEmail' | 'itemUsername'>): Promise<{
+    email: string;
+    username: string;
+}> => {
+    const validEmail = await PassUI.is_email_valid(itemEmail);
+    const emailUsername = await PassUI.is_email_valid(itemUsername);
+
+    if (itemUsername) {
+        /* `itemEmail` is empty and `itemUsername` is a valid email: Move username to email field */
+        if (!itemEmail && emailUsername) return { email: itemUsername, username: '' };
+        /* `itemEmail` is invalid but `itemUsername` is a valid email: Swap email and username */
+        if (!validEmail && emailUsername) return { email: itemUsername, username: itemEmail };
+        /* All other cases, return in-place */
+        return { email: itemEmail, username: itemUsername };
+    }
+
+    /* If `itemEmail` is valid, keep it; otherwise, move it to username field */
+    return validEmail ? { email: itemEmail, username: '' } : { email: '', username: itemEmail };
+};
+
+export const bindOTPSanitizer =
+    (label?: string, issuer?: string) =>
+    (totpUri: string): string =>
+        parseOTPValue(totpUri, {
+            label: label || undefined,
+            issuer: issuer || undefined,
+        });
+
+export const sanitizeExtraField =
+    (otpSanitizer: (totpUri: string) => string) =>
+    (extraField: DeobfuscatedItemExtraField): DeobfuscatedItemExtraField =>
+        extraField.type === 'totp'
+            ? { ...extraField, data: { totpUri: otpSanitizer(extraField.data.totpUri) } }
+            : extraField;
+
+export const intoBulkSelection = (items: UniqueItem[]): BulkSelectionDTO =>
+    items.reduce<BulkSelectionDTO>((dto, { shareId, itemId }) => {
+        dto[shareId] = dto[shareId] ?? {};
+        dto[shareId][itemId] = true;
+        return dto;
+    }, {});
+
+export const getBulkSelectionCount = (selected: BulkSelectionDTO) =>
+    Object.values(selected).reduce((acc, items) => acc + Object.keys(items).length, 0);
+
+export const formatDisplayNameWithEmail = (name: string, email: string) => `${name} <${email}>`;
+
+export const formatItemsCount = (n: number) => c('Info').ngettext(msgid`${n} item`, `${n} items`, n);
+
+export const smartCloneItemName = (itemName: string): string => {
+    const copiedText = c('Title_cloned_item').t`copy`;
+
+    const { name, count } = (() => {
+        const re = new RegExp(`^(.+)(\\s?\\(${copiedText}\\s?(\\d+)?\\))$`);
+        const match = itemName.match(re);
+
+        if (!match) return { name: itemName.trim(), count: 1 };
+
+        const name = match[1].trim();
+        const count = match[3] ? parseInt(match[3], 10) : 1;
+        return { name, count: isFinite(count) ? count + 1 : 1 };
+    })();
+
+    const copyCount = count > 1 ? ` ${count}` : '';
+    const suffix = ` (${copiedText}${copyCount})`;
+    const maxNameLength = MAX_ITEM_NAME_LENGTH - suffix.length;
+    const truncatedName = name.length > maxNameLength ? name.substring(0, maxNameLength) : name;
+
+    return `${truncatedName}${suffix}`;
+};
+
+export const cloneItemName = (name: string): string => {
+    const copiedText = c('Title_cloned_item').t`copy`;
+
+    const suffix = ` (${copiedText})`;
+    const maxNameLength = MAX_ITEM_NAME_LENGTH - suffix.length;
+    const truncatedName = name.length > maxNameLength ? name.substring(0, maxNameLength) : name;
+
+    return `${truncatedName}${suffix}`;
+};
+
+export const getItemTOTPUri = (item: LoginItem): Maybe<string> => {
+    /** First check if we have a top-level totp URI */
+    if (item?.data.content.totpUri.v.length) return deobfuscate(item.data.content.totpUri);
+    /** Check if any extra fields are of type TOTP */
+    const extraOTPs = item?.data.extraFields.filter(isExtraOTPField);
+    if (extraOTPs && extraOTPs.length > 0) return deobfuscate(extraOTPs[0].data.totpUri);
+};

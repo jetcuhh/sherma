@@ -1,0 +1,70 @@
+import type { SerializableDeviceInfo } from '../../../utils/deviceUtils';
+
+export enum PermissionsModalType {
+    NONE = 'none',
+    PERMISSIONS_MODAL = 'permissionsModal',
+    PERMISSIONS_BLOCKED_MODAL = 'permissionsBlockedModal',
+    PERMISSIONS_BLOCKED_CAMERA_MODAL = 'permissionsBlockedCameraModal',
+    PERMISSIONS_BLOCKED_MICROPHONE_MODAL = 'permissionsBlockedMicrophoneModal',
+    PERMISSIONS_BLOCKED_SCREEN_SHARE_MODAL = 'permissionsBlockedScreenShareModal',
+    SCREEN_RECORDING_PERMISSION_MODAL = 'screenRecordingPermissionModal',
+}
+
+export interface DeviceManagementState {
+    // Permissions
+    permissions: {
+        camera: PermissionState;
+        microphone: PermissionState;
+    };
+
+    // Devices lists
+    cameras: SerializableDeviceInfo[];
+    microphones: SerializableDeviceInfo[];
+    speakers: SerializableDeviceInfo[];
+
+    // Preferred devices
+    preferredCameraId: string | null;
+    preferredMicrophoneId: string | null;
+    preferredSpeakerId: string | null;
+
+    // Active devices
+    activeCameraId: string;
+    activeMicrophoneId: string;
+    // null until an output has been applied. '' is a real value here, it means the system default,
+    // so it cannot double as "nothing applied yet" without making the first apply look redundant.
+    activeAudioOutputId: string | null;
+
+    // Set when the device in use leaves the list, and cleared once the user has been told about it.
+    // Recorded by the reducer because that is the only place where the old and the new list meet,
+    // and it keeps the whole device because its label and groupId are gone from the list by then.
+    disconnectedActiveDevices: Record<DeviceKind, SerializableDeviceInfo | null>;
+    activeChangedSinceList: Record<DeviceKind, boolean>;
+
+    // Initial states
+    initialCameraState: boolean;
+    initialAudioState: boolean;
+
+    // User intent, used to store the user's intent when the camera is toggled manually
+    userCameraIntent: boolean | null;
+
+    // True while devices are being initialized on join/reconnect, used to suppress the local
+    // self-view during the window where the camera track is briefly published before being muted.
+    isMediaInitializing: boolean;
+
+    // UI
+    uiModals: {
+        permissionsModal: PermissionsModalType;
+    };
+}
+
+export type DeviceKind = 'audioinput' | 'audiooutput' | 'videoinput';
+
+export interface SliceDeviceState {
+    systemDefault: SerializableDeviceInfo | null;
+    systemDefaultLabel: string;
+    hasDefaultOption: boolean;
+    useSystemDefault: boolean;
+    preferredAvailable: boolean;
+    preferredDevice: SerializableDeviceInfo | null;
+    preferredDeviceId: string | null;
+}

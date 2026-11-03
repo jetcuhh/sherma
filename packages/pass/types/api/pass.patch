@@ -1,0 +1,146 @@
+export type PublicLinkCreateRequest = {
+  /* Last revision of the item */
+  Revision: number;
+  /* Expiration time for the link in seconds. Minimum 3600 (1h), at maximum 30 days in the future */
+  ExpirationTime: number;
+  /* Maximum amount of times that the item can be read. Unlimited reads if null */
+  MaxReadCount?: number;
+  /* Encrypted item key encoded in base64 */
+  EncryptedItemKey: string;
+  /* Link key encrypted with the share key encoded in base64 */
+  EncryptedLinkKey: string;
+  /* ShareKey rotation used for encrypting the encryptedLinkKey */
+  LinkKeyShareKeyRotation: number;
+  /* If the link key is being encrypted with the item key */
+  LinkKeyEncryptedWithItemKey?: boolean;
+};
+
+export type PublicLinkGetContentResponse = {
+  /* Base64 encoded item contents encrypted with the itemKey */
+  Contents: string;
+  /* Base64 encrypted item key */
+  ItemKey: string;
+  /* Token to use in order to fetch the files for the item. If null, the item does not have files */
+  FilesToken?: string | null;
+  /* ContentFormatVersion of the item contents */
+  ContentFormatVersion: number;
+  /* How many times the link has been read */
+  ReadCount: number;
+  /* If not null, the maximum amount of times the link can be read */
+  MaxReadCount: number;
+  /* Timestamp in seconds of the expiration time for the link */
+  ExpirationTime: number;
+  /* If the link key is being encrypted with the item key */
+  LinkKeyEncryptedWithItemKey?: boolean;
+  /* Bitmask of flags for the secure link. Bit 0: LinkKeyEncryptedWithItemKey (1), Bit 1: LinkAuthorIsB2BCustomer (2). Multiple flags can be combined. */
+  Flags?: number;
+};
+
+export type PublicLinkGetResponse = {
+  /* ID of the public link */
+  LinkID: string;
+  /* Number of times the item has been read */
+  ReadCount: number;
+  /* If not null, maximum number of times the item can be read */
+  MaxReadCount: number;
+  /* Link expiration timestamp */
+  ExpirationTime: number;
+  /* ShareID of the item that the link points at */
+  ShareID: string;
+  /* itemID of the item that the link points at */
+  ItemID: string;
+  /* URL to the link */
+  LinkURL: string;
+  /* LinkKey encrypted with the ShareKey in B64 */
+  EncryptedLinkKey: string;
+  /* KeyRotation for the ShareKey used to encrypt the LinkKey */
+  LinkKeyShareKeyRotation: number;
+  /* Whether the link is active or already expired/beyond read count */
+  Active: boolean;
+  /* If the link key is being encrypted with the item key */
+  LinkKeyEncryptedWithItemKey?: boolean;
+  /* Bitmask of flags for the secure link. Bit 0: LinkKeyEncryptedWithItemKey (1), Bit 1: LinkAuthorIsB2BCustomer (2). Multiple flags can be combined. */
+  Flags?: number;
+};
+
+export type ItemRevisionContentsResponse = {
+    ItemID: string;
+    Revision: number;
+    ContentFormatVersion: number;
+    /* Flags for this item. Possible values:
+<ul>
+    <li>SkipHealthCheck: 1<<0 = 1</li>
+    <li>EmailBreached: 1<<1 = 2</li>
+    <li>AliasDisabled: 1<<2 = 4</li>
+    <li>ItemHasFiles: 1<<3 = 8</li>
+    <li>ItemHasHadFiles: 1<<4 = 16</li>
+    <li>SkipWeakPasswordCheck: 1<<5 = 32</li>
+    <li>SkipCompromisedPasswordCheck: 1<<6 = 64</li>
+    <li>SkipReusedPasswordCheck: 1<<7 = 128</li>
+    <li>Skip2FACheck: 1<<8 = 256</li>
+</ul> */
+    Flags: number;
+    KeyRotation: number;
+    /* Base64 encoded item contents */
+    Content: string;
+    /* Base64 encoded item key. Only for vault shares. */
+    ItemKey?: string | null;
+    /* Revision state. Values: 1 = Active, 2 = Trashed */
+    State: number;
+    /* Whether this item is pinned for this user */
+    Pinned: boolean;
+    /* If the item is pinned, when it was pinned */
+    PinTime?: number | null;
+    /* Number of shares this item has */
+    ShareCount: number;
+    /* Parent FolderID if this item is in a folder */
+    FolderID?: string | null;
+    /* In case this item contains an alias, this is the email address for the alias */
+    AliasEmail?: string | null;
+    /* Whether this alias belongs to this user and thus can be managed. */
+    AliasOwner?: boolean;
+    /* Creation time of the item */
+    CreateTime: number;
+    /* Time of the latest modification of the item */
+    ModifyTime: number;
+    /* Time when the item was last used */
+    LastUseTime: number;
+    /* Creation time of this revision */
+    RevisionTime: number;
+};
+
+export type ItemKeyPairDto = {
+    /* Rotation value for this key */
+    KeyRotation: number;
+    /* Encrypted item key encoded in base64 */
+    Key: BinaryString;
+};
+
+export type FolderUpdateContentInputDto = {
+    /* Content format version for folder contents */
+    ContentFormatVersion: number;
+    /* Content encrypted with the folder key */
+    Content: BinaryString;
+    /* Key rotation used to encrypt the content */
+    KeyRotation: number;
+};
+
+export type FolderCreateInputDto = {
+    /* FolderID of the parent folder for this new folder. Use null for top folder. */
+    ParentFolderID?: Id | null;
+    /* Content format version for folder contents */
+    ContentFormatVersion: number;
+    /* Content encrypted with the folder key */
+    Content: BinaryString;
+    /* Rotation value for this key */
+    KeyRotation: number;
+    /* Encrypted folder key encoded in base64 */
+    FolderKey: BinaryString;
+};
+
+export type FolderKeyPairDto = {
+    /* Rotation value for this key */
+    KeyRotation: number;
+    /* Encrypted folder key encoded in base64 */
+    FolderKey: BinaryString;
+};

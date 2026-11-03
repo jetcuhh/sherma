@@ -1,0 +1,114 @@
+import type { AuthenticationStore } from '@proton/shared/lib/authentication/createAuthenticationStore';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { User } from '@proton/shared/lib/interfaces/User';
+
+import type { HydratedAccessState } from '../../store/reducers';
+import type {
+    MemberMonitorReportList,
+    OrganizationGetResponse,
+    OrganizationUpdatePasswordPolicyInput,
+    OrganizationUrlPauseEntryDto,
+    ResponseCodeSuccess,
+} from '../../types/api/pass';
+import type { AliasMailbox, AliasOptions } from '../../types/data/alias';
+import type { ItemRevision } from '../../types/data/items';
+import type { OrganizationSettings } from '../../types/data/organization';
+import type { Share, ShareType } from '../../types/data/shares';
+import type { Maybe } from '../../types/utils';
+import type { MaxAgeMemoizedFn } from '../../utils/fp/memo';
+import type { OrganizationReportDTO, PauseListEntryAddDTO, PauseListEntryUpdateDTO } from '../organization/types';
+
+type PassBridgeInitOptions = {
+    addresses: Address[];
+    authStore: AuthenticationStore;
+    user: User;
+};
+
+export interface PassBridge {
+    /**
+     * Initialize pass bridge crypto
+     * @param options arguments needed to initialize pass bridge crypto
+     * @returns a promise returning a boolean indicating if the bridge was successfully initialized
+     */
+    init: (options: PassBridgeInitOptions) => Promise<boolean>;
+    user: {
+        /**
+         * Get the user plan which includes aliases limit
+         */
+        getUserAccess: MaxAgeMemoizedFn<() => Promise<HydratedAccessState>>;
+    };
+    vault: {
+        /**
+         * Resolves the default - oldest, active and owned - vault.
+         * If it does not exist, it returns undefined
+         * @param options
+         * @param options.maxAge the time it should be cached in SECONDS
+         */
+        getDefault: MaxAgeMemoizedFn<() => Promise<Maybe<Share<ShareType.Vault>>>>;
+        /**
+         * Create default vault
+         */
+        createDefaultVault: () => Promise<Share<ShareType.Vault>>;
+    };
+    alias: {
+        /** Creates an alias item. Call `PassBridge.alias.getAliasOptions` in order
+         * to retrieve the available alias options */
+        create: (options: PassBridgeAliasCreate) => Promise<PassBridgeAliasItem>;
+        /** Retrieves the alias options for a given `shareId`. The alias options
+         * will be valid for a limited period of time (10 minutes) */
+        getAliasOptions: (shareId: string) => Promise<AliasOptions>;
+        /** Retrieves and decrypts all alias items for a given shareId and retrieves
+         * the alias details for the underlying items. */
+        getAllByShareId: MaxAgeMemoizedFn<(shareId: string) => Promise<PassBridgeAliasItem[]>>;
+    };
+    organization: {
+        settings: {
+            /** Get organization settings for Pass */
+            get: () => Promise<OrganizationGetResponse>;
+            /** Update an organization setting for Pass. Doesn't include password generator policy */
+            set: <K extends keyof OrganizationSettings>(
+                setting: K,
+                value: OrganizationSettings[K]
+            ) => Promise<OrganizationGetResponse>;
+            setPasswordGeneratorPolicy: (
+                value: OrganizationUpdatePasswordPolicyInput
+            ) => Promise<OrganizationGetResponse>;
+        };
+        reports: {
+            get: (params: OrganizationReportDTO) => Promise<MemberMonitorReportList>;
+        };
+        pauseList: {
+            get: () => Promise<OrganizationUrlPauseEntryDto[]>;
+            add: (data: PauseListEntryAddDTO) => Promise<OrganizationUrlPauseEntryDto>;
+            update: (data: PauseListEntryUpdateDTO) => Promise<{ Code: ResponseCodeSuccess }>;
+            delete: (id: string) => Promise<{ Code: ResponseCodeSuccess }>;
+        };
+    };
+}
+
+export type PassBridgeAliasItem = {
+    item: ItemRevision<'alias'>;
+};
+
+type PassBridgeAliasCreate = {
+    /** vault shareId to create the alias in */
+    shareId: string;
+    /** Name of the underlying item  */
+    name: string;
+    /** Optional note of the underlying item */
+    note?: string;
+    /** Alias creation options */
+    alias: {
+        /** The full alias email : `prefix` + `unsigned suffix`.
+         * Validate it before submitting using the `validateEmailAddress`
+         * helper from `@proton/shared/lib/helpers/email`. */
+        aliasEmail: string;
+        /** The mailbox to forward emails to. Retrieved from `PassBridge.alias.getAliasOptions` */
+        mailbox: AliasMailbox;
+        /** Prefix for the alias. Should not include trailing `.` - it is
+         * already included in the suffix parameter */
+        prefix: string;
+        /** A signed suffix retrieved from `PassBridge.alias.getAliasOptions` */
+        signedSuffix: string;
+    };
+};

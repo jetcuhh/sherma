@@ -1,0 +1,85 @@
+import { FieldType, FormType } from '@protontech/autofill/types';
+
+import browser from '@proton/pass/lib/globals/browser';
+
+export const ACTIVE_ICON_SRC = browser.runtime.getURL('/assets/sherma-icon-active.svg');
+export const LOCKED_ICON_SRC = browser.runtime.getURL('/assets/sherma-icon-locked.svg');
+export const DISABLED_ICON_SRC = browser.runtime.getURL('/assets/sherma-icon-disabled.svg');
+export const COUNTER_ICON_SRC = browser.runtime.getURL('/assets/sherma-icon-counter.svg');
+export const DROPDOWN_IFRAME_SRC = browser.runtime.getURL('/dropdown.html');
+export const NOTIFICATION_IFRAME_SRC = browser.runtime.getURL('/notification.html');
+
+export enum NotificationAction {
+    AUTOSAVE = 'AUTOSAVE',
+    OTP = 'OTP',
+    PASSKEY_CREATE = 'PASSKEY::CREATE',
+    PASSKEY_GET = 'PASSKEY::GET',
+    TOAST = 'TOAST',
+}
+
+export enum DropdownAction {
+    AUTOFILL_CC = 'AUTOFILL_CC',
+    AUTOFILL_IDENTITY = 'AUTOFILL_IDENTITY',
+    AUTOFILL_LOGIN = 'AUTOFILL_LOGIN',
+    AUTOSUGGEST_ALIAS = 'AUTOSUGGEST_ALIAS',
+    AUTOSUGGEST_PASSWORD = 'AUTOSUGGEST_PASSWORD',
+}
+
+type FieldConfig = {
+    filterable?: boolean;
+    action?: DropdownAction;
+};
+
+export const FORM_TRACKER_CONFIG: Record<FormType, Partial<Record<FieldType, FieldConfig>>> = {
+    [FormType.LOGIN]: {
+        [FieldType.USERNAME]: { action: DropdownAction.AUTOFILL_LOGIN, filterable: true },
+        [FieldType.USERNAME_HIDDEN]: {},
+        [FieldType.EMAIL]: { action: DropdownAction.AUTOFILL_LOGIN, filterable: true },
+        [FieldType.PASSWORD_CURRENT]: { action: DropdownAction.AUTOFILL_LOGIN },
+        [FieldType.CREDIT_CARD]: { action: DropdownAction.AUTOFILL_CC },
+    },
+    [FormType.REGISTER]: {
+        [FieldType.USERNAME]: {},
+        [FieldType.USERNAME_HIDDEN]: {},
+        [FieldType.EMAIL]: { action: DropdownAction.AUTOSUGGEST_ALIAS },
+        [FieldType.PASSWORD_NEW]: { action: DropdownAction.AUTOSUGGEST_PASSWORD },
+        [FieldType.IDENTITY]: { action: DropdownAction.AUTOFILL_IDENTITY },
+        [FieldType.CREDIT_CARD]: { action: DropdownAction.AUTOFILL_CC },
+    },
+    [FormType.RECOVERY]: {
+        [FieldType.EMAIL]: { action: DropdownAction.AUTOFILL_LOGIN, filterable: true },
+        [FieldType.IDENTITY]: { action: DropdownAction.AUTOFILL_IDENTITY },
+        [FieldType.CREDIT_CARD]: { action: DropdownAction.AUTOFILL_CC },
+    },
+    [FormType.PASSWORD_CHANGE]: {
+        [FieldType.PASSWORD_CURRENT]: { action: DropdownAction.AUTOFILL_LOGIN },
+        [FieldType.PASSWORD_NEW]: { action: DropdownAction.AUTOSUGGEST_PASSWORD },
+    },
+    /* NOOP forms are forms that were not classified into
+     * one of our form types. This can either be a detection
+     * error - in that case, if we match any fields of interest
+     * we should still add some actions - OR due to exotic
+     * forms (newsletters etc..) */
+    [FormType.NOOP]: {
+        [FieldType.EMAIL]: { action: DropdownAction.AUTOSUGGEST_ALIAS },
+        [FieldType.PASSWORD_CURRENT]: { action: DropdownAction.AUTOFILL_LOGIN },
+        [FieldType.PASSWORD_NEW]: { action: DropdownAction.AUTOSUGGEST_PASSWORD },
+        [FieldType.IDENTITY]: { action: DropdownAction.AUTOFILL_IDENTITY },
+        [FieldType.CREDIT_CARD]: { action: DropdownAction.AUTOFILL_CC },
+    },
+};
+
+/** Field types detected in sub-frames only when the `PassIFrameExtendedAutofill`
+ * flag is enabled. Must cover every `FieldType` except OTP (never detected in
+ * sub-frames) and credit-card (detected in sub-frames regardless of the flag) :
+ * combined with those two exclusions in `runDetection`, a fully excluded set
+ * signals that sub-frame detection is disabled and tracked forms can be detached.
+ * FIXME: remove when `PassIFrameExtendedAutofill` becomes stable */
+export const IFRAME_EXTENDED_AUTOFILL_FIELDS = [
+    FieldType.EMAIL,
+    FieldType.IDENTITY,
+    FieldType.PASSWORD_CURRENT,
+    FieldType.PASSWORD_NEW,
+    FieldType.USERNAME,
+    FieldType.USERNAME_HIDDEN,
+];

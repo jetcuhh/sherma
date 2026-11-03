@@ -1,0 +1,618 @@
+{
+    "$schema": "https://unpkg.com/knip@6/schema.json",
+    "webpack": false,
+    "rules": {
+        "unlisted": "off",
+        "unresolved": "off",
+        "binaries": "off"
+    },
+    "ignoreIssues": {
+        "packages/shared/lib/interfaces/Hotkeys.ts": ["enumMembers"],
+        "packages/shared/lib/helpers/sentry.ts": ["enumMembers"],
+        "packages/shared/lib/interfaces/calendar/CalendarKey.ts": ["enumMembers"],
+        "packages/shared/lib/interfaces/Address.ts": ["enumMembers"],
+        "packages/shared/lib/interfaces/drive/file.ts": ["types"],
+        "packages/shared/lib/interfaces/drive/volume.ts": ["types"],
+        "packages/shared/lib/api/drive/link.ts": ["exports"],
+        "packages/shared/lib/helpers/image.ts": ["exports"],
+        "packages/shared/lib/calendar/sharing/shareUrl/shareUrl.ts": ["exports"],
+        "packages/shared/lib/mnemonic/helpers.ts": ["types"],
+        "applications/admin/src/app/constants/appConstants.ts": ["enumMembers"],
+        "packages/pass/lib/sync/global.ts": ["duplicates"],
+        "packages/pass/lib/import/providers/1password/1pux.types.ts": ["enumMembers"],
+        "packages/pass/lib/import/providers/enpass/enpass.types.ts": ["enumMembers"],
+        "packages/pass/types/api/events.ts": ["enumMembers"],
+        "packages/pass/types/data/invites.ts": ["enumMembers"]
+    },
+    "ignore": ["**/*.d.ts", "**/vendor/**"],
+    "ignoreWorkspaces": ["packages/wasm/andromeda"],
+    "workspaces": {
+        ".": {
+            "entry": [],
+            "project": [],
+            "ignoreDependencies": [
+                "turbo",
+                "@prettier/plugin-xml",
+                "stylelint-config-standard-scss",
+                "stylelint-use-logical-spec",
+                "@typescript/native",
+                "oxlint",
+                "oxlint-tsgolint",
+                "^@proton/(account|activation|calendar|components|docs-core|nav|payments|payments-ui|redux-shared-store|shared|types)$|^@types/global-types-monorepo$"
+            ]
+        },
+        "applications/account": {
+            "entry": [
+                "src/app/hostStorage.ts",
+                "src/app/private.tsx",
+                "src/app/public.tsx",
+                "src/lite/index.{ts,tsx}",
+                "src/pages/**/*.{ts,tsx}",
+                "webpack.config.{js,ts}"
+            ],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/admin": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx,js,jsx}"]
+        },
+        "applications/authenticator": {
+            "entry": ["src/app/main.tsx", "webpack.config.{js,ts}", "webpack.options.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignore": ["src/lib/api/types.ts"],
+            "ignoreDependencies": ["@proton/styles", "tsx"]
+        },
+        "applications/calendar": {
+            "entry": ["src/app/index.{ts,tsx}", "src/app/bookings.tsx", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/console": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "applications/docs": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}", "src/app/routes/**/*.{ts,tsx}"],
+            "project": ["src/**/*.{ts,tsx,scss,sass,css}"],
+            "ignoreDependencies": ["@proton/raw-images"]
+        },
+        "applications/docs-editor": {
+            "entry": [
+                "src/app/index.{ts,tsx}",
+                "src/standalone-sheet/index.tsx",
+                "src/standalone-doc/index.tsx",
+                "webpack.config.{js,ts}"
+            ],
+            "project": ["src/**/*.{ts,tsx,scss,sass,css}"],
+            "ignoreDependencies": [
+                "@babel/preset-typescript",
+                "babel-plugin-transform-require-context",
+                "@proton/metrics"
+            ]
+        },
+        "applications/drive": {
+            "entry": ["src/app/index.{ts,tsx}", "src/app/urls.tsx", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/inbox-desktop": {
+            "entry": [
+                "src/index.ts",
+                "src/preload.ts",
+                "src/renderer.ts",
+                "src/ipc/main.ts",
+                "forge.config.ts",
+                "webpack.main.config.ts",
+                "webpack.renderer.config.ts",
+                "webpack.rules.ts"
+            ],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignoreDependencies": [
+                "@electron-forge/maker-deb",
+                "@electron-forge/maker-dmg",
+                "@electron-forge/maker-rpm",
+                "@electron-forge/maker-squirrel",
+                "@electron-forge/maker-zip",
+                "@electron-forge/publisher-github",
+                "@vercel/webpack-asset-relocator-loader",
+                "css-loader",
+                "node-loader",
+                "style-loader",
+                "ts-loader"
+            ]
+        },
+        "applications/lumo": {
+            "entry": [
+                "src/app/index.{ts,tsx}",
+                "src/app/services/workers/fileProcessingWorker.ts",
+                "src/app/workers/search/searchWorker.ts",
+                "webpack.config.{js,ts}"
+            ],
+            "project": ["src/**/*.{ts,tsx,scss,sass}"],
+            "ignoreDependencies": ["@proton/pass"]
+        },
+        "applications/mail": {
+            "entry": ["src/app/index.{ts,tsx}", "src/app/eo.tsx", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/meet": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/meet-desktop": {
+            "entry": [
+                "src/index.ts",
+                "src/preload.ts",
+                "src/renderer.ts",
+                "src/screenPicker/picker.ts",
+                "src/screenPicker/preload.ts",
+                "src/ipc/main.ts",
+                "forge.config.ts",
+                "webpack.main.config.ts",
+                "webpack.renderer.config.ts",
+                "webpack.rules.ts"
+            ],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignoreDependencies": [
+                "@electron-forge/maker-deb",
+                "@electron-forge/maker-dmg",
+                "@electron-forge/maker-rpm",
+                "@electron-forge/maker-squirrel",
+                "@electron-forge/maker-zip",
+                "@electron-forge/publisher-github",
+                "@vercel/webpack-asset-relocator-loader",
+                "css-loader",
+                "node-loader",
+                "style-loader",
+                "ts-loader",
+                "ts-node"
+            ]
+        },
+        "applications/pass": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "applications/pass-desktop": {
+            "entry": [
+                "src/main.ts",
+                "src/preload.ts",
+                "src/app/renderer.tsx",
+                "electron-builder.config.js",
+                "forge.config.ts",
+                "webpack.main.config.ts",
+                "webpack.renderer.config.ts",
+                "webpack.options.ts",
+                "webpack.plugins.ts",
+                "webpack.rules.ts"
+            ],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignore": ["src/uninstallers/macos/daemon/launcher.ts"],
+            "ignoreDependencies": [
+                "@vercel/webpack-asset-relocator-loader",
+                "electron-builder",
+                "node-loader",
+                "ts-loader",
+                "ts-node"
+            ]
+        },
+        "applications/pass-extension": {
+            "entry": [
+                "src/app/content/client.ts",
+                "src/app/content/elements.ts",
+                "src/app/content/firefox/index.ts",
+                "src/app/content/orchestrator.ts",
+                "src/app/content/safari/index.ts",
+                "src/app/content/services/inline/dropdown/app/index.tsx",
+                "src/app/content/services/inline/notification/app/index.tsx",
+                "src/app/content/webauthn.ts",
+                "src/app/pages/internal/index.tsx",
+                "src/app/pages/onboarding/index.tsx",
+                "src/app/pages/settings/index.tsx",
+                "src/app/popup/index.tsx",
+                "src/app/worker/index.ts",
+                "src/app/worker/offscreen/offscreen.ts",
+                "src/lib/utils/disable-browser-trap.ts",
+                "src/lib/utils/safari-patch.ts",
+                "src/lib/utils/web-accessible-resource.ts",
+                "vendor/argon2id.loader.ts",
+                "webpack.config.{js,ts}",
+                "webpack.options.{js,ts}"
+            ],
+            "project": ["src/**/*.{ts,tsx}", "tools/**/*.ts", "vendor/**/*.ts"],
+            "ignoreDependencies": ["string-replace-loader"]
+        },
+        "applications/pdf-ui": {
+            "entry": [],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/preview-sandbox": {
+            "entry": ["src/index.ts", "src/previews/index.ts"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/storybook": {
+            "entry": [
+                "src/app/index.{ts,tsx}",
+                "src/stories/**/*.stories.{ts,tsx}",
+                "src/stories/**/*.mdx",
+                ".storybook/main.mjs"
+            ],
+            "project": ["src/**/*.{ts,tsx,mdx}"],
+            "ignoreDependencies": ["@storybook/addon-links"]
+        },
+        "applications/verify": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}", "src/app/Verify.scss"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "applications/vpn-settings": {
+            "entry": ["src/app/index.{ts,tsx}", "src/pages/**/*.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "applications/wallet": {
+            "entry": ["src/app/index.{ts,tsx}", "webpack.config.{js,ts}"],
+            "project": ["src/**/*.{ts,tsx}"]
+        },
+        "packages/account": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignore": [
+                "breaches/breachAlertListener.ts",
+                "breaches/breachReportsSlice.ts",
+                "groupOwnerInvites/hooks.ts",
+                "testing/vitest/mockUseOrganization.ts",
+                "testing/vitest/mockUseUser.ts"
+            ]
+        },
+        "packages/activation": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/ai-assistant": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/app-context": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/atoms": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "packages/calendar": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/calendar-video-conferencing": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/challenge": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/chargebee": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "packages/colors": {
+            "entry": ["tool/tool.ts"],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["ts-loader"]
+        },
+        "packages/components": {
+            "entry": [],
+            "project": ["**/*.{js,jsx,ts,tsx}"],
+            "ignore": ["containers/filePreview/iwad/**"],
+            "ignoreDependencies": ["core-js"]
+        },
+        "packages/console": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/cross-storage": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/docs-core": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@babel/plugin-transform-class-properties", "@proton/raw-images"]
+        },
+        "packages/docs-proto": {
+            "entry": ["lib/index.ts"],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/docs-shared": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/drive": {
+            "entry": [
+                "modules/sandbox/createSandboxedLibrary.ts",
+                "modules/sandbox/sandboxed/index.ts",
+                "modules/sandbox/webpack/SandboxedLibrariesPlugin.ts"
+            ],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/drive-store": {
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/encrypted-search": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/eslint-config-proton": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"]
+        },
+        "packages/eslint-plugin-custom-rules": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"]
+        },
+        "packages/features": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/global-types": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/hooks": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/i18n": {
+            "entry": ["scripts/*.mjs"],
+            "project": ["**/*.{js,mjs,ts,tsx}"],
+            "ignore": ["test/input/js/**"]
+        },
+        "packages/file-icons": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/icons": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/jest-env": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"]
+        },
+        "packages/jest-swc-preset": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"]
+        },
+        "packages/key-transparency": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/llm": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/lumo-api-client": {
+            "entry": ["e2e/desktop-bridge-harness.ts"],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/lumo-ui": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/mail": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/mail-composer": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/mail-message": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/mail-renderer": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "packages/meet": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/metrics": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["json-schema-to-typescript"]
+        },
+        "packages/nav": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/offers-delivery": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/styles"]
+        },
+        "packages/pack": {
+            "entry": [
+                "webpack.config.ts",
+                "lib/config.ts",
+                "lib/interface.ts",
+                "webpack/entries.ts",
+                "webpack/assets.loader.js",
+                "webpack/css.loader.js",
+                "webpack/js.loader.js",
+                "webpack/js.loader.swc.js",
+                "webpack/optimization.js",
+                "webpack/copy-index-html-webpack-plugin/index.ts"
+            ],
+            "project": ["**/*.{js,mjs,ts,tsx,scss,sass}"],
+            "ignoreDependencies": ["@proton/collect-metrics"]
+        },
+        "packages/pass": {
+            "entry": [
+                "lib/globals/webextension-polyfill.stub.ts",
+                "store/prettier.config.mjs",
+                "types/prettier.config.mjs"
+            ],
+            "project": ["**/*.{js,mjs,ts,tsx}"],
+            "ignore": ["types/protobuf/*-v1.ts", "lib/extension/rules/v*/types.ts"],
+            "ignoreDependencies": ["@protobuf-ts/plugin", "core-js", "json-schema-to-typescript", "tsx"]
+        },
+        "packages/payments": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignoreDependencies": ["@proton/metrics"]
+        },
+        "packages/payments-ui": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"],
+            "ignore": ["./examples/utils.ts"],
+            "ignoreDependencies": ["@proton/features", "@proton/metrics"]
+        },
+        "packages/polyfill": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"]
+        },
+        "packages/prettier-config": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/raw-images": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/react-polymorphic-types": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/react-redux-store": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/recovery-kit": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/redux-shared-store": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/redux-shared-store-types": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/redux-utilities": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/sanitize": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/shared": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/sieve": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/stylelint-config-proton": {
+            "entry": [],
+            "project": ["**/*.{js,ts,tsx}"],
+            "ignoreDependencies": ["stylelint", "stylelint-config-prettier-scss"]
+        },
+        "packages/styles": {
+            "entry": ["eslint.config.{js,mjs,ts}"],
+            "project": ["**/*.{ts,tsx,scss,sass}"],
+            "ignore": ["scss/**"]
+        },
+        "packages/telemetry-tracker": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/test-api": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/types": {
+            "entry": ["eslint.config.{js,mjs,ts}"],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/unleash": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/utils": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/vitest-config": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/vpn": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "packages/wallet": {
+            "entry": [],
+            "project": ["**/*.{ts,tsx}"]
+        },
+        "tests": {
+            "entry": [],
+            "project": [],
+            "playwright": false,
+            "ignore": ["**"]
+        },
+        "tests/mail-renderer": {
+            "entry": [],
+            "project": [],
+            "playwright": false,
+            "ignore": ["**"]
+        },
+        "tests/packages/*": {
+            "entry": [],
+            "project": [],
+            "playwright": false,
+            "ignore": ["**"]
+        },
+        "utilities/*": {
+            "entry": [],
+            "project": [],
+            "ignore": ["**"]
+        },
+        "utilities/lumo-dev-proxy": {
+            "entry": [],
+            "project": []
+        },
+        "utilities/playwright-mocks": {
+            "entry": [],
+            "project": ["**/*.ts"]
+        },
+        "utilities/publish": {
+            "entry": [],
+            "project": []
+        },
+        "utilities/repo-rules": {
+            "entry": ["src/**/run.ts", "src/**/*.test.ts"],
+            "project": ["src/**/*.ts"]
+        },
+        "vendor/*/*": {
+            "entry": [],
+            "project": [],
+            "ignore": ["**"]
+        },
+        "vendor/rowsncolumns/common-types": {
+            "entry": [],
+            "project": []
+        },
+        "packages/charts": {
+            "ignoreDependencies": ["@proton/styles"]
+        }
+    }
+}

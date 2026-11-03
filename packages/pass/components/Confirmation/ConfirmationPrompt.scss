@@ -1,0 +1,7 @@
+@use '~@proton/styles/scss/lib/rem' as *;
+
+.pass-prompt.prompt {
+	&#{&} {
+		--size: #{rem(320)};
+	}
+}

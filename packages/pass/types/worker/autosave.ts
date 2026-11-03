@@ -1,0 +1,41 @@
+import type { SanitizedPasskey } from '../../lib/passkeys/types';
+import type { SelectedItem, SelectedShare } from '../data/items';
+import type { AutofillPageTelemetryDimensions } from '../data/telemetry';
+import type { MaybeNull } from '../utils';
+import type { LoginItemPreview } from './data';
+import type { FormCredentials } from './form';
+
+export enum AutosaveMode {
+    NEW = 'NEW',
+    UPDATE = 'UPDATE',
+}
+
+type AutosaveCreate<DTO = {}> = { type: AutosaveMode.NEW } & DTO;
+type AutosaveUpdate<DTO = {}> = { type: AutosaveMode.UPDATE } & DTO;
+type AutosaveCandidates = { candidates: LoginItemPreview[] };
+
+type AutosaveCreateDTO = AutosaveCreate<SelectedShare & { optimisticId: string; folderId: MaybeNull<string> }>;
+type AutosaveUpdateDTO = AutosaveUpdate<SelectedItem>;
+type AutosaveRequestData = FormCredentials & {
+    name: string;
+    passkey?: SanitizedPasskey;
+    iframeUrl?: MaybeNull<string>;
+};
+export type AutosaveRequest = (AutosaveCreateDTO | AutosaveUpdateDTO) & AutosaveRequestData;
+export type AutosaveFormValues = AutosaveRequest & { step: 'select' | 'edit' };
+
+/** `submittedAt` is used to infer if the autosave payload
+ * resulted from an actual form submission. */
+
+type AutosaveCreatePayload = AutosaveCreate<AutosavePayloadData>;
+export type AutosaveUpdatePayload = AutosaveUpdate<AutosaveCandidates>;
+type AutosavePayloadData = FormCredentials & {
+    submittedAt: MaybeNull<number>;
+    iframeUrl?: MaybeNull<string>;
+    telemetry: AutofillPageTelemetryDimensions;
+};
+export type AutosavePayload = (AutosaveCreatePayload | AutosaveUpdatePayload) & AutosavePayloadData;
+
+type AutosavePromptData = AutosaveCreate | AutosaveUpdate<AutosaveCandidates>;
+export type AutosavePrompt = { shouldPrompt: false } | { shouldPrompt: true; data: AutosavePromptData };
+export type WithAutosavePrompt<T> = T & { autosave: AutosavePrompt };

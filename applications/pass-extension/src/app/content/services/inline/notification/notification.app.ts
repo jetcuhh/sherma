@@ -1,0 +1,131 @@
+import { flagAsIgnored, removeClassifierFlags } from '@protontech/autofill';
+import { FieldType } from '@protontech/autofill/types';
+
+import type { SelectedPasskey } from '@proton/pass/lib/passkeys/types';
+import type { AutosavePayload } from '@proton/pass/types/worker/autosave';
+import type { LoginItemPreview } from '@proton/pass/types/worker/data';
+import { asyncQueue } from '@proton/pass/utils/fp/promises';
+
+import { contentScriptMessage, sendMessage } from '../../../../../lib/message/send-message';
+import { WorkerMessageType } from '../../../../../types/messages';
+import { NOTIFICATION_IFRAME_SRC, NotificationAction } from '../../../constants.runtime';
+import { NOTIFICATION_MIN_HEIGHT, NOTIFICATION_WIDTH } from '../../../constants.static';
+import { withContext } from '../../../context/context';
+import type { InlineAppHandler, InlineEvent } from '../inline.app';
+import { createInlineApp } from '../inline.app';
+import { InlinePortMessageType } from '../inline.messages';
+import type { PopoverController } from '../inline.popover';
+
+export type NotificationRequest =
+    | { action: NotificationAction.AUTOSAVE; data: AutosavePayload }
+    | { action: NotificationAction.OTP; item: LoginItemPreview }
+    | {
+          action: NotificationAction.PASSKEY_CREATE;
+          domain: string;
+          request: string;
+          token: string;
+      }
+    | {
+          action: NotificationAction.PASSKEY_GET;
+          domain: string;
+          passkeys: SelectedPasskey[];
+          request: string;
+          token: string;
+      }
+    | { action: NotificationAction.TOAST; message: string };
+
+export interface NotificationApp extends InlineAppHandler<NotificationRequest> {}
+type NotificationEvent<T extends InlineEvent<any>['type']> = Extract<InlineEvent<NotificationRequest>, { type: T }>;
+
+export const createNotification = (popover: PopoverController): NotificationApp => {
+    const iframe = createInlineApp<NotificationRequest>({
+        id: 'notification',
+        src: NOTIFICATION_IFRAME_SRC,
+        animation: 'slidein',
+        classNames: ['fixed'],
+        popover,
+        dimensions: () => ({ width: NOTIFICATION_WIDTH, height: NOTIFICATION_MIN_HEIGHT }),
+    });
+
+    const onClose = withContext<(evt: NotificationEvent<'close'>) => void>((ctx, { state, options }) => {
+        switch (state.action) {
+            /* stash the form submission if the user
+             * discarded the autosave prompt */
+            case NotificationAction.AUTOSAVE:
+                return (
+                    options?.discard &&
+                    sendMessage(
+                        contentScriptMessage({
+                            type: WorkerMessageType.FORM_ENTRY_STASH,
+                            payload: { reason: 'AUTOSAVE_DISMISSED' },
+                        })
+                    )
+                );
+            /* flag all MFA forms as ignorable on user
+             * discards the OTP autofill prompt */
+            case NotificationAction.OTP:
+                if (options?.discard) {
+                    ctx?.service.formManager
+                        .getForms()
+                        .filter(({ getFieldsFor }) => getFieldsFor(FieldType.OTP).length > 0)
+                        .forEach(({ element, getFieldsFor }) => {
+                            removeClassifierFlags(element, { preserveIgnored: true });
+                            flagAsIgnored(element);
+                            getFieldsFor(FieldType.OTP).forEach((field) => flagAsIgnored(field.element));
+                        });
+                }
+
+                /* handle OTP -> AutoSave sequence */
+                return ctx?.service.autosave.reconciliate();
+        }
+    });
+
+    iframe.subscribe((evt) => {
+        switch (evt.type) {
+            case 'close':
+                return onClose(evt);
+            case 'error':
+                return iframe.destroy();
+        }
+    });
+
+    iframe.registerMessageHandler(
+        InlinePortMessageType.AUTOFILL_OTP,
+        withContext(async (ctx, { payload: { code } }) => {
+            const form = ctx?.service.formManager
+                .getForms()
+                .find(({ getFieldsFor }) => getFieldsFor(FieldType.OTP).length > 0);
+
+            if (form) await ctx?.service.autofill.autofillOTP(form, code);
+        }),
+        { userAction: true }
+    );
+
+    iframe.registerMessageHandler(
+        InlinePortMessageType.PASSKEY_RELAY,
+        ({ payload }) => window.postMessage(payload, '*'),
+        { userAction: true }
+    );
+
+    const notification: NotificationApp = {
+        close: iframe.close,
+        destroy: iframe.destroy,
+        getState: () => iframe.state,
+        init: iframe.init,
+        open: asyncQueue(async (request: NotificationRequest) => {
+            /** if OTP autofill notification is opened - do not process
+             * any other actions : it should take precedence */
+            const autosave = request.action === NotificationAction.AUTOSAVE;
+            const { action, visible } = iframe.state;
+            if (autosave && visible && action === NotificationAction.OTP) return;
+
+            iframe.sendPortMessage({ type: InlinePortMessageType.NOTIFICATION_ACTION, payload: request });
+            iframe.setPosition(() => ({ top: 15, right: 15 }));
+            return iframe.open(request);
+        }),
+        sendMessage: iframe.sendPortMessage,
+        subscribe: iframe.subscribe,
+    };
+
+    return notification;
+};

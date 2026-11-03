@@ -1,0 +1,219 @@
+import type { KeyboardEvent } from 'react';
+import { type FC, useMemo, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import Checkbox from '@proton/components/components/input/Checkbox';
+import Table from '@proton/components/components/table/Table';
+import TableBody from '@proton/components/components/table/TableBody';
+import TableCell from '@proton/components/components/table/TableCell';
+import TableHeader from '@proton/components/components/table/TableHeader';
+import TableHeaderCell from '@proton/components/components/table/TableHeaderCell';
+import TableRow from '@proton/components/components/table/TableRow';
+import { InputField as InputFieldTwo } from '@proton/components/components/v2/field/InputField';
+import { IcCross } from '@proton/icons/icons/IcCross';
+import { IcLock } from '@proton/icons/icons/IcLock';
+import { IcPassTrash } from '@proton/icons/icons/IcPassTrash';
+import { SettingsPanel } from '@proton/pass/components/Settings/SettingsPanel';
+import type { CriteriaMasks } from '@proton/pass/lib/settings/pause-list';
+import {
+    CRITERIAS_SETTING_CREATE,
+    CRITERIA_MASKS,
+    hasCriteria,
+    toggleCriteria,
+} from '@proton/pass/lib/settings/pause-list';
+import { intoCleanHostname } from '@proton/pass/lib/urls/utils/utils';
+import { settingsEditIntent } from '@proton/pass/store/actions/creators/settings';
+import {
+    selectDisallowedDomains,
+    selectOrgDomains,
+    selectPauseListEntries,
+} from '@proton/pass/store/selectors/settings';
+import { merge } from '@proton/pass/utils/object/merge';
+import { PASS_SHORT_APP_NAME } from '@proton/shared/lib/constants';
+
+import './PauseList.scss';
+
+const criterias = Object.keys(CRITERIA_MASKS) as CriteriaMasks[];
+
+export const PauseList: FC = () => {
+    const disallowedDomains = useSelector(selectDisallowedDomains);
+    const orgDomains = useSelector(selectOrgDomains);
+    const pauseList = useSelector(selectPauseListEntries);
+    const nonEmpty = pauseList.length > 0;
+
+    const { createNotification } = useNotifications();
+    const dispatch = useDispatch();
+
+    const [url, setUrl] = useState<string>('');
+
+    const addDisallowedUrl = (url: string) => {
+        const hostname = intoCleanHostname(url);
+
+        if (!hostname) return createNotification({ text: c('Error').t`Invalid URL`, type: 'error' });
+
+        if (orgDomains?.[hostname]) {
+            return createNotification({
+                text: c('Error').t`This domain is already managed by your organization`,
+                type: 'error',
+            });
+        }
+
+        if (disallowedDomains[hostname]) {
+            return createNotification({
+                text: c('Error').t`The URL is in the list`,
+                type: 'error',
+            });
+        }
+
+        dispatch(
+            settingsEditIntent('pause-list', {
+                disallowedDomains: merge(disallowedDomains, {
+                    [hostname]: CRITERIAS_SETTING_CREATE,
+                }),
+            })
+        );
+
+        setUrl('');
+    };
+
+    const toggleUrlMask = (hostname: string, criteria: CriteriaMasks) => {
+        dispatch(
+            settingsEditIntent('pause-list', {
+                disallowedDomains: merge(disallowedDomains, {
+                    [hostname]: toggleCriteria(disallowedDomains[hostname] ?? 0, criteria),
+                }),
+            })
+        );
+    };
+
+    const deleteDisallowedUrl = (hostname: string) => {
+        const update = { ...disallowedDomains };
+        delete update[hostname];
+
+        dispatch(settingsEditIntent('pause-list', { disallowedDomains: update }));
+    };
+
+    const infoText = nonEmpty ? ` ${c('Description').t`A checked box means the feature is disabled.`}` : '';
+
+    const headings = useMemo(
+        () => [
+            { title: c('Label').t`Domain`, className: 'w-1/4' },
+            { title: c('Label').t`Autofill` },
+            { title: c('Label').t`Autofill 2FA` },
+            { title: c('Label').t`Autosuggest` },
+            { title: c('Label').t`Autosave` },
+            { title: c('Label').t`Passkeys` },
+        ],
+        []
+    );
+
+    return (
+        <SettingsPanel
+            title={c('Label').t`Pause list`}
+            subTitle={c('Description')
+                .t`List of domains where certain auto functions in ${PASS_SHORT_APP_NAME} (Autofill, Autosuggest, Autosave) should not be run.${infoText}`}
+        >
+            {nonEmpty && (
+                <Table responsive="cards" hasActions borderWeak className="pass-pauselist--table">
+                    <TableHeader>
+                        <TableRow>
+                            {headings.map(({ title, className }) => (
+                                <TableHeaderCell className={className} key={title}>
+                                    <small className="text-ellipsis max-w-full text-xs">{title}</small>
+                                </TableHeaderCell>
+                            ))}
+
+                            <TableHeaderCell>
+                                <IcPassTrash size={3} className="mr-1 mb-0.5" />
+                            </TableHeaderCell>
+                        </TableRow>
+                    </TableHeader>
+
+                    <TableBody>
+                        {pauseList.map(([hostname, mask], i) => {
+                            const orgMask = orgDomains?.[hostname] ?? 0;
+                            const isLocked = orgMask > 0;
+
+                            return (
+                                <TableRow key={`${hostname}-${i}`}>
+                                    <TableCell label={c('Label').t`Domains`}>
+                                        <div className="flex items-center gap-1">
+                                            {isLocked && <IcLock size={3} className="color-weak shrink-0" />}
+                                            <div className="text-ellipsis">{hostname}</div>
+                                        </div>
+                                    </TableCell>
+                                    {criterias.map((criteria) => {
+                                        const criterionLocked = hasCriteria(orgMask, criteria);
+                                        return (
+                                            <TableCell
+                                                key={criteria}
+                                                label={((): string => {
+                                                    switch (criteria) {
+                                                        case 'Autofill':
+                                                            return c('Label').t`Autofill`;
+                                                        case 'Autofill2FA':
+                                                            return c('Label').t`Autofill 2FA`;
+                                                        case 'Autosuggest':
+                                                            return c('Label').t`Autosuggest`;
+                                                        case 'Autosave':
+                                                            return c('Label').t`Autosave`;
+                                                        case 'Passkey':
+                                                            return c('Label').t`Passkey`;
+                                                    }
+                                                })()}
+                                            >
+                                                <Checkbox
+                                                    checked={hasCriteria(mask, criteria)}
+                                                    disabled={criterionLocked}
+                                                    onChange={() =>
+                                                        !criterionLocked && toggleUrlMask(hostname, criteria)
+                                                    }
+                                                />
+                                            </TableCell>
+                                        );
+                                    })}
+
+                                    <TableCell className="pass-pauselist--actions relative">
+                                        {!isLocked && (
+                                            <div>
+                                                <Button
+                                                    onClick={() => deleteDisallowedUrl(hostname)}
+                                                    aria-label={c('Action').t`Remove`}
+                                                    size="small"
+                                                    shape="ghost"
+                                                    icon
+                                                    pill
+                                                >
+                                                    <IcCross size={3} />
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            );
+                        })}
+                    </TableBody>
+                </Table>
+            )}
+
+            <div className="flex mt-2 items-center">
+                <div className="flex-1 mr-2">
+                    <InputFieldTwo
+                        value={url}
+                        onValue={setUrl}
+                        onKeyUp={(e: KeyboardEvent) => e.key === 'Enter' && addDisallowedUrl(url)}
+                        dense
+                        placeholder={'https://domain.com/path'}
+                    />
+                </div>
+                <Button color="norm" shape="solid" onClick={() => addDisallowedUrl(url)}>
+                    {c('Action').t`Add domain`}
+                </Button>
+            </div>
+        </SettingsPanel>
+    );
+};

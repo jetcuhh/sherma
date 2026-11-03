@@ -1,0 +1,58 @@
+import type { FC } from 'react';
+
+import type { IconComponent } from '@proton/icons/component';
+import { IcPassAllVaults } from '@proton/icons/icons/IcPassAllVaults';
+import type { IconSize } from '@proton/icons/types';
+import { rootFontSize } from '@proton/shared/lib/helpers/dom';
+import clsx from '@proton/utils/clsx';
+
+import type { VaultIcon as VaultIconEnum } from '../../types/protobuf/vault-v1.static';
+import { VaultColor as VaultColorEnum } from '../../types/protobuf/vault-v1.static';
+import { getIconSizePx } from '../Layout/Icon/IconBox';
+import { VAULT_COLOR_MAP, VAULT_ICON_MAP } from './constants';
+
+import './VaultIcon.scss';
+
+export type VaultIconValue = VaultIconEnum | IconComponent;
+
+type Props = {
+    background?: boolean;
+    className?: string;
+    color?: VaultColorEnum;
+    highlighted?: boolean;
+    icon?: VaultIconValue;
+    size?: IconSize;
+};
+
+const rem = (px: number) => `${px / rootFontSize()}rem`;
+
+export const VaultIcon: FC<Props> = ({
+    className,
+    background,
+    highlighted,
+    size = 5,
+    color,
+    icon = IcPassAllVaults,
+}) => {
+    const VaultIconComponent = typeof icon === 'number' ? VAULT_ICON_MAP[icon] : icon;
+
+    return (
+        <span
+            className={clsx([
+                `pass-vault-icon rounded-xl relative w-custom h-custom`,
+                background && 'background',
+                size >= 5 && 'rounded-full',
+                className,
+            ])}
+            style={{
+                '--vault-icon-color': highlighted
+                    ? 'var(--interaction-norm-contrast)'
+                    : `rgb(${VAULT_COLOR_MAP[color ?? VaultColorEnum.COLOR1]})`,
+                '--w-custom': rem(getIconSizePx(background ? size * 2 : size)),
+                '--h-custom': rem(getIconSizePx(background ? size * 2 : size)),
+            }}
+        >
+            <VaultIconComponent className="absolute inset-center" size={size} />
+        </span>
+    );
+};

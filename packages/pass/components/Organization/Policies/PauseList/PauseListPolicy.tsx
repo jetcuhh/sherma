@@ -1,0 +1,85 @@
+import { type FC, useEffect, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+import useErrorHandler from '@proton/components/hooks/useErrorHandler';
+import useLoading from '@proton/hooks/useLoading';
+
+import { usePassBridge } from '../../../../lib/bridge/PassBridgeProvider';
+import type {
+    PauseListEntryAddDTO,
+    PauseListEntryDeleteDTO,
+    PauseListEntryUpdateDTO,
+} from '../../../../lib/organization/types';
+import type { OrganizationUrlPauseEntryDto } from '../../../../types/api/pass';
+import { PauseListTable } from './PauseListTable';
+
+export const PauseList: FC<{ upgradeRequired: boolean }> = ({ upgradeRequired }) => {
+    const { organization } = usePassBridge();
+    const { createNotification } = useNotifications();
+    const handleError = useErrorHandler();
+    const [loading, withLoading] = useLoading(!upgradeRequired);
+
+    const [entries, setEntries] = useState<OrganizationUrlPauseEntryDto[]>([]);
+
+    const onEntryAdded = async (entry: PauseListEntryAddDTO) => {
+        try {
+            const result = await organization.pauseList.add(entry);
+            const url = result.Url;
+            createNotification({ text: c('Info').t`${url} added.` });
+            setEntries((entries) => [...entries, result]);
+        } catch (err) {
+            handleError(err);
+        }
+    };
+
+    const onEntryUpdated = async (updatedEntry: PauseListEntryUpdateDTO) => {
+        try {
+            await organization.pauseList.update(updatedEntry);
+            createNotification({ text: c('Info').t`URL settings updated.` });
+            setEntries((entries) =>
+                entries.map((entry) =>
+                    entry.EntryID === updatedEntry.id ? { ...entry, Values: updatedEntry.values } : entry
+                )
+            );
+        } catch (err) {
+            handleError(err);
+        }
+    };
+
+    const onEntryDeleted = async ({ id, url }: PauseListEntryDeleteDTO) => {
+        try {
+            await organization.pauseList.delete(id);
+            createNotification({ text: c('Info').t`${url} deleted.` });
+            setEntries((entries) => entries.filter((entry) => entry.EntryID !== id));
+        } catch (err) {
+            handleError(err);
+        }
+    };
+
+    const fetchEntries = () =>
+        organization.pauseList.get().then((entries) => {
+            setEntries(entries);
+        });
+
+    useEffect(() => {
+        // On Pass Essentials the org pause-list endpoint is unavailable and this page is
+        // shown as an upsell preview, so don't even attempt the fetch.
+        if (upgradeRequired) {
+            return;
+        }
+
+        withLoading(fetchEntries()).catch(handleError);
+    }, []);
+
+    return (
+        <PauseListTable
+            entries={entries}
+            onEntryAdded={onEntryAdded}
+            onEntryDeleted={onEntryDeleted}
+            onEntryUpdated={onEntryUpdated}
+            loading={loading}
+        />
+    );
+};

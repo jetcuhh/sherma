@@ -1,0 +1,47 @@
+{
+    "name": "@proton/challenge",
+    "description": "Challenge frame: the component that embeds the sandboxed iframe and forwards interactions to it.",
+    "license": "GPL-3.0",
+    "sideEffects": false,
+    "type": "module",
+    "exports": {
+        "./interface": "./src/shared/interface.ts",
+        "./v4/Challenge": "./src/v4/Challenge.tsx",
+        "./v4/getChallengeSrc": "./src/v4/getChallengeSrc.ts",
+        "./v4/interface": "./src/v4/interface.ts",
+        "./v5/Challenge": "./src/v5/Challenge.tsx",
+        "./v5/getChallengeSrc": "./src/v5/getChallengeSrc.ts",
+        "./v5/interface": "./src/v5/interface.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "eslint --quiet",
+        "test": "jest",
+        "test:ci": "jest --runInBand --ci",
+        "test:watch": "jest --watch"
+    },
+    "dependencies": {
+        "@proton/utils": "workspace:^"
+    },
+    "devDependencies": {
+        "@proton/eslint-config-proton": "workspace:^",
+        "@proton/jest-env": "workspace:^",
+        "@proton/jest-swc-preset": "workspace:^",
+        "@testing-library/react": "^15.0.7",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "eslint": "catalog:",
+        "jest": "catalog:",
+        "jest-junit": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:",
+        "typescript": "catalog:"
+    },
+    "peerDependencies": {
+        "react": "^18.3.1"
+    }
+}

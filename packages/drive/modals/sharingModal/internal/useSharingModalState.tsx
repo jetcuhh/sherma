@@ -1,0 +1,512 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import type { ProtonDriveClient } from '@protontech/drive-sdk';
+import {
+    MemberRole,
+    type NodeEntity,
+    NodeType,
+    type Result,
+    type ShareNodeSettings,
+    type ShareResult,
+    ValidationError,
+    resultError,
+    resultOk,
+} from '@protontech/drive-sdk';
+import { splitInvitationUid, splitNodeUid } from '@protontech/drive-sdk/dist/internal/uids';
+import { c } from 'ttag';
+
+import { useContactEmails } from '@proton/account/contactEmails/hooks';
+import { useUser } from '@proton/account/user/hooks';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import type { ModalStateProps } from '@proton/components/components/modalTwo/useModalState';
+import useLoading from '@proton/hooks/useLoading';
+import { getAppHref } from '@proton/shared/lib/apps/helper';
+import { APPS } from '@proton/shared/lib/constants';
+import { textToClipboard } from '@proton/shared/lib/helpers/browser';
+import { isProtonDocsDocument } from '@proton/shared/lib/helpers/mimetype';
+
+import { handleSdkError } from '../../../legacy/errorHandling';
+import { BusDriverEventName, getBusDriver } from '../../../modules/busDriver';
+import { useFlagsDriveDocsPublicSharing } from '../../../modules/flags';
+import { type EffectiveRole, getNodeEffectiveRole, getNodeName } from '../../../modules/nodes';
+import { getDisplayName } from './DirectSharing/helpers/userNames';
+import type { SharingModalViewProps } from './SharingModalView';
+import { type DirectMember, MemberType } from './interfaces';
+
+type Drive = Pick<
+    ProtonDriveClient,
+    'getNode' | 'getSharingInfo' | 'unshareNode' | 'resendInvitation' | 'shareNode' | 'convertNonProtonInvitation'
+>;
+
+export type SharingModalInnerProps = {
+    nodeUid: string;
+    drive: Drive;
+    onShareSnapshot?: (result: Result<ShareResult, Error>) => void;
+};
+
+export type UseSharingModalProps = ModalStateProps & SharingModalInnerProps;
+
+const defaultSharingInfo = {
+    protonInvitations: [],
+    nonProtonInvitations: [],
+    urlAccess: undefined,
+    members: [],
+    editorsCanShare: false,
+};
+
+const getIsShared = (shareResult: ShareResult) => {
+    const isDirectShared =
+        shareResult.protonInvitations.length > 0 ||
+        shareResult.nonProtonInvitations.length > 0 ||
+        shareResult.members.length > 0;
+    const isPublicShared = !!shareResult.urlAccess;
+    return isDirectShared || isPublicShared;
+};
+
+export const useSharingModalState = ({
+    nodeUid,
+    drive,
+    onClose,
+    open,
+    onExit,
+    onShareSnapshot,
+}: UseSharingModalProps): SharingModalViewProps => {
+    const [contactEmails] = useContactEmails();
+
+    const { createNotification } = useNotifications();
+
+    const [user] = useUser();
+
+    const [isLoading, withLoading] = useLoading();
+    const [initialized, setInitialized] = useState(false);
+
+    const [nodeInfo, setNodeInfo] = useState<NodeEntity>();
+
+    const [sharingInfo, setSharingInfo] = useState<ShareResult>(defaultSharingInfo);
+
+    const ownerEmail = nodeInfo?.ownedBy.email;
+    const ownerDisplayName = getDisplayName({ ownerEmail, contactEmails, user });
+
+    const [fileName, setFileName] = useState('');
+
+    const mediaType = getMediaType(nodeInfo);
+    const isAlbum = nodeInfo?.type === NodeType.Album;
+    const isPhoto = nodeInfo?.type === NodeType.Photo;
+
+    const [isResharing, setIsResharing] = useState(false);
+    const isPublicLinkEnabled = usePublicLinkEnabled({ isResharing, mediaType, isAlbum });
+
+    const [roleOnParentNode, setRoleOnParentNode] = useState<MemberRole>();
+
+    const closeAndCleanup = useCallback(() => {
+        setSharingInfo(defaultSharingInfo);
+        setNodeInfo(undefined);
+        onClose();
+    }, [onClose]);
+
+    const exitAndCleanup = useCallback(() => {
+        // Executed AFTER closing animation is done to avoid blinking of loading state
+        setInitialized(false);
+        onExit();
+    }, [onExit]);
+
+    const updateSharingState = async (updatedShareResult: ShareResult | undefined) => {
+        const shareResult = updatedShareResult || defaultSharingInfo;
+        await getBusDriver().emit(
+            {
+                type: BusDriverEventName.UPDATED_NODES,
+                items: [
+                    {
+                        uid: nodeUid,
+                        parentUid: nodeInfo?.parentUid,
+                        isShared: getIsShared(shareResult),
+                    },
+                ],
+            },
+            drive
+        );
+        setSharingInfo(shareResult);
+        onShareSnapshot?.(resultOk(shareResult));
+    };
+
+    const emitShareResultError = (e: unknown) =>
+        onShareSnapshot?.(resultError(e instanceof Error ? e : new Error(String(e))));
+
+    const unshareNode: SharingModalViewProps['actions']['unshareNode'] = async (
+        email,
+        { refreshSharedWithMe } = {}
+    ) => {
+        try {
+            const updatedShareResult = await drive.unshareNode(nodeUid, {
+                users: [email],
+            });
+            // Check if it's a member or an invitation
+            if (sharingInfo.members.find((member) => member.inviteeEmail === email)) {
+                createNotification({ type: 'info', text: c('Notification').t`Access for the member removed` });
+            } else {
+                createNotification({ type: 'info', text: c('Notification').t`Access updated` });
+            }
+            await updateSharingState(updatedShareResult);
+
+            if (refreshSharedWithMe) {
+                await getBusDriver().emit(
+                    {
+                        type: BusDriverEventName.REFRESH_SHARED_WITH_ME,
+                    },
+                    drive
+                );
+            }
+        } catch (e) {
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Failed to unshare node`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const unsharePublic = async () => {
+        try {
+            const updatedShareResult = await drive.unshareNode(nodeUid, {
+                urlAccess: 'remove',
+            });
+            createNotification({ text: c('Notification').t`The link to your item was deleted` });
+            await updateSharingState(updatedShareResult);
+        } catch (e) {
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`The link to your item failed to be deleted`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const createSharePublic = async () => {
+        try {
+            const updatedShareResult = await drive.shareNode(nodeUid, {
+                urlAccess: {
+                    role: MemberRole.Viewer,
+                },
+            });
+
+            await updateSharingState(updatedShareResult);
+        } catch (e) {
+            if (e instanceof ValidationError) {
+                createNotification({ type: 'error', text: e.message });
+            }
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Failed to create public share node`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const updateSharePublic = async (publicLinkSettings: {
+        role?: MemberRole;
+        customPassword?: string;
+        expiration?: Date;
+    }) => {
+        try {
+            // For safety if one of the value is not passed, we used the actual one
+            // If it is passed but explicitly as "undefined" we assume that it's to disable it
+            const updatedRole = 'role' in publicLinkSettings ? publicLinkSettings.role : sharingInfo.urlAccess?.role;
+            const updatedExpiration =
+                'expiration' in publicLinkSettings
+                    ? publicLinkSettings.expiration
+                    : sharingInfo.urlAccess?.expirationTime;
+            const updatedCustomPassword =
+                'customPassword' in publicLinkSettings
+                    ? publicLinkSettings.customPassword
+                    : sharingInfo.urlAccess?.customPassword;
+            const updatedShareResult = await drive.shareNode(nodeUid, {
+                urlAccess: {
+                    role: updatedRole || MemberRole.Viewer,
+                    expiration: updatedExpiration,
+                    customPassword: updatedCustomPassword,
+                },
+            });
+
+            if (publicLinkSettings.role) {
+                createNotification({ text: c('Notification').t`Public link access updated` });
+            } else {
+                createNotification({ text: c('Notification').t`Your settings have been changed successfully` });
+            }
+
+            await updateSharingState(updatedShareResult);
+        } catch (e) {
+            if (e instanceof ValidationError) {
+                createNotification({ type: 'error', text: e.message });
+            }
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Failed to update public share node`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const updateShareDirect = async (directShareSettings: Omit<ShareNodeSettings, 'urlAccess'>) => {
+        try {
+            const updatedShareResult = await drive.shareNode(nodeUid, directShareSettings);
+            // First the button changes appearance, then comes the notification
+            setTimeout(
+                () =>
+                    createNotification({
+                        // translator: for example '"image.jpg" shared'
+                        text: c('Notification').t`"${fileName}" shared`,
+                    }),
+                2000
+            );
+
+            await updateSharingState(updatedShareResult);
+        } catch (e) {
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Failed to update direct share node`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const stopSharing = async () => {
+        try {
+            const updatedShareResult = await drive.unshareNode(nodeUid);
+            await updateSharingState(updatedShareResult);
+            createNotification({ text: c('Notification').t`You stopped sharing this item` });
+        } catch (e) {
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Stopping the sharing of this item has failed`,
+                extra: { nodeUid },
+                showNotification: true,
+            });
+            emitShareResultError(e);
+        }
+    };
+
+    const resendInvitation = async (invitationUid: string) => {
+        try {
+            await drive.resendInvitation(nodeUid, invitationUid);
+            createNotification({ type: 'info', text: c('Notification').t`Invitation's email was sent again` });
+        } catch (e) {
+            handleSdkError(e, {
+                fallbackMessage: c('Error').t`Failed to resend invitation`,
+                extra: { nodeUid, invitationUid },
+                showNotification: true,
+            });
+        }
+    };
+
+    useEffect(() => {
+        const fetchSharingInfo = async () => {
+            try {
+                const sharingResult = await drive.getSharingInfo(nodeUid);
+                if (sharingResult) {
+                    onShareSnapshot?.(resultOk(sharingResult));
+                    return sharingResult;
+                }
+            } catch (e) {
+                handleSdkError(e, {
+                    fallbackMessage: c('Error').t`Failed to fetch sharing info`,
+                    extra: { nodeUid },
+                    showNotification: false,
+                });
+                onShareSnapshot?.(resultError(e instanceof Error ? e : new Error(String(e))));
+                throw e;
+            }
+        };
+        const fetchNodeInfo = async () => {
+            try {
+                const nodeInfo = await drive.getNode(nodeUid);
+
+                let roleOnParentNode: EffectiveRole | undefined;
+                if (nodeInfo.parentUid) {
+                    const parentNodeInfo = await drive.getNode(nodeInfo.parentUid);
+                    roleOnParentNode = await getNodeEffectiveRole(parentNodeInfo, drive);
+                }
+
+                let isReSharing;
+                if (nodeInfo?.type !== NodeType.Album && nodeInfo?.type !== NodeType.Photo) {
+                    const isMyFile = await isShareInMyFiles(nodeUid, drive as ProtonDriveClient);
+                    isReSharing = !isMyFile;
+                }
+
+                return { nodeInfo, roleOnParentNode, isReSharing };
+            } catch (e) {
+                handleSdkError(e, {
+                    fallbackMessage: c('Error').t`Failed to fetch node`,
+                    extra: { nodeUid },
+                    showNotification: false,
+                });
+                throw e;
+            }
+        };
+        void withLoading(
+            Promise.all([fetchSharingInfo(), fetchNodeInfo()])
+                .then(([sharingResult, { nodeInfo, roleOnParentNode, isReSharing }]) => {
+                    if (sharingResult) {
+                        setSharingInfo(sharingResult);
+                    }
+                    setNodeInfo(nodeInfo);
+                    setFileName(getNodeName(nodeInfo));
+                    if (roleOnParentNode) {
+                        setRoleOnParentNode(roleOnParentNode);
+                    }
+                    if (isReSharing !== undefined) {
+                        setIsResharing(isReSharing);
+                    }
+                    setInitialized(true);
+                })
+                .catch(() => {
+                    createNotification({ type: 'error', text: c('Notification').t`Failed to load sharing details` });
+                    closeAndCleanup();
+                })
+        );
+    }, [drive, nodeUid, withLoading, onShareSnapshot, closeAndCleanup, createNotification]);
+
+    const copyInvitationLink = (invitationUid: string, email: string) => {
+        const { invitationId } = splitInvitationUid(invitationUid);
+        const { volumeId, nodeId } = splitNodeUid(nodeUid);
+        textToClipboard(
+            getAppHref(`/${volumeId}/${nodeId}?invitation=${invitationId}&email=${email}`, APPS.PROTONDRIVE)
+        );
+        createNotification({ text: c('Info').t`Invite link copied` });
+    };
+
+    const directMembers = useMemo(
+        () =>
+            sharingInfo.members
+                .map((member) => ({
+                    uid: member.uid,
+                    inviteeEmail: member.inviteeEmail,
+                    role: member.role,
+                    type: MemberType.Member,
+                }))
+                .concat(
+                    sharingInfo.protonInvitations.map((protonInvitation) => ({
+                        uid: protonInvitation.uid,
+                        inviteeEmail: protonInvitation.inviteeEmail,
+                        role: protonInvitation.role,
+                        type: MemberType.ProtonInvitation,
+                    }))
+                )
+                .concat(
+                    sharingInfo.nonProtonInvitations.map((nonProtonInvitation) => ({
+                        uid: nonProtonInvitation.uid,
+                        inviteeEmail: nonProtonInvitation.inviteeEmail,
+                        role: nonProtonInvitation.role,
+                        state: nonProtonInvitation.state,
+                        type: MemberType.NonProtonInvitation,
+                    }))
+                )
+                .filter((member) => member.inviteeEmail !== ownerEmail) as DirectMember[],
+        [sharingInfo, ownerEmail]
+    );
+
+    const existingEmails = useMemo(() => {
+        const directMembersMails = directMembers.map((member) => member.inviteeEmail);
+        if (ownerEmail) {
+            directMembersMails.push(ownerEmail);
+        }
+        return directMembersMails;
+    }, [ownerEmail, directMembers]);
+
+    return {
+        open,
+        onExit: exitAndCleanup,
+        onClose: closeAndCleanup,
+        sharingInfo,
+        drive,
+        nodeUid,
+        roleOnParentNode,
+        fileName,
+        mediaType,
+        isPhotoOrAlbum: isPhoto || isAlbum,
+        ownerDisplayName,
+        ownerEmail,
+        isLoading,
+        initialized,
+        isShared: getIsShared(sharingInfo),
+        isPublicLinkEnabled,
+        publicLink: sharingInfo.urlAccess
+            ? {
+                  role: sharingInfo.urlAccess.role,
+                  url: sharingInfo.urlAccess.url,
+                  customPassword: sharingInfo.urlAccess.customPassword,
+                  expirationTime: sharingInfo.urlAccess.expirationTime,
+                  isExpired: sharingInfo.urlAccess.expirationTime
+                      ? sharingInfo.urlAccess.expirationTime < new Date()
+                      : false,
+              }
+            : undefined,
+        directMembers,
+        existingEmails,
+        actions: {
+            unshareNode,
+            unsharePublic,
+            createSharePublic,
+            updateShareDirect,
+            updateSharePublic,
+            resendInvitation,
+            copyInvitationLink,
+            stopSharing,
+        },
+    };
+};
+
+function usePublicLinkEnabled({
+    isResharing,
+    mediaType,
+    isAlbum,
+}: {
+    isResharing: boolean;
+    mediaType?: string;
+    isAlbum: boolean;
+}) {
+    const { isDocsPublicSharingEnabled } = useFlagsDriveDocsPublicSharing();
+
+    // We don't know mediaType because it's loading -> hide public link to avoid blinking
+    if (mediaType === undefined || isResharing) {
+        return false;
+    }
+
+    if (mediaType && isProtonDocsDocument(mediaType)) {
+        return isDocsPublicSharingEnabled;
+    }
+
+    return !isAlbum;
+}
+
+function getMediaType(nodeInfo?: NodeEntity): string | undefined {
+    if (nodeInfo?.type) {
+        if (nodeInfo.type === NodeType.Folder) {
+            return 'Folder';
+        }
+        if (nodeInfo.type === NodeType.Album) {
+            return 'Album';
+        }
+    }
+    return nodeInfo?.mediaType;
+}
+
+async function isShareInMyFiles(nodeUid: string, drive: ProtonDriveClient): Promise<boolean> {
+    let hierarchy: NodeEntity[];
+    try {
+        hierarchy = await drive.getNodeHierarchy(nodeUid);
+    } catch (e) {
+        handleSdkError(e, { showNotification: false });
+        return false;
+    }
+    const firstAncestor = hierarchy.at(0);
+    if (!firstAncestor) {
+        // Impossible, because getNodeHierarchy will always at least return self
+        return false;
+    }
+    // If node has "membership" it means it is a direct share
+    return !Boolean(firstAncestor.membership);
+}

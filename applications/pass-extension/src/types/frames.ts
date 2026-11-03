@@ -1,0 +1,60 @@
+import type { FormType } from '@protontech/autofill/types';
+
+import type { AutofillPageTelemetryDimensions } from '@proton/pass/types/data/telemetry';
+import type { MaybeNull, Result } from '@proton/pass/types/utils';
+
+import type { Coords } from './inline';
+
+export type FrameAttributes = {
+    src?: string;
+    name?: string;
+    width?: number;
+    height?: number;
+    title?: string;
+    ariaLabel?: string;
+};
+
+type FrameQueryType = 'position' | 'form';
+
+/** Query payload sent to parent frame to get child iframe position */
+export type FrameQueryDTO = {
+    /** ID of child frame whose position is being queried */
+    frameId: number;
+    /** Child frame attributes for identification in parent DOM */
+    frameAttributes: FrameAttributes;
+    /** "position": resolves relative positioning
+     *  "form": resolves relative parent form */
+    type: FrameQueryType;
+};
+
+/** Response from parent frame containing child iframe positioning data */
+export type FrameQueryResponse<T extends FrameQueryType> = Extract<
+    | {
+          type: 'position';
+          /** Child iframe coordinates relative to parent frame viewport */
+          coords: Coords;
+          /** Parent frame attributes for next iteration in coordinate chain */
+          frameAttributes: FrameAttributes;
+      }
+    | { type: 'form'; formId: MaybeNull<string> },
+    { type: T }
+>;
+
+export type FrameQueryResult = Result<FrameQueryResponse<FrameQueryType>>;
+export type FrameCheckResult = { visible: boolean };
+
+export type FrameField = {
+    /** Random uuid fro cross-frame identification */
+    fieldId: string;
+    /** Parent form random uuid */
+    formId: string;
+    /** FrameID of the current field */
+    frameId: number;
+};
+
+/** Relayed messages are most of the time forwarded to the service-worker
+ * and re-dispatched to the relevant frameId. This allows having different
+ * types if data needs to be transformed before relaying */
+export type FrameRelay<T, Relayed = {}> = T & ({ type: 'initial' } | ({ type: 'relay' } & Relayed));
+
+export type FrameFormsResult = { formTypes: FormType[]; telemetry: AutofillPageTelemetryDimensions };

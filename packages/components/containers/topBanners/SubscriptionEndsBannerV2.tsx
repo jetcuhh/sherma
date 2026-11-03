@@ -1,0 +1,94 @@
+import { c } from 'ttag';
+
+import { useConfig } from '@proton/app-context/useConfig';
+import { Banner } from '@proton/atoms/Banner/Banner';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { Href } from '@proton/atoms/Href/Href';
+import { hasDeprecatedVPN, hasVPN2024, subscriptionExpires } from '@proton/payments/core/subscription/helpers';
+import type { MaybeFreeSubscription } from '@proton/payments/core/subscription/interface';
+import { isFreeSubscription } from '@proton/payments/core/type-guards';
+import { getAppShortName } from '@proton/shared/lib/apps/helper';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import { APPS } from '@proton/shared/lib/constants';
+
+import SettingsLink from '../../components/link/SettingsLink';
+import { REACTIVATE_SOURCE } from '../payments/subscription/cancellationFlow/useCancellationTelemetry';
+import {
+    getReactivateSubscriptionAction,
+    getSubscriptionExpiresDaysLeft,
+    getSubscriptionExpiresText,
+} from '../payments/subscription/helpers/subscriptionExpires';
+
+interface Props {
+    app: APP_NAMES;
+    subscription: MaybeFreeSubscription;
+}
+
+const SubscriptionEndsBannerV2 = ({ app, subscription }: Props) => {
+    const { APP_NAME } = useConfig();
+
+    if (isFreeSubscription(subscription)) {
+        return null;
+    }
+
+    const { subscriptionExpiresSoon, planName, expirationDate } = subscriptionExpires(subscription);
+
+    if (!([APPS.PROTONACCOUNT, APPS.PROTONVPN_SETTINGS] as APP_NAMES[]).includes(APP_NAME)) {
+        return null;
+    }
+
+    if (!subscriptionExpiresSoon || !subscription) {
+        return null;
+    }
+
+    const daysLeft = getSubscriptionExpiresDaysLeft(expirationDate, new Date());
+    const daysLeftString = getSubscriptionExpiresText(planName, daysLeft);
+
+    const urgent = daysLeft < 10;
+
+    const appName = getAppShortName(app);
+
+    const getBannerCopy = () => {
+        switch (true) {
+            case Boolean(hasDeprecatedVPN(subscription) || hasVPN2024(subscription)):
+                return urgent
+                    ? c('Info').t`Don't lose access to your premium ${appName} features. Enable auto-renew today.`
+                    : c('Info').t`Enable auto-renew to keep access to Plus servers and features.`;
+            default:
+                return urgent
+                    ? c('Info').t`Don't lose access to your premium features. Enable auto-renew today.`
+                    : c('Info').t`Enable auto-renew to keep access to your premium features.`;
+        }
+    };
+
+    const reactivateLinkData = getReactivateSubscriptionAction(subscription, REACTIVATE_SOURCE.banners);
+
+    const reactivateLink =
+        reactivateLinkData.type === 'internal' ? (
+            <ButtonLike
+                as={SettingsLink}
+                color="danger"
+                size="small"
+                data-testid="reactivate-link"
+                key="reactivate-subscription-internal"
+                path={reactivateLinkData.path}
+            >{c('Link').t`Reactivate now`}</ButtonLike>
+        ) : (
+            <ButtonLike
+                as={Href}
+                color="danger"
+                data-testid="reactivate-link"
+                key="reactivate-subscription-external"
+                href={reactivateLinkData.href}
+                target="_blank"
+            >{c('Link').t`Reactivate now`}</ButtonLike>
+        );
+
+    return (
+        <Banner variant={urgent ? 'danger-outline' : undefined} action={reactivateLink}>
+            <b className={urgent ? 'color-danger' : undefined}>{daysLeftString}</b> {getBannerCopy()}
+        </Banner>
+    );
+};
+
+export default SubscriptionEndsBannerV2;

@@ -1,0 +1,89 @@
+import { useState } from 'react';
+
+import { useUser } from '@proton/account/user/hooks';
+import { userSettingsActions } from '@proton/account/userSettings';
+import { useUserSettings } from '@proton/account/userSettings/hooks';
+import { useApi } from '@proton/app-context/useApi';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import { patchNews } from '@proton/shared/lib/api/settings';
+import { type NewsletterSubscriptionUpdateData, getUpdatedNewsBitmap } from '@proton/shared/lib/helpers/newsletter';
+import type { UserSettings } from '@proton/shared/lib/interfaces/UserSettings';
+import clsx from '@proton/utils/clsx';
+import noop from '@proton/utils/noop';
+
+import { EmailSubscriptionToggleWithHeader } from './EmailSubscriptionToggles';
+import {
+    type EmailSubscription,
+    filterNews,
+    getEmailSubscriptions,
+    getUpdateNotification,
+} from './constants/email-subscriptions';
+
+interface Props {
+    wrapperClassName?: string;
+}
+const EditEmailSubscription = ({ wrapperClassName }: Props) => {
+    const [user] = useUser();
+    const [userSettings] = useUserSettings();
+    const { createNotification } = useNotifications();
+    const dispatch = useDispatch();
+    const api = useApi();
+    const [loadingMap, setLoadingMap] = useState<{ [key: string]: boolean }>({});
+
+    const run = async (data: NewsletterSubscriptionUpdateData) => {
+        dispatch(userSettingsActions.update({ UserSettings: { News: getUpdatedNewsBitmap(userSettings.News, data) } }));
+        await api<{ UserSettings: UserSettings }>(patchNews(data));
+        createNotification({ text: getUpdateNotification(data) });
+    };
+
+    const setLoadingMapDiff = (data: NewsletterSubscriptionUpdateData, value: boolean) => {
+        setLoadingMap((oldValue) => ({
+            ...oldValue,
+            ...Object.fromEntries(Object.entries(data).map(([key]) => [key, value])),
+        }));
+    };
+
+    const handleChange = async (data: NewsletterSubscriptionUpdateData) => {
+        setLoadingMapDiff(data, true);
+        run(data)
+            .catch(noop)
+            .finally(() => {
+                setLoadingMapDiff(data, false);
+            });
+    };
+
+    const filter = (emailSubscription: EmailSubscription) =>
+        filterNews({
+            emailSubscription,
+            user,
+            userSettings,
+        });
+
+    const { general, product, accountUpdates, notifications } = getEmailSubscriptions(filter);
+
+    const sharedProps = {
+        onChange: handleChange,
+        loadingMap,
+        News: userSettings.News,
+    };
+
+    return (
+        <div className={clsx('flex flex-column', wrapperClassName)}>
+            <EmailSubscriptionToggleWithHeader title={general.title} subscriptions={general.toggles} {...sharedProps} />
+            <EmailSubscriptionToggleWithHeader title={product.title} subscriptions={product.toggles} {...sharedProps} />
+            <EmailSubscriptionToggleWithHeader
+                title={accountUpdates.title}
+                subscriptions={accountUpdates.toggles}
+                {...sharedProps}
+            />
+            <EmailSubscriptionToggleWithHeader
+                title={notifications.title}
+                subscriptions={notifications.toggles}
+                {...sharedProps}
+            />
+        </div>
+    );
+};
+
+export default EditEmailSubscription;

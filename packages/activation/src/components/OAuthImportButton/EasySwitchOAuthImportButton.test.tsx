@@ -1,0 +1,20 @@
+import { fireEvent, screen } from '@testing-library/dom';
+
+import { EASY_SWITCH_SOURCES, ImportProvider, ImportType } from '../../interface';
+import { easySwitchRender } from '../../tests/render';
+import EasySwitchOauthImportButton from './EasySwitchOAuthImportButton';
+
+describe('Test correct rendering of loading importer', () => {
+    it('Should render importer', () => {
+        easySwitchRender(
+            <EasySwitchOauthImportButton
+                source={EASY_SWITCH_SOURCES.ACCOUNT_WEB_SETTINGS}
+                products={[ImportType.MAIL]}
+                provider={ImportProvider.GOOGLE}
+            />
+        );
+
+        const button = screen.getByTestId('OAuthImportButton:button:google');
+        fireEvent.click(button);
+    });
+});

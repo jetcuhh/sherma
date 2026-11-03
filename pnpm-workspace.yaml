@@ -1,0 +1,468 @@
+packages:
+    - applications/pass-extension
+    - packages/*
+    - packages/wasm/*
+
+# Each workspace declares the type packages it uses. Most list node, webpack-env and jest in
+# compilerOptions.types through tsconfig.base.json, so these ranges are shared here.
+# check:constraints requires every workspace to declare these dependencies as "catalog:"; see
+# utilities/repo-rules/README.md for the exceptions.
+catalog:
+    '@dnd-kit/abstract': ^0.5.0
+    '@dnd-kit/collision': ^0.5.0
+    '@dnd-kit/dom': ^0.5.0
+    '@dnd-kit/helpers': ^0.5.0
+    '@dnd-kit/react': ^0.5.0
+    '@electron-forge/cli': ^7.11.2
+    '@electron-forge/maker-deb': ^7.11.2
+    '@electron-forge/maker-dmg': ^7.11.2
+    '@electron-forge/maker-msix': ^7.11.2
+    '@electron-forge/maker-rpm': ^7.11.2
+    '@electron-forge/maker-squirrel': ^7.11.2
+    '@electron-forge/maker-zip': ^7.11.2
+    '@electron-forge/plugin-auto-unpack-natives': ^7.11.2
+    '@electron-forge/plugin-fuses': ^7.11.2
+    '@electron-forge/plugin-webpack': ^7.11.2
+    '@electron-forge/publisher-github': ^7.11.2
+    '@electron-forge/shared-types': ^7.11.2
+    '@electron/fuses': ^1.8.0
+    '@jest/globals': ^30.5.2
+    # `lexical` and every `@lexical/*` package must share one exact version; patchedDependencies
+    # patches `@lexical/table` at that version.
+    '@lexical/clipboard': 0.31.2
+    '@lexical/code': 0.31.2
+    '@lexical/hashtag': 0.31.2
+    '@lexical/headless': 0.31.2
+    '@lexical/html': 0.31.2
+    '@lexical/link': 0.31.2
+    '@lexical/list': 0.31.2
+    '@lexical/markdown': 0.31.2
+    '@lexical/overflow': 0.31.2
+    '@lexical/react': 0.31.2
+    '@lexical/rich-text': 0.31.2
+    '@lexical/selection': 0.31.2
+    '@lexical/table': 0.31.2
+    '@lexical/text': 0.31.2
+    '@lexical/utils': 0.31.2
+    '@lexical/yjs': 0.31.2
+    # Must stay on the same version as oxlint.
+    '@oxlint/plugins': 1.87.0
+    '@pmmmwh/react-refresh-webpack-plugin': ^0.6.3
+    '@protontech/crypto': ^2.2.0
+    # Shared so that every workspace importing the Drive SDK resolves the same version.
+    '@protontech/drive-sdk': ^0.23.0
+    '@protontech/logger': ^1.0.0
+    '@protontech/pass-rust-core': 1.6.0
+    '@reduxjs/toolkit': ^2.13.0
+    '@sentry/browser': ^7.120.4
+    '@sentry/types': ^7.120.4
+    '@tanstack/react-virtual': ^3.14.13
+    '@testing-library/dom': ^10.4.2
+    '@testing-library/jest-dom': ^6.9.1
+    '@testing-library/react-hooks': ^8.0.1
+    '@testing-library/user-event': ^14.6.8
+    '@types/chrome': ^0.3.4
+    '@types/history': ^4.7.11
+    '@types/jest': ^30.0.0
+    '@types/jest-when': ^3.5.5
+    '@types/lodash': ^4.17.25
+    '@types/node': ^24.19.0
+    '@types/react': ^18.3.31
+    '@types/react-dom': ^18.3.7
+    '@types/react-router': ^5.1.20
+    '@types/react-router-dom': ^5.3.3
+    '@types/tinycolor2': ^1.4.6
+    '@types/webpack-env': ^1.18.8
+    '@typescript/native': npm:typescript@^7.0.2
+    '@vercel/webpack-asset-relocator-loader': 1.7.3
+    '@vitest/coverage-v8': ^5.0.5
+    '@vitest/ui': ^5.0.5
+    babel-jest: ^30.4.1
+    browserslist: ^4.29.3
+    clsx: ^2.1.1
+    commander: ^14.0.3
+    copy-webpack-plugin: ^14.0.0
+    core-js: ^3.50.0
+    cross-env: ^10.1.0
+    css-loader: ^7.1.5
+    dompurify: ^3.4.17
+    electron-log: ^5.4.4
+    electron-store: ^8.2.0
+    eslint: ^10.12.0
+    fake-indexeddb: ^6.2.5
+    fork-ts-checker-webpack-plugin: ^9.1.0
+    formik: ^2.4.9
+    happy-dom: ^21.0.4
+    history: ^4.10.1
+    html-webpack-plugin: ^5.6.8
+    idb: ^8.0.3
+    jest: ^30.5.2
+    jest-environment-jsdom: ^30.5.2
+    jest-junit: ^16.0.0
+    jest-when: 3.7.0
+    jszip: ^3.10.2
+    lexical: 0.31.2
+    lodash: ^4.18.1
+    mini-css-extract-plugin: ^2.10.2
+    msw: 2.12.14
+    oxlint: 1.87.0
+    oxlint-tsgolint: 7.0.2004
+    postcss: ^8.5.30
+    prettier: ^3.9.10
+    prettier-plugin-tailwindcss: ^0.8.1
+    react: ^18.3.1
+    react-dom: ^18.3.1
+    react-redux: ^9.3.0
+    react-router: ^5.3.4
+    react-router-dom: ^5.3.4
+    redux: ^5.0.1
+    redux-saga: ^1.5.1
+    redux-thunk: ^3.1.0
+    sass: ^1.80.3
+    stylelint: ^15.11.0
+    tinycolor2: ^1.6.0
+    ts-loader: ^9.6.2
+    ts-node: ^10.9.2
+    tsx: ^4.23.15
+    ttag: ^1.8.12
+    ttag-cli: ^1.12.0
+    # A few workspaces (including the root) still declare the real `typescript` package directly.
+    typescript: npm:@typescript/typescript6@^6.0.2
+    typescript-eslint: ^8.71.2
+    uuid: ^14.0.2
+    vite: ^8.3.4
+    vitest: ^5.0.5
+    webpack: ^5.111.1
+    webpack-dev-server: ^6.0.0
+    y-protocols: ^1.0.6
+    yjs: ^13.6.15
+    zod: ^4.6.7
+
+# Yarn resolved any range that a workspace satisfies to that workspace, including the `*` peer
+# dependencies between @proton packages.
+linkWorkspacePackages: true
+# Yarn never installs missing peer dependencies; pnpm does by default.
+autoInstallPeers: false
+# The vendored @rowsncolumns packages import each other in cycles (see packageExtensions), and
+# pnpm refuses to run `pnpm -r` tasks over a cyclic graph. turbo still rejects cycles between
+# @proton packages.
+ignoreWorkspaceCycles: true
+
+# pnpm's default. electron-forge refuses to package unless node-linker is hoisted or a hoist
+# pattern is set explicitly; the desktop apps package only the webpack output, not node_modules.
+hoistPattern:
+    - '*'
+
+# @electron/rebuild pulls @electron/node-gyp from a GitHub commit, and pnpm has no per-package
+# exception for it. Yarn accepted every git dependency (approvedGitRepositories: '**').
+blockExoticSubdeps: false
+
+# Supply-chain policy disabled for this local build environment: the public npm
+# registry is used instead of Proton's internal registries, and publish-age data
+# for internal packages is not available publicly.
+allowBuilds:
+    '@parcel/watcher': true
+    '@sentry/cli': true
+    '@swc/core': true
+    electron: true
+    electron-winstaller: true
+    esbuild: true
+    # Builds the custom bundle configured in applications/wallet/package.json.
+    exifreader: true
+    fs-xattr: true
+    macos-alias: true
+    # Copies the service worker into the workerDirectory configured in applications/lumo/package.json.
+    msw: true
+    unix-dgram: true
+    unrs-resolver: true
+    # Only print notices or install shell completion.
+    core-js: false
+    core-js-pure: false
+    es5-ext: false
+    netlify-cli: false
+    protobufjs: false
+    ttag-cli: false
+
+patchedDependencies:
+    '@pdf-lib/standard-fonts@1.0.0': patches/@pdf-lib__standard-fonts@1.0.0.patch
+    eslint-plugin-monorepo-cop@1.0.2: patches/eslint-plugin-monorepo-cop@1.0.2.patch
+    jsdom@26.1.0: patches/jsdom@26.1.0.patch
+    rfc2047@2.0.1: patches/rfc2047@2.0.1.patch
+
+# Missing peer declarations. Without them, these packages resolve the dependency through pnpm's
+# hidden hoisting directory, which may hold a different version than the workspace uses.
+packageExtensions:
+    eslint-plugin-no-only-tests@3:
+        # Its JSDoc types reference `eslint`.
+        peerDependencies:
+            eslint: '*'
+    # Requires `electron`, which the desktop apps pin to different versions. Jest mocks are keyed by
+    # resolved path, so `jest.mock('electron')` only applies if it shares the app's copy.
+    # electron-log gets no peer. With one, a desktop app on another electron version than
+    # @proton/shared bundles two copies of it and crashes on start.
+    electron-store@8:
+        peerDependencies:
+            electron: '*'
+        peerDependenciesMeta:
+            electron:
+                optional: true
+    # vendor/rowsncolumns ship prebuilt dist/ that imports tslib, React and sibling packages it only
+    # declares as peers, or not at all. The Sheets sync regenerates their manifests, so the
+    # dependencies live here. Versions match docs-editor. Optional imports that were never installed
+    # (plotly, y-websocket, @hocuspocus/provider, canvas, @rowsncolumns/pivot) are left out; charts'
+    # plotly/plot.js is not imported by any other module.
+    '@rowsncolumns/calculation-worker':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/dag': 'workspace:^'
+            '@rowsncolumns/fast-formula-parser': 'workspace:^'
+            '@rowsncolumns/functions': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/calculator':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/charts':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/grid': 'workspace:^'
+            '@rowsncolumns/icons': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/spreadsheet-state': 'workspace:^'
+            '@rowsncolumns/toolkit': 'workspace:^'
+            '@rowsncolumns/ui': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            '@types/react': '^18.3.31'
+            immer: '^11.1.21'
+            jotai: '^2.15.1'
+            react: '^18.3.1'
+            react-dom: '^18.3.1'
+            tslib: '^2.8.1'
+    '@rowsncolumns/dag':
+        dependencies:
+            tslib: '^2.8.1'
+    '@rowsncolumns/date-parser':
+        dependencies:
+            '@rowsncolumns/utils': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/fast-formula-parser':
+        dependencies:
+            '@rowsncolumns/calculator': 'workspace:^'
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/dag': 'workspace:^'
+    '@rowsncolumns/functions':
+        dependencies:
+            '@rowsncolumns/calculator': 'workspace:^'
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/fast-formula-parser': 'workspace:^'
+            '@rowsncolumns/toolkit': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/grid':
+        dependencies:
+            '@types/react': '^18.3.31'
+            react: '^18.3.1'
+            react-dom: '^18.3.1'
+            tslib: '^2.8.1'
+    '@rowsncolumns/icons':
+        dependencies:
+            '@types/react': '^18.3.31'
+            react: '^18.3.1'
+            tslib: '^2.8.1'
+    '@rowsncolumns/spreadsheet':
+        dependencies:
+            '@rowsncolumns/fast-formula-parser': 'workspace:^'
+            '@rowsncolumns/spreadsheet-state': 'workspace:^'
+            '@types/react': '^18.3.31'
+            konva: '^10.0.12'
+            react: '^18.3.1'
+            react-dom: '^18.3.1'
+            react-konva: '18.2.10'
+            scheduler: '>=0.25.0'
+            tslib: '^2.8.1'
+    '@rowsncolumns/spreadsheet-state':
+        dependencies:
+            '@rowsncolumns/calculator': 'workspace:^'
+            '@rowsncolumns/charts': 'workspace:^'
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/dag': 'workspace:^'
+            '@rowsncolumns/fast-formula-parser': 'workspace:^'
+            '@rowsncolumns/grid': 'workspace:^'
+            '@rowsncolumns/icons': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/ui': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            '@types/react': '^18.3.31'
+            lodash: '^4.18.1'
+            react: '^18.3.1'
+            tslib: '^2.8.1'
+    '@rowsncolumns/toolkit':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/date-parser': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/spreadsheet-state': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/ui':
+        dependencies:
+            '@radix-ui/react-popper': '1.2.7'
+            '@radix-ui/react-portal': '1.1.9'
+            '@radix-ui/react-slot': '1.2.3'
+            '@rowsncolumns/calculator': 'workspace:^'
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/fast-formula-parser': 'workspace:^'
+            '@rowsncolumns/grid': 'workspace:^'
+            '@rowsncolumns/icons': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            '@types/react': '^18.3.31'
+            lodash: '^4.18.1'
+            react: '^18.3.1'
+            react-dom: '^18.3.1'
+            tslib: '^2.8.1'
+    '@rowsncolumns/utils':
+        dependencies:
+            '@rowsncolumns/calculator': 'workspace:^'
+            tslib: '^2.8.1'
+    '@rowsncolumns/version-comparison':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            '@types/react': '^18.3.31'
+            react: '^18.3.1'
+    '@rowsncolumns/y-spreadsheet':
+        dependencies:
+            '@rowsncolumns/common-types': 'workspace:^'
+            '@rowsncolumns/grid': 'workspace:^'
+            '@rowsncolumns/spreadsheet': 'workspace:^'
+            '@rowsncolumns/spreadsheet-state': 'workspace:^'
+            '@rowsncolumns/ui': 'workspace:^'
+            '@rowsncolumns/utils': 'workspace:^'
+            '@types/react': '^18.3.31'
+            immer: '^11.1.21'
+            react: '^18.3.1'
+            react-dom: '^18.3.1'
+            tslib: '^2.8.1'
+            yjs: '^13.6.15'
+
+overrides:
+    '@babel/runtime-corejs3@^7.24.4': '7.29.7'
+    '@electron-internal/extract-zip@^1.0.1': '1.0.5'
+    '@humanfs/node@^0.16.6': '0.16.8'
+    '@pdf-lib/standard-fonts@^1.0.0': '1.0.0'
+    '@xhmikosr/downloader@^13.0.0': '16.3.1'
+    '@xmldom/xmldom@^0.8.3': '0.9.12'
+    '@xmldom/xmldom@^0.8.8': '0.9.12'
+    'ajv@6.12.3': '6.14.0'
+    'ajv@8.17.1': '8.20.0'
+    # get-uri@6 still requires ^5. 6.0.0 only disables separate PASV transfer hosts by default,
+    # which get-uri never uses.
+    basic-ftp: '6.2.3'
+    'brace-expansion@1.1.12': '1.1.21'
+    'brace-expansion@2.0.2': '2.1.7'
+    'brace-expansion@5.0.9': '5.0.12'
+    'brace-expansion@^1.1.7': '1.1.21'
+    'brace-expansion@^2.0.1': '2.1.7'
+    'compression@1.8.1': '1.8.2'
+    'cross-spawn@^6.0.0': '7.0.6'
+    'cross-spawn@^6.0.5': '7.0.6'
+    'devalue@^5.8.1': '5.9.4'
+    electron-windows-msix: 'github:Swiip/electron-windows-msix#f1c1f4f46439c7d94569afdedd9561d09d4a1c54'
+    electron-winstaller: '^5.4.4'
+    'dompurify@3.4.16': '3.4.17'
+    'electron>extract-zip': '2.0.1'
+    'fast-uri@^2.0.0': '2.4.7'
+    'fast-uri@^2.1.0': '2.4.7'
+    'fast-uri@^3.0.1': '3.1.9'
+    'fastify@4.28.1': '4.29.1'
+    'follow-redirects@1.16.0': '1.16.1'
+    'form-data@~2.3.2': '2.5.6'
+    'glob@^11.0.0': '11.1.0'
+    'http-proxy-middleware@2.0.7': '2.0.10'
+    'image-size@^0.7.4': 'npm:image-size-next@1.2.2'
+    'image-size@^1.2.1': '2.0.4'
+    immer: '11.1.21'
+    'immutable@^4.3.7': '4.3.9'
+    'immutable@^5.0.2': '5.1.9'
+    'ip-address@^9.0.5': '10.7.4'
+    'js-yaml@4.1.0': '4.3.2'
+    'js-yaml@4.3.1': '4.3.2'
+    'js-yaml@^3.13.1': '3.15.2'
+    'js-yaml@^4.0.0': '4.3.2'
+    'jsdom@^26.1.0': '26.1.0'
+    json5: '^2.2.3'
+    'jws@^3.2.2': '4.0.1'
+    'jws@^4.0.0': '4.0.1'
+    'launch-editor@2.14.1': '2.14.2'
+    'lodash@4.17.21': '4.18.1'
+    'markdown-it@14.3.2': '14.3.3'
+    'mdast-util-to-hast@^13.0.0': '13.2.1'
+    merge: '^2.1.1'
+    'minimatch@^5.0.1': '5.1.9'
+    'minimatch@^5.1.0': '5.1.9'
+    'minimatch@^9.0.0': '9.0.9'
+    'minimatch@^9.0.3': '9.0.9'
+    'minimatch@^9.0.4': '9.0.9'
+    'multiparty@4.2.3': '4.3.0'
+    'nanoid@^5.0.4': '5.1.16'
+    'nanoid@^5.1.2': '5.1.16'
+    'node-forge@^1': '1.4.0'
+    'node-forge@^1.3.1': '1.4.0'
+    node-gyp: '^11.5.0'
+    # @tpe/quark-client pins 9.0.5 and only imports nodemailer/lib/mail-composer, which 10.x still
+    # exports. 10.0.0 only raised the minimum Node.js version to 20.
+    'nodemailer@9.0.5': '10.2.1'
+    'path-to-regexp@0.1.12': '0.1.13'
+    'path-to-regexp@~0.1.12': '0.1.13'
+    'picomatch@^2.0.4': '2.3.2'
+    'picomatch@^2.2.1': '2.3.2'
+    'picomatch@^2.2.2': '2.3.2'
+    'picomatch@^2.3.1': '2.3.2'
+    'plist@3.1.0': '3.1.1'
+    'plist@^3.0.0': '3.1.1'
+    'plist@^3.0.5': '3.1.1'
+    'plist@^3.1.0': '3.1.1'
+    'protobufjs@^7.2.4': '7.6.5'
+    'protocol-buffers-schema@^3.3.1': '3.6.1'
+    'qs@6.15.3': '6.16.0'
+    'qs@^6.11.1': '6.16.0'
+    'qs@^6.14.0': '6.16.0'
+    'qs@^6.15.2': '6.16.0'
+    'qs@^6.4.0': '6.16.0'
+    'qs@^6.7.0': '6.16.0'
+    'qs@~6.15.1': '6.16.0'
+    'qs@~6.5.2': '6.16.0'
+    'rfc2047@^2.0.1': '2.0.1'
+    safe-buffer: '^5.2.1'
+    'sharp@^0.32.6': '0.35.5'
+    'sharp@^0.34.0': '0.35.5'
+    'sharp@^0.34.3': '0.35.5'
+    # @tpe/minimum-test-set declares simple-git but runs git through child_process instead.
+    'simple-git@^3.33.0': '4.0.2'
+    'svgo@^3.0.0': '3.3.5'
+    'svgo@^3.2.0': '3.3.5'
+    tar: '^7.5.22'
+    'tar-fs@^2.0.0': '2.1.5'
+    'tar-fs@^3.0.4': '3.1.3'
+    terser: '^5.51.2'
+    'tmp@^0.0.33': '0.2.7'
+    'toml@3.0.0': '4.2.0'
+    'toml@^3.0.0': '4.2.0'
+    'toml@4.3.0': '5.0.1'
+    'undici@6.21.1': '6.28.0'
+    'undici@^8.0.0': '8.12.3'
+    'webpack-dev-middleware@^6.1.2': '8.3.0'
+    'webpack-dev-middleware@^8.0.3': '8.3.0'
+    'webpack-dev-server@^4.0.0': '5.2.6'
+    'websocket-driver@>=0.5.1': '0.7.5'
+    'websocket-driver@^0.7.4': '0.7.5'
+    whatwg-url: '^14.2.0'
+    'ws@8.18.0': '8.21.3'
+    'ws@^5.2.0': '5.2.7'
+    'ws@^7.4.6': '7.5.13'
+    'xlsx@0.18.5': 'https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz'
+    'xlsx@^0.18.5': 'https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz'
+    'yaml@^1.7.2': '1.10.3'

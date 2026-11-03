@@ -1,0 +1,170 @@
+import { useState } from 'react';
+
+import { c } from 'ttag';
+
+import { useUser } from '@proton/account/user/hooks';
+import { useApi } from '@proton/app-context/useApi';
+import { useConfig } from '@proton/app-context/useConfig';
+import { Button } from '@proton/atoms/Button/Button';
+import { reportCancelPlan } from '@proton/shared/lib/api/reports';
+import { getBrowser, getOS } from '@proton/shared/lib/helpers/browser';
+import { requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import noop from '@proton/utils/noop';
+
+import Form from '../../../../components/form/Form';
+import type { ModalProps } from '../../../../components/modalTwo/Modal';
+import Modal from '../../../../components/modalTwo/Modal';
+import ModalContent from '../../../../components/modalTwo/ModalContent';
+import ModalFooter from '../../../../components/modalTwo/ModalFooter';
+import ModalHeader from '../../../../components/modalTwo/ModalHeader';
+import Option from '../../../../components/option/Option';
+import Prompt from '../../../../components/prompt/Prompt';
+import SelectTwo from '../../../../components/selectTwo/SelectTwo';
+import { InputField as InputFieldTwo } from '../../../../components/v2/field/InputField';
+import TextAreaTwo from '../../../../components/v2/input/TextArea';
+import useFormErrors from '../../../../components/v2/useFormErrors';
+import { getClientName } from '../../../../helpers/report';
+import useErrorHandler from '../../../../hooks/useErrorHandler';
+
+enum STEP {
+    FORM = 0,
+    COMPLETED = 1,
+}
+
+enum REASON {
+    TOO_EXPENSIVE = 0,
+    MISSING_FEATURE = 1,
+    ANOTHER_SERVICE = 2,
+    OTHER = 3,
+}
+
+const reasons: { [key in REASON]: { tag: string; label: string } } = {
+    [REASON.TOO_EXPENSIVE]: {
+        tag: 'tag_1',
+        label: c('VPN B2B cancellation reason').t`It’s too expensive`,
+    },
+    [REASON.MISSING_FEATURE]: {
+        tag: 'tag_2',
+        label: c('VPN B2B cancellation reason').t`It’s missing a key feature`,
+    },
+    [REASON.ANOTHER_SERVICE]: {
+        tag: 'tag_3',
+        label: c('VPN B2B cancellation reason').t`I found another service that I like better`,
+    },
+    [REASON.OTHER]: {
+        tag: 'tag_4',
+        label: c('VPN B2B cancellation reason').t`Other`,
+    },
+};
+
+interface Props extends ModalProps {}
+
+const CancelSubscriptionViaSupportModal = ({ open, onClose, ...rest }: Props) => {
+    const api = useApi();
+    const [user] = useUser();
+    const { APP_NAME, APP_VERSION, CLIENT_TYPE } = useConfig();
+    const errorHandler = useErrorHandler();
+
+    const [step, setStep] = useState(STEP.FORM);
+    const [loading, setLoading] = useState(false);
+
+    const [selectedReason, setSelectedReason] = useState<REASON>();
+    const [feedback, setFeedback] = useState('');
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    if (step === STEP.COMPLETED) {
+        return (
+            <Prompt
+                open={open}
+                onClose={onClose}
+                title={c('Title').t`Request sent`}
+                buttons={[<Button color="norm" onClick={onClose}>{c('Action').t`Got it`}</Button>]}
+                {...rest}
+            >
+                {c('Info').t`We'll get back to you shortly.`}
+            </Prompt>
+        );
+    }
+
+    const handleSubmit = async () => {
+        if (!onFormSubmit() || selectedReason === undefined) {
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            const reason = reasons[selectedReason];
+
+            const browser = getBrowser();
+            const os = getOS();
+            const client = getClientName(APP_NAME);
+
+            await api(
+                reportCancelPlan({
+                    Reason: reason.label,
+                    Message: feedback,
+                    Email: user.Email,
+                    OS: os.name,
+                    OSVersion: os.version,
+                    Browser: browser.name,
+                    BrowserVersion: browser.version,
+                    Client: client,
+                    ClientVersion: APP_VERSION,
+                    ClientType: CLIENT_TYPE,
+                    Tags: [reason.tag],
+                })
+            );
+
+            setStep(STEP.COMPLETED);
+        } catch (error) {
+            errorHandler(error);
+            setLoading(false);
+        }
+    };
+
+    return (
+        <Modal as={Form} open={open} onClose={loading ? noop : onClose} onSubmit={handleSubmit} {...rest}>
+            <ModalHeader title={c('Title').t`Contact us`} />
+            <ModalContent>
+                <InputFieldTwo
+                    as={SelectTwo}
+                    label={c('Label').t`Why would you like to cancel?`}
+                    placeholder={c('Placeholder').t`Please select the main reason`}
+                    id="reason"
+                    value={selectedReason}
+                    onValue={(value: unknown) => {
+                        setSelectedReason(value as REASON);
+                    }}
+                    error={validator([requiredValidator(selectedReason)])}
+                    disabled={loading}
+                >
+                    {Object.entries(reasons).map(([value, { label }]) => (
+                        <Option title={label} value={value} key={value} />
+                    ))}
+                </InputFieldTwo>
+                <InputFieldTwo
+                    as={TextAreaTwo}
+                    id="feedback"
+                    label={c('Label').t`Please share any feedback to help us improve.`}
+                    value={feedback}
+                    onValue={setFeedback}
+                    error={validator([requiredValidator(feedback)])}
+                    rows={5}
+                    disabled={loading}
+                />
+            </ModalContent>
+            <ModalFooter>
+                <Button onClick={onClose} disabled={loading}>
+                    {c('Action').t`Cancel`}
+                </Button>
+                <Button loading={loading} type="submit" color="norm">
+                    {c('Action').t`Submit`}
+                </Button>
+            </ModalFooter>
+        </Modal>
+    );
+};
+
+export default CancelSubscriptionViaSupportModal;

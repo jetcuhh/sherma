@@ -1,0 +1,137 @@
+import { c } from 'ttag';
+
+import type { CreateNotificationOptions } from '@proton/app-context/notifications/interfaces';
+import { EMAIL_PLACEHOLDER, USERNAME_PLACEHOLDER } from '@proton/shared/lib/constants';
+import googleLogo from '@proton/styles/assets/img/import/providers/google.svg';
+import imapLogo from '@proton/styles/assets/img/import/providers/imap.svg';
+import outlookLogo from '@proton/styles/assets/img/import/providers/outlook.svg';
+import yahooLogo from '@proton/styles/assets/img/import/providers/yahoo_short.svg';
+
+import { ImportProvider, MailImportGmailCategories, OAUTH_PROVIDER, TIME_PERIOD } from './interface';
+
+// Outlook oauth scopes.
+export const O_OAUTH_SCOPE_DEFAULT = ['email', 'openid', 'User.Read', 'offline_access'];
+export const O_OAUTH_SCOPE_MAIL = ['Mail.read'];
+export const O_OAUTH_SCOPE_CONTACTS = ['Contacts.read'];
+export const O_OAUTH_SCOPE_CALENDAR = ['Calendars.read'];
+
+export const IA_PATHNAME_REGEX = /\/easy-switch/;
+
+/* Mail specific */
+
+export const GMAIL_CATEGORIES = Object.values(MailImportGmailCategories);
+
+export const getTimeUnitLabels = () => ({
+    [TIME_PERIOD.BIG_BANG]: c('Label').t`Import all messages`,
+    [TIME_PERIOD.LAST_YEAR]: c('Label').t`Last 12 months only`,
+    [TIME_PERIOD.LAST_6_MONTHS]: c('Label').t`Last 6 months only`,
+    [TIME_PERIOD.LAST_3_MONTHS]: c('Label').t`Last 3 months only`,
+    [TIME_PERIOD.LAST_MONTH]: c('Label').t`Last month only`,
+});
+
+export const MAX_FOLDERS_DEPTH = 3;
+export const MAX_FOLDER_LIMIT = 20000;
+
+export const IMAPS = {
+    [OAUTH_PROVIDER.GOOGLE]: 'imap.gmail.com',
+    [ImportProvider.YAHOO]: 'export.imap.mail.yahoo.com',
+    [ImportProvider.OUTLOOK]: 'outlook.office365.com',
+    [OAUTH_PROVIDER.OUTLOOK]: 'outlook.office365.com',
+};
+
+export const EASY_SWITCH_EMAIL_PLACEHOLDER = {
+    [ImportProvider.YAHOO]: `${USERNAME_PLACEHOLDER}@yahoo.com`,
+    [ImportProvider.OUTLOOK]: `${USERNAME_PLACEHOLDER}@outlook.com`,
+    [ImportProvider.GOOGLE]: `${USERNAME_PLACEHOLDER}@google.com`,
+    [ImportProvider.DEFAULT]: EMAIL_PLACEHOLDER,
+};
+
+/* Calendar specific */
+
+export const CALENDAR_TO_BE_CREATED_PREFIX = '###TO_BE_CREATED###';
+
+/* Sync specific */
+
+export const getSyncSuccessNotification = (): CreateNotificationOptions => {
+    return {
+        type: 'success',
+        text: c('account').t`Forwarding will start soon. New emails will appear in your inbox.`,
+    };
+};
+
+export const getBYOEFailNotification = (): CreateNotificationOptions => {
+    return {
+        type: 'error',
+        text: c('Error').t`Address could not be added.`,
+    };
+};
+
+export const getBYOEDisabledNotification = (): CreateNotificationOptions => {
+    return {
+        type: 'info',
+        text: c('Info').t`Temporarily unavailable due to high demand. Please try again later.`,
+    };
+};
+
+export const getGenericLimitReached = (): CreateNotificationOptions => {
+    return {
+        type: 'error',
+        text: c('Error').t`You reached the maximum number of connected addresses`,
+    };
+};
+
+export const EASY_SWITCH_TABLE_CLASS_NAME =
+    'simple-table--border-weak simple-table--border-lines-rounded easy-switch-table';
+
+export const MAX_SYNC_FREE_USER = 1;
+export const MAX_SYNC_PAID_USER = 3;
+
+export const enum BYOE_CLAIM_PROTON_ADDRESS_SOURCE {
+    MAIL_ONBOARDING = 'mail-onboarding',
+    MAIL_COMPOSER = 'mail-composer',
+    MAIL_TOOLBAR = 'mail-toolbar',
+    CALENDAR_WIDGET = 'calendar-widget',
+    CALENDAR_DRAWER = 'calendar-drawer',
+    OPEN_CALENDAR_APP = 'open-calendar-app',
+    IMPORT = 'import',
+    EASY_SWITCH = 'easy-switch',
+    ADD_ADDRESS = 'add-address',
+    ADD_ADDRESS_FREE = 'add-address-free',
+    SHARED_PLAN_PENDING_INVITATION = 'shared-plan-pending-invitation',
+}
+
+export type ProviderDisplay = {
+    getName: () => string;
+    logo: string;
+    width: number;
+    height: number;
+};
+
+export const providerMap: Record<ImportProvider, ProviderDisplay> = {
+    [ImportProvider.GOOGLE]: {
+        getName: () => 'Google',
+        logo: googleLogo,
+        width: 16,
+        height: 16,
+    },
+    [ImportProvider.OUTLOOK]: {
+        getName: () => 'Outlook',
+        logo: outlookLogo,
+        width: 16,
+        height: 16,
+    },
+    [ImportProvider.YAHOO]: {
+        getName: () => 'Yahoo',
+        logo: yahooLogo,
+        width: 16,
+        height: 16,
+    },
+    [ImportProvider.DEFAULT]: {
+        getName: () => c('Title').t`Custom`,
+        logo: imapLogo,
+        width: 16,
+        height: 16,
+    },
+};
+
+export const BYOE_QUOTA_THRESHOLD_RATIO = 0.2;

@@ -1,0 +1,49 @@
+{
+    "name": "@proton/redux-utilities",
+    "description": "Re-usable redux utilities",
+    "sideEffects": false,
+    "exports": {
+        "./promiseStore": "./asyncModelThunk/promiseStore.ts",
+        "./creator": "./asyncModelThunk/creator.ts",
+        "./hooks": "./asyncModelThunk/hooks.tsx",
+        "./fetchedAt": "./asyncModelThunk/fetchedAt.ts",
+        "./helpers/safeCount": "./helpers/safeCount.ts",
+        "./interface": "./asyncModelThunk/interface.ts",
+        "./initialModelState": "./initialModelState/initialModelState.ts",
+        "./initialModelState/interface": "./initialModelState/interface.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "test": "jest --runInBand",
+        "test:ci": "pnpm run test"
+    },
+    "dependencies": {
+        "@proton/react-redux-store": "workspace:^",
+        "@proton/utils": "workspace:^",
+        "@reduxjs/toolkit": "catalog:",
+        "react": "catalog:",
+        "react-redux": "catalog:",
+        "redux": "catalog:",
+        "redux-thunk": "catalog:"
+    },
+    "devDependencies": {
+        "@jest/globals": "catalog:",
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@testing-library/jest-dom": "catalog:",
+        "@testing-library/react": "^15.0.7",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "jest": "catalog:",
+        "jest-environment-jsdom": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "react-dom": "catalog:",
+        "typescript": "catalog:"
+    }
+}

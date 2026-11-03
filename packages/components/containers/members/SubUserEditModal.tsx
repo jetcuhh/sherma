@@ -1,0 +1,732 @@
+import type { FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { getMemberAddresses } from '@proton/account/members';
+import { assignMemberRoles, confirmMemberRoleChange, editMember } from '@proton/account/members/actions';
+import { MemberUnprivatizationMode, getMemberUnprivatizationMode } from '@proton/account/members/memberUnprivatization';
+import { useOrganization } from '@proton/account/organization/hooks';
+import { getStorageRange, getTotalStorage } from '@proton/account/organization/storage';
+import {
+    type MemberKeyPayload,
+    type PromoteGlobalSSOPayload,
+    getPrivateAdminError,
+    getPrivateText,
+    getRolesTabBanner,
+} from '@proton/account/organizationKey/actions';
+import { useOrganizationKey } from '@proton/account/organizationKey/hooks';
+import { isOrgKeyRequired } from '@proton/account/organizationRoles/helpers';
+import { useOrganizationRoles } from '@proton/account/organizationRoles/hooks';
+import { AdminRolesUIState, useAdminRolesUI } from '@proton/account/userPermissions/hooks';
+import useBYOEFeatureStatus from '@proton/activation/src/hooks/useBYOEFeatureStatus';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import { FeatureCode } from '@proton/features/interface';
+import useFeature from '@proton/features/useFeature';
+import useLoading from '@proton/hooks/useLoading';
+import { IcInfoCircleFilled } from '@proton/icons/icons/IcInfoCircleFilled';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import { LUMO_APP_NAME, MEMBER_PRIVATE, MEMBER_ROLE, NAME_PLACEHOLDER } from '@proton/shared/lib/constants';
+import { requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import { hasOrganizationSetupWithKeys } from '@proton/shared/lib/helpers/organization';
+import { sizeUnits } from '@proton/shared/lib/helpers/size';
+import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
+import type { EnhancedMember, Member } from '@proton/shared/lib/interfaces/Member';
+import { getIsMemberSetup } from '@proton/shared/lib/keys/memberHelper';
+import { getIsPasswordless } from '@proton/shared/lib/keys/organizationKeys';
+import noop from '@proton/utils/noop';
+
+import type { ModalProps } from '../../components/modalTwo/Modal';
+import Modal from '../../components/modalTwo/Modal';
+import ModalFooter from '../../components/modalTwo/ModalFooter';
+import useModalState from '../../components/modalTwo/useModalState';
+import { useModalTwo } from '../../components/modalTwo/useModalTwo';
+import Prompt from '../../components/prompt/Prompt';
+import Toggle from '../../components/toggle/Toggle';
+import { InputField as InputFieldTwo } from '../../components/v2/field/InputField';
+import useFormErrors from '../../components/v2/useFormErrors';
+import getBoldFormattedText from '../../helpers/getBoldFormattedText';
+import useErrorHandler from '../../hooks/useErrorHandler';
+import { useSilentApi } from '../../hooks/useSilentApi';
+import useSpotlightOnFeature from '../../hooks/useSpotlightOnFeature';
+import Addresses from '../addresses/Addresses';
+import AssistantUpdateSubscriptionButton from '../payments/subscription/assistant/AssistantUpdateSubscriptionButton';
+import LumoUpdateSubscriptionButton from '../payments/subscription/lumo/LumoUpdateSubscriptionButton';
+import MemberRoleChangePrompt from './MemberRoleChangePrompt';
+import MemberStorageSelector from './MemberStorageSelector';
+import MemberToggleContainer from './MemberToggleContainer';
+import SubUserCreateHint from './SubUserCreateHint';
+import { adminTooltipText } from './constants';
+import { disableStorageSelection, getPrivateLabel } from './helper';
+import AdminRolesSpotlight from './rolesAndPermissions/AdminRolesSpotlight';
+import MemberOwnerRoleToggle from './rolesAndPermissions/MemberOwnerRoleToggle';
+import ModalHeaderWithTabs from './rolesAndPermissions/ModalHeaderWithTabs';
+import RolesAndPermissionsTab from './rolesAndPermissions/RolesAndPermissionsTab';
+
+interface Props extends ModalProps<'form'> {
+    member: EnhancedMember;
+    allowStorageConfiguration?: boolean;
+    allowVpnAccessConfiguration?: boolean;
+    allowPrivateMemberConfiguration?: boolean;
+    allowAIAssistantConfiguration?: boolean;
+    allowLumoConfiguration: boolean;
+    showAddressesSection?: boolean;
+    aiSeatsRemaining: boolean;
+    lumoSeatsRemaining: boolean;
+}
+
+interface MemberState {
+    name: string;
+    storage: number;
+    vpn: boolean;
+    private: MEMBER_PRIVATE;
+    ai: boolean;
+    lumo: boolean;
+    role: MEMBER_ROLE;
+}
+
+const getMemberDiff = ({
+    model,
+    initialModel,
+}: {
+    model: MemberState;
+    initialModel: MemberState;
+    hasVPN: boolean;
+}): Partial<MemberState> => {
+    return Object.fromEntries(
+        Object.entries({
+            name: initialModel.name !== model.name ? model.name : undefined,
+            storage: initialModel.storage !== model.storage ? model.storage : undefined,
+            // NOTE: These values are not included because they are updated immediately
+            /*
+        vpn: hasVPN && initialModel.vpn !== model.vpn ? model.vpn : undefined,
+        numAI: initialModel.ai !== model.ai ? model.ai : undefined,
+        private: model.private !== initialModel.private ? model.private : undefined,
+        role: model.role !== initialModel.role ? model.role : undefined,
+         */
+        }).filter(([, value]) => {
+            return value !== undefined;
+        })
+    );
+};
+
+const getMemberStateFromMember = (member: Member): MemberState => {
+    return {
+        name: member.Name,
+        storage: member.MaxSpace,
+        vpn: !!member.MaxVPN,
+        private: member.Private,
+        ai: !!member.NumAI,
+        lumo: !!member.NumLumo,
+        role: member.Role,
+    };
+};
+
+const SubUserEditModal = ({
+    member,
+    allowStorageConfiguration,
+    allowVpnAccessConfiguration,
+    allowPrivateMemberConfiguration,
+    allowAIAssistantConfiguration,
+    allowLumoConfiguration,
+    showAddressesSection,
+    aiSeatsRemaining,
+    lumoSeatsRemaining,
+    ...rest
+}: Props) => {
+    const [organization] = useOrganization();
+    const [organizationKey] = useOrganizationKey();
+    const [organizationRoles] = useOrganizationRoles();
+    const dispatch = useDispatch();
+    const storageSizeUnit = sizeUnits.GB;
+    const { validator, onFormSubmit } = useFormErrors();
+    const [confirmUnprivatizationProps, setConfirmUnprivatizationModal, renderConfirmUnprivatization] = useModalState();
+    const [
+        confirmRemoveUnprivatizationProps,
+        setConfirmRemoveUnprivatizationModal,
+        renderConfirmRemoveUnprivatization,
+    ] = useModalState();
+    const [confirmPrivatizationProps, setConfirmPrivatizationModal, renderConfirmPrivatization] = useModalState();
+    const [roleChangePrompt, showRoleChangePrompt] = useModalTwo(MemberRoleChangePrompt);
+    const passwordlessMode = getIsPasswordless(organizationKey?.Key);
+
+    // We want to keep AI enabled if all seats are taken but the user already has a seat
+    const disableAI = (!organization?.MaxAI || !aiSeatsRemaining) && !member.NumAI;
+    const disableLumo = (!organization?.MaxLumo || !lumoSeatsRemaining) && !member.NumLumo;
+
+    useEffect(() => {
+        dispatch(getMemberAddresses({ member })).catch(noop);
+    }, []);
+
+    const initialModel = useMemo((): MemberState => {
+        return getMemberStateFromMember(member);
+    }, [member]);
+
+    const [model, updateModel] = useState<MemberState>(initialModel);
+
+    const [submitting, withLoading] = useLoading();
+    const [loadingUnprivatization, withLoadingUnprivatization] = useLoading();
+    const [loadingRole, withLoadingRole] = useLoading();
+    const [loadingVPN, withLoadingVPN] = useLoading();
+    const [loadingScribe, withLoadingScribe] = useLoading();
+    const [loadingLumo, withLoadingLumo] = useLoading();
+    const { createNotification } = useNotifications();
+    const silentApi = useSilentApi();
+
+    // Unset until edited, so roles loaded after opening are not submitted as removals
+    const [editedRoles, setEditedRoles] = useState<Set<string> | null>(null);
+    const selectedRoles =
+        editedRoles ?? new Set(member.UserOrganizationRoles?.map(({ Role }) => Role.OrganizationRoleID) ?? []);
+    const hasMemberRoles = member.roleState === 'full' || member.roleState === 'stale';
+    const loadingMemberRoles = member.roleState === 'initial' || member.roleState === 'pending';
+    const [adminRolesUIState, loadingAdminRolesUI] = useAdminRolesUI();
+    const submitsEditedRoles = adminRolesUIState === AdminRolesUIState.Enabled && editedRoles !== null;
+    const { feature: adminRolesModalFeature, loading: adminRolesModalLoading } = useFeature(
+        FeatureCode.AdminRolesOnboardingModal
+    );
+    const isAdminRolesModalDismissed = !adminRolesModalLoading && !adminRolesModalFeature?.Value;
+    const {
+        show: shouldShowRolesTabSpotlight,
+        onDisplayed: onRolesTabSpotlightDisplayed,
+        onClose: onRolesTabSpotlightClose,
+    } = useSpotlightOnFeature(
+        FeatureCode.AdminRolesPermissionsTabSpotlight,
+        adminRolesUIState === AdminRolesUIState.Enabled && isAdminRolesModalDismissed
+    );
+
+    const hasVPN = Boolean(organization?.MaxVPN);
+    const unprivatization = getMemberUnprivatizationMode(member);
+    const isPendingMagicLinkInvite = unprivatization.mode === MemberUnprivatizationMode.MagicLinkInvite;
+    const selectedRolesRequireOrgKey =
+        organizationRoles?.some((role) => selectedRoles.has(role.OrganizationRoleID) && isOrgKeyRequired(role)) ??
+        false;
+    const requiresSignInForAdmin =
+        passwordlessMode &&
+        Boolean(member.SSO) &&
+        !getIsMemberSetup(member) &&
+        (selectedRolesRequireOrgKey || unprivatization.makeAdmin);
+
+    const isSelf = Boolean(member.Self);
+
+    const canTogglePrivate =
+        // Organization must be keyful, so not family-style organization
+        hasOrganizationSetupWithKeys(organization) &&
+        // Cannot toggle private for SSO users
+        !member.SSO &&
+        // The user does not have an ongoing unprivatization request or an admin request is ongoing (to be able to remove it)
+        (!unprivatization.exists || unprivatization.mode === MemberUnprivatizationMode.AdminAccess);
+
+    const canPromoteAdmin =
+        !isSelf &&
+        member.Role === MEMBER_ROLE.ORGANIZATION_MEMBER &&
+        unprivatization.mode !== MemberUnprivatizationMode.MagicLinkInvite;
+
+    const canRevokeAdmin = !isSelf && member.Role === MEMBER_ROLE.ORGANIZATION_ADMIN;
+
+    const [hasAccessToBYOE] = useBYOEFeatureStatus();
+
+    const errorHandler = useErrorHandler();
+
+    const updatePartialModel = (partial: Partial<typeof model>) => {
+        updateModel({ ...model, ...partial });
+    };
+
+    const handleUpdateMember = async (
+        memberDiff: Parameters<typeof editMember>[0]['memberDiff'],
+        memberKeyPacketPayload: PromoteGlobalSSOPayload | MemberKeyPayload | null = null,
+        notify: boolean = true
+    ) => {
+        const result = await dispatch(
+            editMember({
+                member,
+                memberDiff,
+                memberKeyPacketPayload,
+                api: silentApi,
+            })
+        );
+        if (result.member) {
+            const newValue = getMemberStateFromMember(result.member);
+            const memberDiff = getMemberDiff({ model, initialModel, hasVPN });
+            // Keep the partially updated member diff values if any
+            updateModel({ ...newValue, ...memberDiff });
+            if (notify) {
+                createNotification({ text: c('Success').t`User updated` });
+            }
+        }
+        return result.diff;
+    };
+
+    const handleToggleLegacyOrgAdminToggle = async (makeAdmin: boolean) => {
+        const newRole = makeAdmin ? MEMBER_ROLE.ORGANIZATION_ADMIN : MEMBER_ROLE.ORGANIZATION_MEMBER;
+        const { confirmed, payload } = await dispatch(
+            confirmMemberRoleChange({
+                member,
+                targetRole: newRole,
+                api: silentApi,
+                confirm: (action) => showRoleChangePrompt({ action, subscriber: member.Subscriber }),
+            })
+        );
+        if (!confirmed) {
+            return;
+        }
+        await handleUpdateMember({ role: newRole }, payload);
+    };
+
+    const handleClose = submitting ? undefined : rest.onClose;
+
+    const hasToggledPrivate = model.private === MEMBER_PRIVATE.UNREADABLE && !unprivatization.pending;
+    const hasToggledAdmin = model.role === MEMBER_ROLE.ORGANIZATION_ADMIN || unprivatization.makeAdmin;
+    const isPendingAdminAccess =
+        unprivatization.pending && unprivatization.mode === MemberUnprivatizationMode.AdminAccess;
+
+    const generalTabContent = (
+        <>
+            <InputFieldTwo
+                id="name"
+                data-protonpass-ignore={true}
+                value={model.name}
+                error={validator([requiredValidator(model.name)])}
+                onValue={(value: string) => updatePartialModel({ name: value })}
+                label={c('Label').t`Name`}
+                placeholder={NAME_PLACEHOLDER}
+                autoFocus
+            />
+
+            <div className="flex flex-column gap-2 mb-4">
+                {(allowPrivateMemberConfiguration || Boolean(initialModel.private)) && canTogglePrivate && (
+                    <>
+                        <MemberToggleContainer
+                            toggle={
+                                <Toggle
+                                    disabled={isPendingAdminAccess}
+                                    id="private-toggle"
+                                    checked={hasToggledPrivate}
+                                    loading={!isPendingAdminAccess && loadingUnprivatization}
+                                    onChange={({ target }) => {
+                                        // If changing private for self, do it without confirmation
+                                        if (member.Self) {
+                                            withLoadingUnprivatization(
+                                                handleUpdateMember({
+                                                    private:
+                                                        hasToggledPrivate && !target.checked
+                                                            ? MEMBER_PRIVATE.READABLE
+                                                            : MEMBER_PRIVATE.UNREADABLE,
+                                                })
+                                            ).catch(errorHandler);
+                                            return;
+                                        }
+                                        if (hasToggledPrivate && !target.checked) {
+                                            setConfirmUnprivatizationModal(true);
+                                            return;
+                                        }
+                                        if (!hasToggledPrivate && target.checked && unprivatization.pending) {
+                                            setConfirmRemoveUnprivatizationModal(true);
+                                            return;
+                                        }
+                                        if (!hasToggledPrivate && target.checked) {
+                                            setConfirmPrivatizationModal(true);
+                                            return;
+                                        }
+                                    }}
+                                />
+                            }
+                            label={
+                                <label className="text-semibold" htmlFor="private-toggle">
+                                    {getPrivateLabel()}
+                                </label>
+                            }
+                            assistiveText={getPrivateText()}
+                        />
+                        {isPendingAdminAccess && (
+                            <SubUserCreateHint className="bg-weak">
+                                <div className="flex-column md:flex-row flex gap-2">
+                                    <div className="md:flex-1">
+                                        {getBoldFormattedText(
+                                            c('unprivatization')
+                                                .t`**Pending admin access:** We sent a request to this user to allow any administrator to manage their account.`
+                                        )}
+                                    </div>
+                                    <div className="md:shrink-0">
+                                        <Button
+                                            loading={loadingUnprivatization}
+                                            size="small"
+                                            onClick={() => {
+                                                setConfirmRemoveUnprivatizationModal(true);
+                                            }}
+                                        >
+                                            {c('unprivatization').t`Cancel request`}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </SubUserCreateHint>
+                        )}
+                    </>
+                )}
+
+                {(canPromoteAdmin || canRevokeAdmin) && adminRolesUIState === AdminRolesUIState.Hidden && (
+                    <MemberToggleContainer
+                        toggle={
+                            <Toggle
+                                id="admin-toggle"
+                                loading={loadingRole}
+                                checked={hasToggledAdmin}
+                                onChange={({ target }) => {
+                                    withLoadingRole(handleToggleLegacyOrgAdminToggle(target.checked)).catch(
+                                        errorHandler
+                                    );
+                                }}
+                            />
+                        }
+                        label={
+                            <label className="text-semibold" htmlFor="admin-toggle">
+                                {c('Label for new member').t`Admin`}
+                            </label>
+                        }
+                        assistiveText={
+                            <div>
+                                {adminTooltipText(organization?.IsSubsidiary)}{' '}
+                                {passwordlessMode &&
+                                    hasToggledPrivate &&
+                                    hasToggledAdmin &&
+                                    member.addressState === 'full' &&
+                                    !member.Addresses?.[0]?.HasKeys && (
+                                        <Tooltip title={getPrivateAdminError()} openDelay={0}>
+                                            <IcInfoCircleFilled className="color-danger ml-2" />
+                                        </Tooltip>
+                                    )}
+                            </div>
+                        }
+                    />
+                )}
+
+                {adminRolesUIState === AdminRolesUIState.Disabled && (
+                    <MemberOwnerRoleToggle
+                        member={member}
+                        onChangeSelectedRoles={setEditedRoles}
+                        hasToggledPrivate={hasToggledPrivate}
+                    />
+                )}
+
+                {allowVpnAccessConfiguration && hasVPN ? (
+                    <MemberToggleContainer
+                        toggle={
+                            <Toggle
+                                id="vpn-toggle"
+                                checked={model.vpn}
+                                loading={loadingVPN}
+                                onChange={({ target }) => {
+                                    withLoadingVPN(handleUpdateMember({ vpn: target.checked })).catch(errorHandler);
+                                }}
+                            />
+                        }
+                        label={
+                            <label className="text-semibold" htmlFor="vpn-toggle">
+                                {c('Label for new member').t`VPN connections`}
+                            </label>
+                        }
+                    />
+                ) : null}
+
+                {allowAIAssistantConfiguration && (
+                    <MemberToggleContainer
+                        toggle={
+                            <Toggle
+                                id="ai-assistant-toggle"
+                                checked={model.ai}
+                                loading={loadingScribe}
+                                disabled={disableAI}
+                                onChange={({ target }) => {
+                                    withLoadingScribe(handleUpdateMember({ numAI: target.checked })).catch(
+                                        errorHandler
+                                    );
+                                }}
+                            />
+                        }
+                        label={
+                            <>
+                                <label className="text-semibold" htmlFor="ai-assistant-toggle">
+                                    {c('Info').t`Writing assistant`}
+                                </label>
+                            </>
+                        }
+                        assistiveText={
+                            !aiSeatsRemaining && !model.ai ? <AssistantUpdateSubscriptionButton /> : undefined
+                        }
+                    />
+                )}
+
+                {allowLumoConfiguration && (
+                    <MemberToggleContainer
+                        toggle={
+                            <Toggle
+                                id="lumo-toggle"
+                                checked={model.lumo}
+                                loading={loadingLumo}
+                                disabled={disableLumo}
+                                onChange={({ target }) => {
+                                    withLoadingLumo(handleUpdateMember({ lumo: target.checked })).catch(errorHandler);
+                                }}
+                            />
+                        }
+                        label={
+                            <>
+                                <label className="text-semibold" htmlFor="lumo-toggle">
+                                    {LUMO_APP_NAME}
+                                </label>
+                            </>
+                        }
+                        assistiveText={
+                            !lumoSeatsRemaining && !model.lumo ? <LumoUpdateSubscriptionButton /> : undefined
+                        }
+                    />
+                )}
+            </div>
+
+            {allowStorageConfiguration && (
+                <MemberStorageSelector
+                    disabled={disableStorageSelection(organization)}
+                    className="mb-5"
+                    value={model.storage}
+                    sizeUnit={storageSizeUnit}
+                    totalStorage={getTotalStorage(member, organization)}
+                    range={getStorageRange(member, organization)}
+                    onChange={(storage) => updatePartialModel({ storage })}
+                    validator={validator}
+                />
+            )}
+            {showAddressesSection && (
+                <div>
+                    <h3 className="text-strong mb-2">{c('Label').t`Addresses`}</h3>
+                    <div>
+                        <Addresses
+                            organization={organization}
+                            memberID={member.ID}
+                            hasDescription={false}
+                            hasAccessToBYOE={hasAccessToBYOE}
+                        />
+                    </div>
+                </div>
+            )}
+        </>
+    );
+
+    const [activeTabIndex, setActiveTabIndex] = useState(0);
+
+    return (
+        <>
+            {renderConfirmUnprivatization && (
+                <Prompt
+                    title={c('unprivatization').t`Request user permission for data access`}
+                    buttons={[
+                        <Button
+                            color="norm"
+                            loading={submitting}
+                            onClick={() => {
+                                confirmUnprivatizationProps.onClose();
+                                withLoadingUnprivatization(
+                                    handleUpdateMember({ private: MEMBER_PRIVATE.READABLE })
+                                ).catch(errorHandler);
+                            }}
+                        >{c('unprivatization').t`Send request`}</Button>,
+                        <Button
+                            onClick={() => {
+                                confirmUnprivatizationProps.onClose();
+                            }}
+                        >{c('Action').t`Cancel`}</Button>,
+                    ]}
+                    {...confirmUnprivatizationProps}
+                >
+                    <div>
+                        {c('unprivatization')
+                            .t`To proceed, you'll need to request the user's permission to access their data or reset their password.`}
+                        <br />
+                        <br />
+
+                        {c('unprivatization')
+                            .t`Once the user consents, you will be able to help them regain account access or manage their data.`}
+                    </div>
+                </Prompt>
+            )}
+            {renderConfirmRemoveUnprivatization && (
+                <Prompt
+                    title={c('unprivatization').t`Cancel request to access user data?`}
+                    buttons={[
+                        <Button
+                            color="danger"
+                            loading={submitting}
+                            onClick={() => {
+                                confirmRemoveUnprivatizationProps.onClose();
+                                withLoadingUnprivatization(
+                                    handleUpdateMember({ private: MEMBER_PRIVATE.UNREADABLE })
+                                ).catch(errorHandler);
+                            }}
+                        >{c('unprivatization').t`Cancel request`}</Button>,
+                        <Button
+                            onClick={() => {
+                                confirmRemoveUnprivatizationProps.onClose();
+                            }}
+                        >{c('unprivatization').t`Keep request`}</Button>,
+                    ]}
+                    {...confirmRemoveUnprivatizationProps}
+                >
+                    <div>
+                        {c('unprivatization')
+                            .t`This will cancel the pending request for administrator access to the user’s data or password reset.`}
+                    </div>
+                </Prompt>
+            )}
+            {renderConfirmPrivatization && (
+                <Prompt
+                    title={c('unprivatization').t`Revoke administrator access?`}
+                    buttons={[
+                        <Button
+                            color="danger"
+                            loading={submitting}
+                            onClick={() => {
+                                confirmPrivatizationProps.onClose();
+                                withLoadingUnprivatization(
+                                    handleUpdateMember({ private: MEMBER_PRIVATE.UNREADABLE })
+                                ).catch(errorHandler);
+                            }}
+                        >{c('unprivatization').t`Revoke access`}</Button>,
+                        <Button
+                            onClick={() => {
+                                confirmPrivatizationProps.onClose();
+                            }}
+                        >{c('Action').t`Cancel`}</Button>,
+                    ]}
+                    {...confirmPrivatizationProps}
+                >
+                    <div>
+                        {c('unprivatization')
+                            .t`This will revoke the administrator permission to manage this user's account.`}
+                        <br />
+                        <br />
+
+                        {c('unprivatization')
+                            .t`By making the user private you won't be able to help them regain access to their data or account.`}
+                    </div>
+                </Prompt>
+            )}
+            {roleChangePrompt}
+            <Modal
+                as="form"
+                size="large"
+                {...rest}
+                onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (!onFormSubmit(event.currentTarget)) {
+                        setActiveTabIndex(0);
+                        return;
+                    }
+
+                    const handleSubmit = async () => {
+                        const memberDiff = getMemberDiff({ model, initialModel, hasVPN });
+                        const hasMemberChanges = await handleUpdateMember(memberDiff, null, false);
+                        let hasRoleChanges = false;
+                        if (submitsEditedRoles && hasMemberRoles) {
+                            const result = await dispatch(
+                                assignMemberRoles({
+                                    member,
+                                    currentRoles: member.UserOrganizationRoles ?? [],
+                                    desiredRoleIds: editedRoles,
+                                    payload: null,
+                                    api: silentApi,
+                                })
+                            );
+                            hasRoleChanges = result.changed;
+                        } else if (submitsEditedRoles) {
+                            createNotification({
+                                type: 'error',
+                                text: c('Error')
+                                    .t`Role changes were not saved because the user's roles could not be loaded.`,
+                            });
+                        }
+                        if (hasMemberChanges || hasRoleChanges) {
+                            createNotification({ text: c('Success').t`User updated` });
+                        }
+                        rest.onClose?.();
+                    };
+
+                    withLoading(handleSubmit()).catch(errorHandler);
+                }}
+                onClose={handleClose}
+            >
+                <ModalHeaderWithTabs
+                    title={c('Title').t`Edit user`}
+                    tabIndex={activeTabIndex}
+                    onChangeTabIndex={setActiveTabIndex}
+                    style={{ minBlockSize: '50rem' }}
+                    tabs={[
+                        {
+                            title: c('user_modal').t`General`,
+                            content: generalTabContent,
+                        },
+                        ...(adminRolesUIState !== AdminRolesUIState.Hidden
+                            ? [
+                                  {
+                                      title: c('user_modal').t`Roles and permissions`,
+                                      titleNode: (
+                                          <AdminRolesSpotlight
+                                              show={shouldShowRolesTabSpotlight}
+                                              onDisplayed={onRolesTabSpotlightDisplayed}
+                                              onClose={onRolesTabSpotlightClose}
+                                              originalPlacement="bottom-start"
+                                              isAboveModal
+                                              title={c('Spotlight').t`New: Roles and permissions tab`}
+                                              description={c('Spotlight')
+                                                  .t`You can now assign roles to individual users from this tab.`}
+                                              kbLink={getKnowledgeBaseUrl('/admin-roles')}
+                                          >
+                                              <span>{c('user_modal').t`Roles and permissions`}</span>
+                                          </AdminRolesSpotlight>
+                                      ),
+                                      content: (
+                                          <RolesAndPermissionsTab
+                                              selectedRoles={selectedRoles}
+                                              onChange={setEditedRoles}
+                                              userRoles={member.UserOrganizationRoles}
+                                              isEditingSelf={isSelf}
+                                              disabled={
+                                                  submitting ||
+                                                  isSelf ||
+                                                  isPendingMagicLinkInvite ||
+                                                  !hasMemberRoles ||
+                                                  adminRolesUIState !== AdminRolesUIState.Enabled
+                                              }
+                                              banner={getRolesTabBanner({
+                                                  showUpgrade:
+                                                      adminRolesUIState === AdminRolesUIState.Disabled &&
+                                                      !loadingAdminRolesUI,
+                                                  pendingInvitation: isPendingMagicLinkInvite,
+                                                  isEditingSelf: isSelf,
+                                                  requiresSignInForAdmin,
+                                              })}
+                                          />
+                                      ),
+                                  },
+                              ]
+                            : []),
+                    ]}
+                />
+                <ModalFooter>
+                    <div>{/* empty div to make it right aligned*/}</div>
+                    <Button
+                        loading={submitting}
+                        disabled={submitsEditedRoles && loadingMemberRoles}
+                        type="submit"
+                        color="norm"
+                    >
+                        {c('Action').t`Save`}
+                    </Button>
+                </ModalFooter>
+            </Modal>
+        </>
+    );
+};
+
+export default SubUserEditModal;

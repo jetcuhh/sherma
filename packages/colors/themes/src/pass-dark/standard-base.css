@@ -1,0 +1,75 @@
+:root,
+.ui-standard {
+    --primary: #1085f2;
+
+    --signal-danger: #f08fa4;
+    --signal-warning: #ffb84d;
+    --signal-success: #4ab89a;
+    --signal-info: #4ac0ff;
+
+    --text-norm: #f4f4f4;
+    --text-weak: #b8b8b8;
+    --text-hint: #6b6b6b;
+    --text-disabled: #6b6b6b;
+    --text-invert: #222222;
+
+    --field-norm: rgb(255 255 255 / 0.04);
+    --field-disabled: #3a3a3a;
+
+    --optional-field-placeholder-color: var(--text-weak);
+    --optional-field-background-color: #2d2d2d;
+
+    --border-norm: #5c5c5c;
+    --border-weak: #3a3a3a;
+
+    --background-norm: #222222;
+    --background-weak: #2d2d2d;
+    --background-strong: #1b1b1b;
+    --background-invert: #f4f4f4;
+
+    --interaction-norm: #9fcdfa;
+    --interaction-weak: #1d2b3a;
+
+    --interaction-default: transparent;
+    --interaction-default-hover: rgb(255 255 255 / 0.04);
+    --interaction-default-active: rgb(255 255 255 / 0.08);
+
+    --shadow-norm-opacity: 0.32;
+    --shadow-raised-opacity: 0.35;
+    --shadow-lifted-opacity: 0.4;
+
+    --backdrop-norm: rgb(0 0 0 / 0.5);
+
+    --optional-field-placeholder-color: var(--text-weak);
+    --optional-navigation-current-item-background-color: var(--interaction-weak);
+
+    --focus-outline: var(--interaction-norm-major-2);
+    --focus-ring: var(--interaction-norm-minor-1);
+
+    --search-field-focus-background: #1b1b1b;
+
+    /* Vault colors */
+    --vault-unspecified: 140 140 147;
+    --vault-custom: 167 121 255;
+    --vault-heliotrope: 167 121 255;
+    --vault-mauvelous: 242 146 146;
+    --vault-marigold-yellow: 247 215 117;
+    --vault-de-york: 145 199 153;
+    --vault-jordy-blue: 146 179 242;
+    --vault-lavender-magenta: 235 141 214;
+    --vault-chestnut-rose: 205 90 111;
+    --vault-porsche: 228 163 103;
+    --vault-mercury: 230 230 230;
+    --vault-water-leaf: 158 226 230;
+
+    --pass-scroll-shadow-color: rgb(14 14 14 / 0.35);
+    --pass-lobby-background-color: #222222;
+}
+
+/* Safari tints */
+@supports (-webkit-hyphens: none) {
+    :root,
+    .ui-standard {
+        --optional-selection-background-color: rgba(16, 133, 242, 0.99);
+    }
+}

@@ -1,0 +1,31 @@
+fastTrack:
+    allowList:
+        - msvanstr
+        - jcrompton
+        - rtetaz
+        - mhorejsek
+        - zpetresk
+        - ecandon
+        - akarpov
+        - lpeslier
+        - nhoffmann
+        - rrychets
+        - rsanchez
+        - ggonzalez
+        - fbonvin
+        - djankovic
+        - aharwara
+        - pchiabre
+        - vthanase
+        - mdupont
+        - emaguire
+        - nreijers
+        - lcerabone
+        - eatencio
+forbiddenTags:
+    - state::Blocked
+ciFailFast: true
+tracks:
+    - rush-me-i-m-famous
+    - standard
+    - slow

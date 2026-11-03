@@ -1,0 +1,132 @@
+import { type FC, useCallback, useEffect, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { IcArrowsRotate } from '@proton/icons/icons/IcArrowsRotate';
+import { IcCogDrawer } from '@proton/icons/icons/IcCogDrawer';
+import { IcKey } from '@proton/icons/icons/IcKey';
+import { usePassCore } from '@proton/pass/components/Core/PassCoreProvider';
+import { SubTheme } from '@proton/pass/components/Layout/Theme/types';
+import { PasswordMemorableOptions } from '@proton/pass/components/Password/PasswordMemorableOptions';
+import { PasswordRandomOptions } from '@proton/pass/components/Password/PasswordRandomOptions';
+import { PasswordTypeSelect } from '@proton/pass/components/Password/PasswordTypeSelect';
+import {
+    getCharsGroupedByColor,
+    isUsingMemorablePassword,
+    isUsingRandomPassword,
+    usePasswordGenerator,
+} from '@proton/pass/hooks/usePasswordGenerator';
+import type { GeneratePasswordConfig } from '@proton/pass/lib/password/types';
+import { passwordOptionsEdit } from '@proton/pass/store/actions/creators/password';
+import { serialize } from '@proton/pass/utils/object/serialize';
+
+import { useIFrameAppController, useIFrameAppState } from '../../../../../../../lib/components/Inline/IFrameApp';
+import { ListItem } from '../../../../../../../lib/components/Inline/ListItem';
+import { PauseListDropdown } from '../../../../../../../lib/components/Inline/PauseListDropdown';
+import { contentScriptMessage, sendMessage } from '../../../../../../../lib/message/send-message';
+import { WorkerMessageType } from '../../../../../../../types/messages';
+import type { DropdownAction } from '../../../../../constants.runtime';
+import { InlinePortMessageType } from '../../../inline.messages';
+import type { DropdownActions } from '../../dropdown.app';
+import { DropdownHeader } from '../components/DropdownHeader';
+
+type Props = Extract<DropdownActions, { action: DropdownAction.AUTOSUGGEST_PASSWORD }>;
+
+export const AutosuggestPassword: FC<Props> = ({ action, config, clipboardSettings, policy, ...payload }) => {
+    const { visible } = useIFrameAppState();
+    const controller = useIFrameAppController();
+    const { writeToClipboard } = usePassCore();
+
+    const [advanced, setAdvanced] = useState(false);
+
+    const onConfigChange = useCallback((next: GeneratePasswordConfig) => {
+        void sendMessage(
+            contentScriptMessage({
+                type: WorkerMessageType.STORE_DISPATCH,
+                payload: { action: serialize(passwordOptionsEdit(next)) },
+            })
+        );
+    }, []);
+
+    const generator = usePasswordGenerator({ config, policy, onConfigChange });
+
+    useEffect(() => {
+        setAdvanced(false);
+    }, [visible]);
+
+    const autofillPassword = async () => {
+        if (clipboardSettings.copy) {
+            await writeToClipboard(generator.password, clipboardSettings.clipboardTTL);
+        }
+
+        controller.forwardMessage({
+            type: InlinePortMessageType.AUTOFILL_ACTION,
+            payload: {
+                ...payload,
+                type: 'password',
+                value: generator.password,
+            },
+        });
+
+        controller.close({ userAction: true });
+    };
+
+    const label = clipboardSettings.copy ? c('Title').t`Fill & copy password` : c('Title').t`Fill password`;
+
+    return (
+        <>
+            <DropdownHeader
+                title={c('Title').t`Password`}
+                extra={
+                    <div className="flex gap-1">
+                        <Button
+                            className="shrink-0 button-xs"
+                            icon
+                            color="weak"
+                            shape="solid"
+                            pill
+                            onClick={() => setAdvanced((prev) => !prev)}
+                            size="small"
+                            title={c('Action').t`Show advanced options`}
+                        >
+                            <IcCogDrawer alt={c('Action').t`More options`} size={12} />
+                        </Button>
+                        <PauseListDropdown
+                            criteria="Autosuggest"
+                            dense
+                            hostname={payload.frameOrigin}
+                            label={c('Action').t`Do not suggest on this website`}
+                        />
+                    </div>
+                }
+            />
+
+            <ListItem
+                subTheme={SubTheme.RED}
+                icon={{ type: 'icon', icon: IcKey }}
+                title={label}
+                subTitle={<span className="text-monospace">{getCharsGroupedByColor(generator.password)}</span>}
+                onClick={autofillPassword}
+            />
+            {advanced && (
+                <div className="flex-column flex gap-y-2 px-4 pb-3 text-sm ui-red">
+                    <hr className="m-0" />
+                    <PasswordTypeSelect dense {...generator} />
+                    <hr className="m-0" />
+                    {isUsingRandomPassword(generator) && <PasswordRandomOptions advanced dense {...generator} />}
+                    {isUsingMemorablePassword(generator) && <PasswordMemorableOptions advanced dense {...generator} />}
+                    <hr className="m-0" />
+                    <div className="flex gap-x-2">
+                        <Button className="flex-1" pill shape="solid" onClick={autofillPassword}>
+                            {label}
+                        </Button>
+                        <Button icon pill shape="solid" className="shrink-0" onClick={generator.regeneratePassword}>
+                            <IcArrowsRotate alt={c('Action').t`Regenerate`} />
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};

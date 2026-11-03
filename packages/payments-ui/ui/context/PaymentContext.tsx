@@ -1,0 +1,993 @@
+import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from 'react';
+
+import { createSelector } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import { entitlementCatalogThunk, selectEntitlementCatalog } from '@proton/account/entitlementCatalog';
+import { paymentStatusThunk, selectPaymentStatus } from '@proton/account/paymentStatus';
+import { plansThunk, selectPlans } from '@proton/account/plans';
+import { selectSubscription, subscriptionThunk } from '@proton/account/subscription';
+import { selectUser } from '@proton/account/user';
+import type { CreateNotificationOptions } from '@proton/app-context/notifications/interfaces';
+import { useApi } from '@proton/app-context/useApi';
+import { useConfig } from '@proton/app-context/useConfig';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { useHandler } from '@proton/hooks/useHandler';
+import {
+    type BillingAddressExtended,
+    DEFAULT_TAX_BILLING_ADDRESS,
+    type FullBillingAddressFlat,
+} from '@proton/payments/core/billing-address/billing-address';
+import { getBillingAddressFromPaymentStatus } from '@proton/payments/core/billing-address/billing-address-from-payments-status';
+import { loadInitialBillingAddress } from '@proton/payments/core/billing-address/load-initial-billing-address';
+import { type PaymentsCheckoutUI, getCheckoutUi, type getOptimisticCheckResult } from '@proton/payments/core/checkout';
+import { computeOptimisticCheckResult } from '@proton/payments/core/computeOptimisticCheckResult';
+import { CYCLE, FREE_SUBSCRIPTION, PLANS } from '@proton/payments/core/constants';
+import {
+    type getAvailableCurrencies,
+    type getPreferredCurrency,
+    mainCurrencies,
+} from '@proton/payments/core/currencies';
+import { emptyEntitlementCatalog } from '@proton/payments/core/entitlements/empty-entitlement-catalog';
+import type { EntitlementCatalog } from '@proton/payments/core/entitlements/interface';
+import type {
+    Currency,
+    Cycle,
+    FreeSubscription,
+    PaymentMethodFlow,
+    PaymentStatus,
+    PaymentsApi,
+    PlanIDs,
+} from '@proton/payments/core/interface';
+import { FREE_PLAN } from '@proton/payments/core/subscription/freePlans';
+import {
+    type SubscriptionSelection,
+    isModifyingPaidSubscriptionSelection,
+    isSubscriptionCheckForbiddenWithReason,
+    isSubscriptionSelectionEqual,
+    shouldPassIsTrial,
+} from '@proton/payments/core/subscription/helpers';
+import { getPlanIDs } from '@proton/payments/core/subscription/helpers/plan-ids';
+import type { FullPlansMap, Subscription, SubscriptionEstimation } from '@proton/payments/core/subscription/interface';
+import type { PlanToCheck } from '@proton/payments/core/subscription/plan-to-check';
+import { SelectedPlan } from '@proton/payments/core/subscription/selected-plan';
+import { isFreeSubscription } from '@proton/payments/core/type-guards';
+import type { PaymentTelemetryContext } from '@proton/payments/telemetry/helpers';
+import type { EstimationChangeAction } from '@proton/payments/telemetry/shared-checkout-telemetry';
+import { checkoutTelemetry } from '@proton/payments/telemetry/telemetry';
+import { useDispatch, useSelector } from '@proton/redux-shared-store/sharedProvider';
+import type { ProductParam } from '@proton/shared/lib/apps/product';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import { getPlanFromPlanIDs, hasFreePlanIDs } from '@proton/shared/lib/payments/plan/helpers';
+import type { FreePlanDefault, Plan, PlansMap } from '@proton/shared/lib/payments/plan/interface';
+import noop from '@proton/utils/noop';
+
+import { useCurrencies } from '../../client-extensions/useCurrencies';
+import type { OnChargeable } from '../../client-extensions/usePaymentFacade';
+import { usePaymentsApi } from '../../react-extensions/usePaymentsApi';
+import { getStaticCouponConfig } from '../coupon-config/get-static-coupon-config';
+import { type CouponConfigRendered, useCouponConfig } from '../coupon-config/useCouponConfig';
+import { getPreferredPlansMap } from '../hooks/usePreferredPlansMap';
+import { checkMultiplePlans, getPlanToCheck, getSubscriptionDataFromPlanToCheck } from './helpers';
+import { type MultiCheckGroupsResult, useMultiCheckGroups } from './useMultiCheckGroups';
+
+export type { PlanToCheck } from '@proton/payments/core/subscription/plan-to-check';
+
+export interface InitializeProps {
+    api: Api;
+    paramCurrency?: Currency;
+    paymentFlow: PaymentMethodFlow;
+    planToCheck?: Omit<PlanToCheck, 'currency'>;
+    onChargeable: OnChargeable;
+    availablePlans?: { planIDs: PlanIDs; cycle: Cycle }[];
+    telemetryContext: PaymentTelemetryContext;
+    product: ProductParam;
+}
+
+interface PricesResult {
+    checkResult: SubscriptionEstimation;
+    checkoutUi: PaymentsCheckoutUI;
+}
+
+export type IsTrialResolver = (planIDs: PlanIDs) => boolean;
+
+export interface PaymentsContextType {
+    createSubscription: () => Promise<void>;
+    initialize: (props: InitializeProps) => Promise<void>;
+    initialized: boolean;
+    selectPlanIDs: (planIDs: PlanIDs) => Promise<void>;
+    selectCycle: (cycle: Cycle) => Promise<void>;
+    selectCurrency: (currency: Currency) => Promise<void>;
+    selectFullBillingAddress: (fullBillingAddress: FullBillingAddressFlat) => Promise<void>;
+    checkMultiplePlans: (planToCheck: PlanToCheck[]) => Promise<SubscriptionEstimation[]>;
+    /**
+     * Returns the cached version of the subscription response. Returns null if the cache is missing.
+     * Make sure to call `checkMultiplePlans` first.
+     */
+    getPrice: (planToCheck: PlanToCheck) => PricesResult | null;
+    getFallbackPrice: (planToCheck: PlanToCheck) => PricesResult;
+    /**
+     * Same as `getPrice`, but returns the fallback version of the price if cache is missing.
+     */
+    getPriceOrFallback: (planToCheck: PlanToCheck) => PricesResult;
+    /**
+     * Get a valid coupon by checking it against the cached multi check results
+     */
+    getCoupon: (planToCheck: PlanToCheck) => string | undefined;
+    plans: Plan[];
+    plansMap: PlansMap;
+
+    // TODO: exposing for now. Will likely want to abstract this result
+    checkResult: SubscriptionEstimation;
+
+    /** User's intention to start a trial */
+    isTrial: boolean;
+    /**
+     * Registers the flow's own trial resolver, overriding the `planToCheck.trial` based default.
+     */
+    setIsTrialResolver: (resolver: IsTrialResolver | undefined) => void;
+
+    // paymentFacade: ReturnType<typeof usePaymentFacade>;
+
+    billingAddress: BillingAddressExtended;
+    checkoutUi: PaymentsCheckoutUI;
+    paymentStatus: PaymentStatus | undefined;
+    paymentsApi: PaymentsApi;
+    isGroupLoading: MultiCheckGroupsResult['isGroupLoading'];
+    isGroupChecked: MultiCheckGroupsResult['isGroupChecked'];
+    subscription: Subscription | FreeSubscription | undefined;
+
+    freePlan: FreePlanDefault;
+    selectNewPlan: (newPlanToCheck: PlanToCheck) => Promise<SubscriptionEstimation>;
+    selectedPlan: SelectedPlan;
+    getOptimisticCheckResult: (planToCheck: PlanToCheck) => ReturnType<typeof getOptimisticCheckResult>;
+    availableCurrencies: readonly Currency[];
+    /**
+     * Returns available currencies for the given plan
+     */
+    getAvailableCurrencies: (selectedPlanName: PLANS) => ReturnType<typeof getAvailableCurrencies>;
+    getPreferredCurrency: (selectedPlanName: PLANS) => ReturnType<typeof getPreferredCurrency>;
+
+    setVatNumber: (vatNumber: string) => Promise<void>;
+    vatNumber: string | undefined;
+
+    telemetryContext: PaymentTelemetryContext;
+    loading: boolean;
+
+    reRunPaymentChecks: () => Promise<SubscriptionEstimation | void>;
+    getShouldPassTrial: (planIds: PlanIDs, cycle: Cycle, canDowngrade: boolean) => boolean;
+    coupon: string | undefined;
+    selectCoupon: (coupon: string) => Promise<void>;
+    couponConfig: CouponConfigRendered | undefined;
+}
+
+const PaymentsContext = createContext<PaymentsContextType | null>(null);
+
+interface PaymentsContextProviderProps {
+    children: ReactNode;
+    preload?: boolean;
+    authenticated?: boolean;
+    cachedPlans?: Plan[];
+    withGuards?: boolean;
+}
+
+interface PaymentsContextProviderState {
+    telemetryContext: PaymentTelemetryContext;
+    product: ProductParam;
+    billingAddress: BillingAddressExtended;
+    subscription: Subscription | FreeSubscription;
+    entitlementCatalog: EntitlementCatalog;
+    plansData: {
+        plans: Plan[];
+        freePlan: FreePlanDefault;
+    };
+    paymentStatus: PaymentStatus | undefined;
+    initialized: boolean;
+    availableCurrencies: readonly Currency[];
+    planToCheck: PlanToCheck;
+    checkResult: SubscriptionEstimation;
+    vatNumber: string | undefined;
+    loading: boolean;
+}
+
+const selectInitialPaymentData = createSelector(
+    [selectUser, selectSubscription, selectPlans, selectPaymentStatus, selectEntitlementCatalog],
+    (user, subscription, plans, paymentStatus, entitlementCatalog) => {
+        return {
+            // NOTE: with optionals due to user, subscription not being initialized in account's public app
+            user: user?.value,
+            subscription: subscription?.value,
+            plans: plans?.value,
+            paymentStatus: paymentStatus?.value,
+            entitlementCatalog: entitlementCatalog?.value,
+        };
+    }
+);
+
+export const PaymentsContextProvider = ({
+    children,
+    preload = true,
+    authenticated = true,
+    cachedPlans,
+    withGuards = false,
+}: PaymentsContextProviderProps) => {
+    const { APP_NAME } = useConfig();
+
+    const defaultApi = useApi();
+
+    const {
+        user,
+        paymentStatus: paymentStatusInitial,
+        subscription: subscriptionInitial,
+        plans: plansInitial,
+        entitlementCatalog: entitlementCatalogInitial,
+    } =
+        // Avoid using model hooks to avoid fetching data
+        useSelector(selectInitialPaymentData);
+    const dispatch = useDispatch();
+
+    const { getPreferredCurrency, getAvailableCurrencies } = useCurrencies();
+
+    const getLocalizedPlansMapParametrized = (params: {
+        paramCurrency?: Currency;
+        paymentStatus: PaymentStatus | undefined;
+        subscription: Subscription | FreeSubscription;
+        plans: Plan[];
+    }) => {
+        return getPreferredPlansMap({
+            currencyFallback: false,
+            getPreferredCurrency,
+            currencyOverrides: params.paramCurrency ? { paramCurrency: params.paramCurrency } : undefined,
+            user,
+            paymentStatus: params.paymentStatus,
+            subscription: params.subscription,
+            plans: params.plans,
+        }).plansMap;
+    };
+
+    const { createNotification } = useNotifications();
+
+    const [, rerender] = useState<{}>({});
+    const stateRef = useRef<PaymentsContextProviderState>(
+        (() => {
+            const subscription = subscriptionInitial ?? FREE_SUBSCRIPTION;
+            const plansData = plansInitial ?? {
+                plans: cachedPlans ?? [],
+                freePlan: FREE_PLAN,
+            };
+            const paymentStatus = paymentStatusInitial;
+            const entitlementCatalog = entitlementCatalogInitial ?? emptyEntitlementCatalog;
+            const billingAddress = paymentStatus
+                ? getBillingAddressFromPaymentStatus(paymentStatus, { shouldRestoreZipCode: !authenticated })
+                : DEFAULT_TAX_BILLING_ADDRESS;
+
+            const autoCurrency = getPreferredCurrency({
+                user,
+                subscription,
+                plans: plansData.plans,
+                paymentStatus,
+            });
+            const plansMap = getLocalizedPlansMapParametrized({
+                paramCurrency: autoCurrency,
+                paymentStatus,
+                subscription,
+                plans: plansData.plans,
+            });
+
+            const initialPlanIDs =
+                subscription && !isFreeSubscription(subscription) ? getPlanIDs(subscription) : { [PLANS.MAIL]: 1 };
+
+            /** The `trial` property here does not refer to the current trail status of the subscription.
+             * Use this value if you want to start a new trial as part of the transaction.
+             * As PaymentContext does not have any use-case where we need to start a trial, it is set to `undefined`
+             * In the future iterations, if it still remains unused, we will eventually remove it
+             **/
+
+            const cycle = CYCLE.MONTHLY;
+            const trial = shouldPassIsTrial({
+                plansMap,
+                newPlanIDs: initialPlanIDs,
+                newCycle: cycle,
+                downgradeIsTrial: true,
+                subscription,
+                entitlementCatalog,
+            });
+            const planToCheck = {
+                cycle,
+                currency: autoCurrency,
+                planIDs: initialPlanIDs,
+                coupon: undefined,
+                trial,
+            };
+            const checkResult = computeOptimisticCheckResult(
+                {
+                    cycle: planToCheck.cycle,
+                    planIDs: planToCheck.planIDs,
+                    plansMap: plansMap,
+                    currency: planToCheck.currency,
+                },
+                subscription,
+                { isTrial: trial }
+            );
+
+            return {
+                telemetryContext: 'other',
+                product: 'generic',
+                billingAddress,
+                subscription,
+                plansData,
+                paymentStatus,
+                initialized: false,
+                availableCurrencies: mainCurrencies,
+                planToCheck,
+                checkResult,
+                vatNumber: undefined,
+                loading: false,
+                entitlementCatalog,
+            };
+        })()
+    );
+
+    const setState = (newState: Partial<PaymentsContextProviderState>) => {
+        stateRef.current = { ...stateRef.current, ...newState };
+        rerender({});
+    };
+
+    const abortControllerRef = useRef<AbortController | undefined>(undefined);
+    const guardedSelectionRef = useRef<SubscriptionSelection | undefined>(undefined);
+
+    const getLocalizedPlansMap = (params: { paramCurrency?: Currency }) => {
+        return getLocalizedPlansMapParametrized({
+            ...params,
+            paymentStatus: stateRef.current.paymentStatus,
+            subscription: stateRef.current.subscription,
+            plans: stateRef.current.plansData.plans,
+        });
+    };
+    const getPlansMap = () => getLocalizedPlansMap({ paramCurrency: stateRef.current.planToCheck.currency });
+
+    const { getPaymentsApi, paymentsApi: initialPaymentsApi } = usePaymentsApi();
+    const paymentsApiRef = useRef<PaymentsApi>(initialPaymentsApi);
+
+    const multiCheckGroups = useMultiCheckGroups();
+
+    const couponConfig = useCouponConfig({
+        checkResult: stateRef.current.checkResult,
+        planIDs: stateRef.current.planToCheck.planIDs,
+        plansMap: getPlansMap(),
+    });
+
+    const isTrialResolverRef = useRef<IsTrialResolver | undefined>(undefined);
+
+    const getIsTrial = (planToCheck: PlanToCheck) => {
+        const resolver = isTrialResolverRef.current;
+        return resolver ? resolver(planToCheck.planIDs) : Boolean(planToCheck.trial);
+    };
+
+    const setIsTrialResolver = (resolver: IsTrialResolver | undefined) => {
+        if (isTrialResolverRef.current === resolver) {
+            return;
+        }
+
+        isTrialResolverRef.current = resolver;
+        // The rendered `isTrial` is derived from the resolver, so consumers reading it during render would otherwise
+        // keep seeing the answer from before the resolver was registered.
+        rerender({});
+    };
+
+    const getShouldPassTrial = (planIDs: PlanIDs, cycle: Cycle, canDowngrade: boolean) => {
+        return shouldPassIsTrial({
+            plansMap: getPlansMap(),
+            newPlanIDs: planIDs,
+            newCycle: cycle,
+            downgradeIsTrial: canDowngrade,
+            subscription: stateRef.current.subscription,
+            entitlementCatalog: stateRef.current.entitlementCatalog,
+        });
+    };
+
+    const getOptimisticCheckResult: PaymentsContextType['getOptimisticCheckResult'] = (planToCheck) => {
+        const plansMap = getLocalizedPlansMap({ paramCurrency: planToCheck.currency });
+        return computeOptimisticCheckResult({ plansMap, ...planToCheck }, stateRef.current.subscription, {
+            isTrial: planToCheck.trial || getShouldPassTrial(planToCheck.planIDs, planToCheck.cycle, true),
+        });
+    };
+
+    /**
+     * @throws {AbortError} if the operation is aborted
+     */
+    const calculateSubscriptionEstimation = async (
+        diff: Partial<PaymentsContextProviderState>
+    ): Promise<SubscriptionEstimation> => {
+        const newPlanToCheck = diff.planToCheck ?? stateRef.current.planToCheck;
+        const newBillingAddress = diff.billingAddress ?? stateRef.current.billingAddress;
+        const newVatNumber = diff.vatNumber ?? stateRef.current.vatNumber;
+
+        const paymentForbiddenReason = isSubscriptionCheckForbiddenWithReason(stateRef.current.subscription, {
+            planIDs: newPlanToCheck.planIDs,
+            cycle: newPlanToCheck.cycle,
+        });
+
+        if (paymentForbiddenReason.forbidden) {
+            abortControllerRef.current?.abort();
+            guardedSelectionRef.current = undefined;
+            const newCheckResult = getOptimisticCheckResult(newPlanToCheck);
+
+            setState({
+                planToCheck: newPlanToCheck,
+                checkResult: {
+                    ...newCheckResult,
+                    AmountDue: 0,
+                    PeriodEnd: 0,
+                },
+            });
+
+            // We don't want to update billing address if the payment is forbidden for any other reason apart from the
+            // selection of a free plan. This is mostly a safery measure for now and subject for re-evaluation in the
+            // future - maybe we don't need to be that cautious and we may update the billing address in all cases.
+            if (paymentForbiddenReason.reason === 'paid-plan-required') {
+                setState({
+                    billingAddress: newBillingAddress,
+                });
+            }
+
+            return newCheckResult;
+        }
+
+        try {
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = new AbortController();
+
+            const selection = { planIDs: newPlanToCheck.planIDs, cycle: newPlanToCheck.cycle };
+            const shouldValidateGuards =
+                withGuards &&
+                isModifyingPaidSubscriptionSelection(
+                    stateRef.current.subscription,
+                    selection.planIDs,
+                    selection.cycle
+                ) &&
+                !(guardedSelectionRef.current && isSubscriptionSelectionEqual(guardedSelectionRef.current, selection));
+            const checkResult = stateRef.current.checkResult;
+            const previousGuardResult = checkResult.GuardResult;
+
+            if (shouldValidateGuards) {
+                guardedSelectionRef.current = undefined;
+                setState({ loading: true, checkResult: { ...checkResult, GuardResult: [] } });
+            } else {
+                setState({ loading: true });
+            }
+
+            const subscriptionData = getSubscriptionDataFromPlanToCheck({
+                ...newPlanToCheck,
+                ValidateBillingAddress: true,
+                BillingAddress: newBillingAddress,
+                VatId: newVatNumber,
+                trial: newPlanToCheck.trial || getShouldPassTrial(newPlanToCheck.planIDs, newPlanToCheck.cycle, true),
+            });
+            if (shouldValidateGuards) {
+                subscriptionData.ValidateGuards = true;
+            }
+
+            const newCheckResult = await paymentsApiRef.current.checkSubscription(subscriptionData, {
+                signal: abortControllerRef.current.signal,
+                previousEstimation: stateRef.current.checkResult,
+            });
+            // An optimistic result is built by the frontend after a recoverable error and carries no guard verdict.
+            if (shouldValidateGuards) {
+                guardedSelectionRef.current = newCheckResult.optimistic ? undefined : selection;
+            }
+            const shouldCarryGuardResult = !shouldValidateGuards && !!guardedSelectionRef.current;
+            const displayedCheckResult = shouldCarryGuardResult
+                ? { ...newCheckResult, GuardResult: previousGuardResult }
+                : newCheckResult;
+            setState({
+                planToCheck: newPlanToCheck,
+                billingAddress: newBillingAddress,
+                vatNumber: newVatNumber,
+                checkResult: displayedCheckResult,
+            });
+            paymentsApiRef.current.cacheMultiCheck(subscriptionData, newCheckResult);
+
+            return displayedCheckResult;
+        } catch (error) {
+            throw error;
+        } finally {
+            setState({ loading: false });
+        }
+    };
+
+    const getCurrentSelectedPlan = () => {
+        return new SelectedPlan(
+            stateRef.current.planToCheck.planIDs,
+            getPlansMap(),
+            stateRef.current.planToCheck.cycle,
+            stateRef.current.planToCheck.currency
+        );
+    };
+
+    const selectNewPlan = async (newPlanToCheck: PlanToCheck) => {
+        const selectedPlan = getCurrentSelectedPlan();
+
+        const action: EstimationChangeAction | null = (() => {
+            const newSelectedPlan = new SelectedPlan(
+                newPlanToCheck.planIDs,
+                getPlansMap(),
+                newPlanToCheck.cycle,
+                newPlanToCheck.currency
+            );
+
+            if (newSelectedPlan.cycle !== selectedPlan.cycle) {
+                return 'cycle_changed';
+            }
+
+            if (newSelectedPlan.currency !== selectedPlan.currency) {
+                return 'currency_changed';
+            }
+
+            if (newPlanToCheck.coupon !== stateRef.current.planToCheck.coupon) {
+                return 'coupon_changed';
+            }
+
+            if (newSelectedPlan.getPlanName() !== selectedPlan.getPlanName()) {
+                return 'plan_changed';
+            }
+
+            if (!newSelectedPlan.isEqualTo(selectedPlan)) {
+                return 'plan_changed';
+            }
+
+            return null;
+        })();
+
+        if (action && stateRef.current.initialized) {
+            checkoutTelemetry.reportSubscriptionEstimationChange({
+                action,
+                context: stateRef.current.telemetryContext,
+                subscription: undefined,
+                userCurrency: undefined,
+                selectedPlanIDs: newPlanToCheck.planIDs,
+                selectedCurrency: newPlanToCheck.currency,
+                selectedCycle: newPlanToCheck.cycle,
+                selectedCoupon: newPlanToCheck.coupon,
+                paymentMethodType: undefined,
+                paymentMethodValue: undefined,
+                build: APP_NAME,
+                product: stateRef.current.product,
+                isTrial: getIsTrial(newPlanToCheck),
+            });
+        }
+
+        const isFree = hasFreePlanIDs(newPlanToCheck.planIDs);
+        if (isFree) {
+            abortControllerRef.current?.abort();
+            guardedSelectionRef.current = undefined;
+            const newCheckResult = getOptimisticCheckResult(newPlanToCheck);
+            setState({ planToCheck: newPlanToCheck, checkResult: newCheckResult });
+            return newCheckResult;
+        }
+
+        return calculateSubscriptionEstimation({ planToCheck: newPlanToCheck });
+    };
+
+    const preloadPaymentsData = async ({ api: apiOverride }: { api?: Api } = {}) => {
+        const api = apiOverride ?? defaultApi;
+
+        const [plansData, { paymentStatus, billingAddress }, subscription, entitlementCatalog] = await Promise.all([
+            dispatch(plansThunk({ api })),
+            loadInitialBillingAddress({
+                getPaymentStatus: () => dispatch(paymentStatusThunk({ api })),
+                getFullBillingAddress: paymentsApiRef.current.getFullBillingAddress,
+                isAuthenticated: authenticated,
+            }),
+            authenticated ? dispatch(subscriptionThunk()) : Promise.resolve(FREE_SUBSCRIPTION as FreeSubscription),
+            dispatch(entitlementCatalogThunk({ api })),
+        ]);
+
+        const result = {
+            plansData,
+            paymentStatus,
+            subscription,
+            billingAddress,
+            entitlementCatalog,
+        };
+
+        setState(result satisfies Partial<PaymentsContextProviderState>);
+        return result;
+    };
+
+    const initialize = async ({
+        api,
+        paramCurrency,
+        planToCheck: planToCheckParam,
+        availablePlans,
+        telemetryContext,
+        product,
+        // paymentFlow,
+        // onChargeable,
+    }: InitializeProps) => {
+        const { plansData, paymentStatus: status, subscription } = await preloadPaymentsData({ api });
+        const plans = plansData.plans;
+
+        let preferredCurrency = getPreferredCurrency({
+            paramCurrency,
+            paymentStatus: status,
+            plans,
+        });
+
+        const availableCurrencies = getAvailableCurrencies({
+            paramCurrency,
+            paymentStatus: status,
+            plans,
+        });
+
+        setState({
+            availableCurrencies,
+        });
+
+        const paymentsApi = getPaymentsApi(api);
+        paymentsApiRef.current = paymentsApi;
+        // setFacadeParams({ flow: paymentFlow });
+        // setOnChargeableCallback(onChargeable);
+
+        const localizedPlansMap = getPreferredPlansMap({
+            currencyFallback: false,
+            getPreferredCurrency,
+            currencyOverrides: { paramCurrency: preferredCurrency },
+            user,
+            paymentStatus: stateRef.current.paymentStatus,
+            subscription: stateRef.current.subscription,
+            plans: stateRef.current.plansData.plans,
+        }).plansMap;
+
+        if (planToCheckParam) {
+            try {
+                await selectNewPlan({
+                    ...getPlanToCheck({
+                        ...planToCheckParam,
+                        currency: preferredCurrency,
+                    }),
+                });
+            } catch (error) {
+                /**
+                 * Check call can fail if the plan is not available in the preferred currency
+                 * This will fallback to an available currency for the plan
+                 */
+                const plan = getPlanFromPlanIDs(localizedPlansMap, planToCheckParam?.planIDs);
+
+                if (plan) {
+                    preferredCurrency = plan.Currency;
+                    await selectNewPlan({
+                        ...getPlanToCheck({
+                            ...planToCheckParam,
+                            currency: preferredCurrency,
+                        }),
+                    });
+                }
+            }
+        }
+
+        const availablePlansWithCurrencyAndAutomaticCoupon = availablePlans
+            ?.map((plan) => ({
+                ...getPlanToCheck({
+                    ...plan,
+                    currency: preferredCurrency,
+                    coupon: planToCheckParam?.coupon,
+                }),
+                billingAddress: stateRef.current.billingAddress,
+            }))
+            .filter((plan) => {
+                // There needs to be a coupon for it to be worth to ask the API.
+                const hasCoupon = !!plan.coupon;
+                // With regional currencies, the currency might not exist for that plan. So ignore asking the API in that case.
+                const strictPlan = getPlanFromPlanIDs(localizedPlansMap, plan.planIDs);
+                const hasCurrency = plan.currency === strictPlan?.Currency;
+                return hasCoupon && hasCurrency;
+            });
+
+        if (availablePlansWithCurrencyAndAutomaticCoupon?.length) {
+            await checkMultiplePlans({
+                getLocalizedPlansMap,
+                multiCheckGroups,
+                paymentsApi,
+                subscription,
+                plansToCheck: availablePlansWithCurrencyAndAutomaticCoupon,
+                billingAddress: stateRef.current.billingAddress,
+            }).catch(noop);
+        }
+
+        setState({ telemetryContext, product, initialized: true });
+    };
+
+    const getHasEssentialData = () => {
+        return (
+            stateRef.current.plansData.plans.length > 0 &&
+            stateRef.current.paymentStatus !== undefined &&
+            stateRef.current.subscription !== undefined
+        );
+    };
+
+    useEffect(function preloadPaymentsDataOnMount() {
+        if (!preload || getHasEssentialData()) {
+            return;
+        }
+
+        preloadPaymentsData().catch(noop);
+    }, []);
+
+    const selectPlanIDs = async (planIDs: PlanIDs) => {
+        await selectNewPlan({
+            ...stateRef.current.planToCheck,
+            planIDs,
+        });
+    };
+
+    const selectCycle = async (cycle: Cycle) => {
+        await selectNewPlan({
+            ...stateRef.current.planToCheck,
+            cycle,
+        });
+    };
+
+    const selectCurrency = async (currency: Currency) => {
+        await selectNewPlan({
+            ...stateRef.current.planToCheck,
+            currency,
+        });
+    };
+
+    const selectCoupon = async (coupon: string) => {
+        const errorNotification: CreateNotificationOptions = { text: c('Error').t`Invalid code`, type: 'error' };
+
+        const staticCouponConfig = getStaticCouponConfig(coupon);
+        if (staticCouponConfig?.blockManualEntryOfCoupon) {
+            createNotification(errorNotification);
+            return;
+        }
+
+        const checkResult = await selectNewPlan({
+            ...stateRef.current.planToCheck,
+            coupon,
+        });
+
+        if (
+            checkResult &&
+            coupon &&
+            coupon.toLowerCase() !== checkResult.Coupon?.Code.toLowerCase() &&
+            !checkResult.Gift
+        ) {
+            createNotification(errorNotification);
+            return;
+        }
+    };
+
+    const instantSelectBillingAddress = async (billingAddress: BillingAddressExtended, vatNumber?: string) => {
+        try {
+            await calculateSubscriptionEstimation({ billingAddress, vatNumber });
+        } catch (error: any) {
+            if (error?.name === 'AbortError') {
+                return;
+            }
+            throw error;
+        }
+    };
+
+    const userInputDebounceDelay = 500;
+
+    const debouncedSelectBillingAddress = useHandler(instantSelectBillingAddress, { debounce: userInputDebounceDelay });
+
+    const selectFullBillingAddress = (fullBillingAddress: FullBillingAddressFlat) => {
+        const { VatId, ...billingAddress } = fullBillingAddress;
+        const vatNumber = VatId ?? undefined;
+
+        // Only a few props can trigger the subscription estimation to be re-run instantly. For example, CountryCode and
+        // State are using dropdowns, so users can't change them rapidly, and it makes sense to disable any debouncing
+        // delay. Many other fields are simple text fields, so we should avoid re-calculation on every keystroke.
+        const instantProps: (keyof BillingAddressExtended)[] = ['CountryCode', 'State'];
+        const isDeboucingPropChanged = Object.keys(billingAddress).some((key) => {
+            const propertyName = key as keyof BillingAddressExtended;
+            return (
+                !instantProps.includes(propertyName) &&
+                billingAddress[propertyName] !== stateRef.current.billingAddress[propertyName]
+            );
+        });
+        if (isDeboucingPropChanged) {
+            return debouncedSelectBillingAddress(billingAddress, vatNumber);
+        }
+
+        return instantSelectBillingAddress(billingAddress, vatNumber);
+    };
+
+    const getFallbackPrice: PaymentsContextType['getFallbackPrice'] = (planToCheck): PricesResult => {
+        const localizedPlansMap = getLocalizedPlansMap({ paramCurrency: planToCheck.currency });
+        const checkResult = getOptimisticCheckResult(planToCheck);
+
+        return {
+            checkResult,
+            checkoutUi: getCheckoutUi({ planIDs: planToCheck.planIDs, plansMap: localizedPlansMap, checkResult }),
+        };
+    };
+
+    const getPrice: PaymentsContextType['getPrice'] = (planToCheck) => {
+        if (!planToCheck.coupon) {
+            return getFallbackPrice(planToCheck);
+        }
+
+        const subscriptionData = getSubscriptionDataFromPlanToCheck({
+            ...planToCheck,
+            BillingAddress: stateRef.current.billingAddress,
+            VatId: stateRef.current.vatNumber,
+        });
+        const result = paymentsApiRef.current.getCachedCheck(subscriptionData);
+
+        // Cache is missing
+        if (!result) {
+            return null;
+        }
+
+        const localizedPlansMap = getLocalizedPlansMap({ paramCurrency: planToCheck.currency });
+        return {
+            checkResult: result,
+            checkoutUi: getCheckoutUi({
+                planIDs: planToCheck.planIDs,
+                plansMap: localizedPlansMap,
+                checkResult: result,
+            }),
+        };
+    };
+
+    const getPriceOrFallback: PaymentsContextType['getPriceOrFallback'] = (planToCheck) => {
+        const price = getPrice(planToCheck);
+        if (!price) {
+            return getFallbackPrice(planToCheck);
+        }
+
+        return price;
+    };
+
+    const getCoupon: PaymentsContextType['getCoupon'] = (planToCheck) => {
+        const result = paymentsApiRef.current.getCachedCheckByPlans(planToCheck.planIDs);
+        return result.find((value) => {
+            return (
+                Boolean(value.Coupon?.Code) &&
+                value.Currency === planToCheck.currency &&
+                value.Cycle === planToCheck.cycle
+            );
+        })?.Coupon?.Code;
+    };
+
+    const isGroupLoading = multiCheckGroups.isGroupLoading;
+    const isGroupChecked = multiCheckGroups.isGroupChecked;
+
+    const setVatNumberInner = async (vatNumber: string) => {
+        if (
+            vatNumber === stateRef.current.vatNumber ||
+            // both are falsy is a subcase of equality in this case. If both are falsy, then they are already equal, and
+            // no calculation is needed.
+            (!vatNumber && !stateRef.current.vatNumber)
+        ) {
+            return;
+        }
+
+        try {
+            await calculateSubscriptionEstimation({ vatNumber });
+        } catch (error: any) {
+            if (error?.name === 'AbortError') {
+                return;
+            }
+            throw error;
+        }
+    };
+
+    const setVatNumber = useHandler(setVatNumberInner, { debounce: userInputDebounceDelay });
+
+    const reRunPaymentChecks = async () => {
+        return selectNewPlan(stateRef.current.planToCheck);
+    };
+
+    const value: PaymentsContextType = {
+        createSubscription: async () => {},
+        initialize,
+        initialized: getHasEssentialData(),
+        selectPlanIDs,
+        selectCycle,
+        selectedPlan: getCurrentSelectedPlan(),
+        availableCurrencies: stateRef.current.availableCurrencies,
+        getAvailableCurrencies: (selectedPlanName: PLANS) =>
+            getAvailableCurrencies({
+                selectedPlanName,
+                paymentStatus: stateRef.current.paymentStatus,
+                user,
+                subscription: stateRef.current.subscription,
+                plans: stateRef.current.plansData.plans,
+                paramCurrency: stateRef.current.planToCheck.currency,
+            }),
+
+        getPreferredCurrency: (selectedPlanName: PLANS) =>
+            getPreferredCurrency({
+                paramPlanName: selectedPlanName,
+                paymentStatus: stateRef.current.paymentStatus,
+                user,
+                subscription: stateRef.current.subscription,
+                plans: stateRef.current.plansData.plans,
+            }),
+        selectNewPlan,
+        selectCurrency,
+        selectFullBillingAddress,
+        checkMultiplePlans: (plansToCheck) => {
+            return checkMultiplePlans({
+                getLocalizedPlansMap,
+                multiCheckGroups,
+                paymentsApi: paymentsApiRef.current,
+                subscription: stateRef.current.subscription,
+                plansToCheck,
+                billingAddress: stateRef.current.billingAddress,
+            });
+        },
+        plans: stateRef.current.plansData.plans,
+        freePlan: stateRef.current.plansData.freePlan,
+        plansMap: getPlansMap(),
+        getPrice,
+        getFallbackPrice,
+        getPriceOrFallback,
+        getOptimisticCheckResult,
+        getCoupon,
+        checkResult: stateRef.current.checkResult,
+        isTrial: getIsTrial(stateRef.current.planToCheck),
+        setIsTrialResolver,
+        // paymentFacade,
+        billingAddress: stateRef.current.billingAddress,
+        checkoutUi: getCheckoutUi({
+            planIDs: stateRef.current.checkResult.requestData.Plans,
+            plansMap: getPlansMap(),
+            checkResult: stateRef.current.checkResult,
+        }),
+        paymentStatus: stateRef.current.paymentStatus,
+        paymentsApi: paymentsApiRef.current,
+        isGroupLoading,
+        isGroupChecked,
+        subscription: stateRef.current.subscription,
+        setVatNumber,
+        vatNumber: stateRef.current.vatNumber,
+        telemetryContext: stateRef.current.telemetryContext,
+        loading: stateRef.current.loading,
+        reRunPaymentChecks,
+        getShouldPassTrial,
+        selectCoupon,
+        coupon: stateRef.current.planToCheck.coupon,
+        couponConfig,
+    };
+
+    return <PaymentsContext.Provider value={value}>{children}</PaymentsContext.Provider>;
+};
+
+export const usePayments = (): PaymentsContextType => {
+    const state = useContext(PaymentsContext);
+
+    if (!state) {
+        throw new Error('Expected to be within PaymentsContextProvider');
+    }
+
+    return state;
+};
+
+export type PreloadedPaymentsContextType = Omit<PaymentsContextType, 'paymentStatus'> & {
+    paymentStatus: PaymentStatus;
+    plansMap: FullPlansMap;
+    subscription: Subscription | FreeSubscription;
+};
+
+export function isPaymentsPreloaded(payments: PaymentsContextType): payments is PreloadedPaymentsContextType {
+    return payments.initialized;
+}
+
+export const usePaymentsPreloaded = (): PreloadedPaymentsContextType => {
+    const payments = usePayments();
+    if (!payments.initialized) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            'Payments context did not preload the essential data. Either call payments.initialize() first or use usePayments() instead of usePaymentsPreloaded().'
+        );
+    }
+
+    return payments as PreloadedPaymentsContextType;
+};

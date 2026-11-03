@@ -1,0 +1,159 @@
+import { useMemo } from 'react';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { usePopperAnchor } from '@proton/atoms/Popper/usePopperAnchor';
+import useToggle from '@proton/hooks/useToggle';
+import type { IconComponent } from '@proton/icons/component';
+import { IcChevronRight } from '@proton/icons/icons/IcChevronRight';
+import { IcCrossBig } from '@proton/icons/icons/IcCrossBig';
+import { IcThreeDotsVertical } from '@proton/icons/icons/IcThreeDotsVertical';
+
+import Dropdown from '../dropdown/Dropdown';
+import DropdownMenu from '../dropdown/DropdownMenu';
+import DropdownMenuButton from '../dropdown/DropdownMenuButton';
+import SettingsLink from '../link/SettingsLink';
+import Spotlight from '../spotlight/Spotlight';
+import { GetStartedButton } from './GetStartedButton';
+
+export type DisplayItem = DropdownDisplayItem | LinkDisplayItem;
+
+interface DropdownDisplayItem extends DisplayItemBase {
+    type: 'dropdown';
+    dropdownLinks: { label: string; icon: IconComponent; href: string }[];
+}
+
+interface LinkDisplayItem extends DisplayItemBase {
+    type: 'link';
+    linkHref: string;
+}
+
+interface DisplayItemBase {
+    imgSrc: string;
+    title: string;
+    description: string;
+    type: 'dropdown' | 'link';
+    dropdownLinks?: DropdownDisplayItem['dropdownLinks'];
+    linkHref?: LinkDisplayItem['linkHref'];
+}
+
+const DropdownItem = ({ item, onClick }: { item: DropdownDisplayItem; onClick: () => void }) => {
+    const { anchorRef, toggle, close, isOpen } = usePopperAnchor<HTMLElement>();
+
+    return (
+        <>
+            <Button onClick={toggle} shape="ghost" color="weak">
+                <div className="flex flex-nowrap gap-x-2 items-center text-left">
+                    <div className="shrink-0">
+                        <img src={item.imgSrc} alt="" />
+                    </div>
+                    <div>
+                        <b>{item.title}</b>
+                        <br />
+                        {item.description}
+                    </div>
+                    <IcThreeDotsVertical size={6} className="p-0.5 self-center shrink-0" />
+                    <div ref={anchorRef as React.RefObject<HTMLDivElement>} />
+                </div>
+            </Button>
+            <Dropdown isOpen={isOpen} anchorRef={anchorRef} onClose={close} originalPlacement="bottom-end">
+                <DropdownMenu>
+                    {item.dropdownLinks?.map(({ label, icon: Icon, href }) => {
+                        return (
+                            <SettingsLink path={href} className="text-no-decoration" onClick={onClick} key={label}>
+                                <DropdownMenuButton className="text-left flex gap-2 items-center">
+                                    <Icon size={4} />
+                                    {label}
+                                </DropdownMenuButton>
+                            </SettingsLink>
+                        );
+                    })}
+                </DropdownMenu>
+            </Dropdown>
+        </>
+    );
+};
+
+interface SpotlightMenuButtonProps {
+    initiallyOpen?: boolean;
+    items: DisplayItem[];
+    header?: React.ReactNode;
+    /** Toggles the Spotlight popover. */
+    onToggle?: (isOpen: boolean) => void;
+    /** Called when clicking on the [x] companion button. */
+    onDismiss?: () => void;
+}
+
+export const SpotlightMenuButton = ({
+    initiallyOpen: initiallyOpen_ = false,
+    items: displayItems,
+    header,
+    onToggle: onToggle,
+    onDismiss: onDismiss_,
+}: SpotlightMenuButtonProps) => {
+    const initiallyOpen = useMemo(() => initiallyOpen_, []);
+
+    const { state: renderSpotlight, toggle: toggleSpotlight, set: setSpotlight } = useToggle(initiallyOpen);
+
+    const onCloseSpotlight = () => {
+        setSpotlight(false);
+        onToggle?.(false);
+    };
+
+    const onToggleSpotlight = () => {
+        onToggle?.(!renderSpotlight);
+        toggleSpotlight();
+    };
+
+    const onDismiss = () => {
+        onDismiss_?.();
+        onCloseSpotlight();
+    };
+
+    return (
+        <Spotlight
+            originalPlacement="bottom-end"
+            closeIcon={<IcCrossBig />}
+            show={renderSpotlight}
+            onClose={onCloseSpotlight}
+            size="large"
+            className="w-full"
+            innerClassName="px-5 pt-6"
+            style={{ maxInlineSize: '37.5rem' }}
+            content={
+                <>
+                    {header}
+                    {displayItems.map((item) => {
+                        if (item.type === 'dropdown') {
+                            return <DropdownItem key={item.title} item={item} onClick={onCloseSpotlight} />;
+                        }
+                        return (
+                            <ButtonLike
+                                key={item.title}
+                                as={SettingsLink}
+                                path={item.linkHref!}
+                                onClick={onCloseSpotlight}
+                                shape="ghost"
+                                color="weak"
+                            >
+                                <div className="flex flex-nowrap gap-x-2 text-left">
+                                    <div className="shrink-0">
+                                        <img src={item.imgSrc} alt="" />
+                                    </div>
+                                    <div>
+                                        <b>{item.title}</b>
+                                        <br />
+                                        {item.description}
+                                    </div>
+                                    <IcChevronRight size={6} className="self-center shrink-0" />
+                                </div>
+                            </ButtonLike>
+                        );
+                    })}
+                </>
+            }
+        >
+            <GetStartedButton onGetStarted={onToggleSpotlight} onDismiss={onDismiss} />
+        </Spotlight>
+    );
+};

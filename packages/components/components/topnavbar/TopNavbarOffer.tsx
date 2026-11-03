@@ -1,0 +1,202 @@
+import { useEffect, useRef } from 'react';
+import { useHistory, useLocation } from 'react-router-dom';
+
+import { c } from 'ttag';
+
+import { useSubscription } from '@proton/account/subscription/hooks';
+import { useUser } from '@proton/account/user/hooks';
+import { useWelcomeFlags } from '@proton/account/welcomeFlags';
+import { useConfig } from '@proton/app-context/useConfig';
+import { IcBagPercent } from '@proton/icons/icons/IcBagPercent';
+import { CYCLE } from '@proton/payments/core/constants';
+import { subscriptionModalClassName } from '@proton/payments/core/subscription/subscription-modal-constants';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import { APPS, OPEN_OFFER_MODAL_EVENT } from '@proton/shared/lib/constants';
+import clsx from '@proton/utils/clsx';
+
+import OfferModal from '../../containers/offers/components/OfferModal';
+import { BlackFriday2026Layout } from '../../containers/offers/components/blackFriday2026/BlackFriday2026Layout';
+import useOfferFlags from '../../containers/offers/hooks/useOfferFlags';
+import useOfferModal from '../../containers/offers/hooks/useOfferModal';
+import usePreloadOfferImage from '../../containers/offers/hooks/usePreloadOfferImage';
+import type { OfferConfig } from '../../containers/offers/interface';
+import useActiveBreakpoint from '../../hooks/useActiveBreakpoint';
+import PromotionButton from '../button/PromotionButton/PromotionButton';
+import TopNavbarListItem from './TopNavbarListItem';
+
+interface Props {
+    app: APP_NAMES;
+    offerConfig: OfferConfig;
+    ignoreVisited?: boolean;
+    ignoreOnboarding?: boolean;
+    shouldPrefetch: boolean;
+}
+
+const TopNavbarOffer = ({ app, offerConfig, ignoreVisited, ignoreOnboarding, shouldPrefetch }: Props) => {
+    const { welcomeFlags } = useWelcomeFlags();
+    const protonConfig = useConfig();
+    const isVPNApp = protonConfig.APP_NAME === APPS.PROTONVPN_SETTINGS;
+    const onceRef = useRef(false); // This is used to prevent the offer modal from being shown more than once
+    const [user] = useUser();
+    const [subscription, loadingSubscription] = useSubscription();
+    const history = useHistory();
+    const location = useLocation();
+    const { isVisited, isReplayConsumed, loading: loadingOfferFlags } = useOfferFlags(offerConfig);
+    const {
+        offer,
+        loadingOffer,
+        setFetchOffer,
+        renderOfferModal,
+        offerModalProps,
+        setOfferModalOpen,
+        currency,
+        onChangeCurrency,
+        hasEstimationError,
+        initialized,
+    } = useOfferModal(offerConfig, shouldPrefetch);
+
+    const { viewportWidth } = useActiveBreakpoint();
+
+    // This component only renders for an offer that is already eligible, so mounting is the signal
+    // that the artwork will very likely be needed. Preload it now rather than when the modal mounts.
+    usePreloadOfferImage(hasEstimationError ? undefined : offerConfig.images?.modalImage);
+    const shouldDownloadBlackFriday2026Fonts = offerConfig.layout === BlackFriday2026Layout && !hasEstimationError;
+
+    // Listen custom event to open offer modal
+    useEffect(() => {
+        const open = () => {
+            if (renderOfferModal || hasEstimationError) {
+                return;
+            }
+            setOfferModalOpen(true);
+            setFetchOffer(true);
+        };
+        document.addEventListener(OPEN_OFFER_MODAL_EVENT, open);
+        return () => {
+            document.removeEventListener(OPEN_OFFER_MODAL_EVENT, open);
+        };
+    }, [renderOfferModal]);
+    // Auto-popup offer modal
+    useEffect(() => {
+        const searchParams = new URLSearchParams(location.search);
+        const autoOffer = searchParams.get('offer') === 'auto';
+        const plan = searchParams.get('plan');
+        // Common conditions that would prevent the offer modal from showing
+        if (
+            loadingOfferFlags ||
+            loadingSubscription ||
+            !offerConfig.autoPopUp ||
+            // Hide the autopopup during the welcome flow and re-trigger it when the welcome flow completes.
+            (!welcomeFlags.isDone && !ignoreOnboarding) ||
+            // If the subscription modal is open. Explicitly not checking if any modal is open since it intereferes with the onboarding modal.
+            document.querySelector(`.${subscriptionModalClassName}`) !== null ||
+            // Trying to catch if the automatic subscription modal will get opened.
+            !!plan ||
+            hasEstimationError
+        ) {
+            return;
+        }
+
+        // Offers can opt into replaying their one-time popup once more, for users who didn't opt out.
+        // Users who hid the offer never reach this point: the Hide bit clears isActive, so the offer isn't valid.
+        const isReplayingAutoPopUp = !!offerConfig.replayAutoPopUp && !isReplayConsumed;
+
+        // We want to always auto-show the offer modal for the VPN application
+        const combinedIgnoreVisited = ignoreVisited || isReplayingAutoPopUp || autoOffer || isVPNApp;
+        if (
+            (isVisited && !combinedIgnoreVisited) ||
+            onceRef.current ||
+            // Hide for paid mail cycle 12/24
+            (user.hasPaidMail &&
+                [CYCLE.YEARLY, CYCLE.TWO_YEARS].includes(subscription?.Cycle as any) &&
+                !combinedIgnoreVisited)
+        ) {
+            return;
+        }
+
+        if (autoOffer) {
+            history.replace({ search: undefined });
+        }
+
+        // If we reach this points, a regular offer modal should be displayed
+        onceRef.current = true;
+        setFetchOffer(true);
+        setOfferModalOpen(true);
+    }, [loadingOfferFlags, loadingSubscription, user.hasPaidMail, subscription, welcomeFlags.isDone, isReplayConsumed]);
+
+    if (hasEstimationError || (shouldPrefetch && !initialized)) {
+        return null;
+    }
+    const CTAText =
+        offerConfig.topButton?.getCTAContent?.(offerConfig.topButtonDiscount) ||
+        c('specialoffer: Action').t`Special offer`;
+
+    const IconContent = offerConfig.topButton?.iconContent;
+    const defaultIcon = IconContent ? undefined : IcBagPercent;
+    const upgradeIcon =
+        CTAText.length > 20 && viewportWidth['>=large'] ? undefined : (offerConfig.topButton?.icon ?? defaultIcon);
+    const upgradeIconContent = IconContent ? <IconContent /> : undefined;
+
+    const buttonSize =
+        viewportWidth['<=small'] ||
+        (CTAText.length > 15 && app === APPS.PROTONCALENDAR && protonConfig.APP_NAME !== APPS.PROTONACCOUNT)
+            ? 'small'
+            : 'medium';
+
+    return (
+        <>
+            <TopNavbarListItem collapsedOnDesktop={false} noShrink>
+                <PromotionButton
+                    as="button"
+                    type="button"
+                    color="norm"
+                    size={buttonSize}
+                    responsive
+                    shape={offerConfig.topButton?.shape || 'solid'}
+                    buttonGradient={offerConfig.topButton?.gradient}
+                    iconGradient={!!offerConfig.topButton?.iconGradient}
+                    iconSize={offerConfig.topButton?.iconSize}
+                    iconComponent={upgradeIcon}
+                    iconContent={upgradeIconContent}
+                    onClick={() => {
+                        offerConfig.tracking?.onTopNavbarClick?.();
+                        setOfferModalOpen(true);
+                        setFetchOffer(true);
+                    }}
+                    loading={loadingOffer && !offer}
+                    className={clsx([
+                        offerConfig.topButton?.variant && `button-promotion--${offerConfig.topButton?.variant}`,
+                        'rounded',
+                    ])}
+                    pill={!!offerConfig.topButton?.variant}
+                    data-testid="cta:special-offer"
+                >
+                    {CTAText}
+                </PromotionButton>
+            </TopNavbarListItem>
+            {shouldDownloadBlackFriday2026Fonts && (
+                <span className="sr-only" aria-hidden="true">
+                    <span className="font-sofia-sans-condensed">&nbsp;</span>
+                    <span className="font-es-build">&nbsp;</span>
+                </span>
+            )}
+            {renderOfferModal && offer && (
+                <OfferModal
+                    currency={currency}
+                    onChangeCurrency={onChangeCurrency}
+                    offer={offer}
+                    offerConfig={offerConfig}
+                    modalProps={{
+                        ...offerModalProps,
+                        onClose: () => {
+                            offerModalProps.onClose?.();
+                            setFetchOffer(false);
+                        },
+                    }}
+                />
+            )}
+        </>
+    );
+};
+
+export default TopNavbarOffer;

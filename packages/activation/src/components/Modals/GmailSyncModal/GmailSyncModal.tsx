@@ -1,0 +1,206 @@
+import { useEffect } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import ModalTwo, { type ModalProps } from '@proton/components/components/modalTwo/Modal';
+import ModalTwoContent from '@proton/components/components/modalTwo/ModalContent';
+import ModalTwoHeader from '@proton/components/components/modalTwo/ModalHeader';
+
+import { getBYOEFailNotification, getSyncSuccessNotification } from '../../../constants';
+import { useImportPeriodExperiment } from '../../../hooks/useImportPeriodExperiment';
+import useOAuthPopup from '../../../hooks/useOAuthPopup';
+import type { EASY_SWITCH_SOURCES, ImportToken, OAuthProps, TIME_PERIOD } from '../../../interface';
+import { EASY_SWITCH_FEATURES, OAUTH_PROVIDER } from '../../../interface';
+import { useEasySwitchDispatch, useEasySwitchSelector } from '../../../logic/store';
+import {
+    SyncTokenStrategy,
+    changeCreateLoadingState,
+    createSyncItem,
+    createTokenItem,
+} from '../../../logic/sync/sync.actions';
+import type { Sync } from '../../../logic/sync/sync.interface';
+import { selectCreateSyncState } from '../../../logic/sync/sync.selectors';
+import {
+    trackAccountImportBYOESignInClicked,
+    trackAccountImportBYOEStarted,
+} from '../../../telemetry/accountImportFlow';
+import AddBYOEModal from '../AddBYOEModal/AddBYOEModal';
+import GmailSyncModalAnimation from './GmailSyncModalAnimation';
+import SignInWithGoogle from './SignInWithGoogle';
+
+interface Props extends ModalProps {
+    source: EASY_SWITCH_SOURCES;
+    reduceHeight?: boolean;
+    onSyncCallback?: (hasError: boolean, sync?: Sync) => void;
+    onSyncSkipCallback?: () => void;
+    onBYOECallback: (params: {
+        hasError: boolean;
+        importEmails: boolean;
+        importPeriod: TIME_PERIOD | undefined;
+        token?: ImportToken;
+    }) => void;
+    noSkip?: boolean;
+    hasAccessToBYOE?: boolean;
+    expectedEmailAddress?: string;
+    onCloseCallback?: () => void;
+    onComplete?: () => Promise<void>;
+}
+
+const GmailSyncModal = ({
+    onSyncCallback,
+    onSyncSkipCallback,
+    onBYOECallback,
+    source,
+    reduceHeight,
+    noSkip,
+    hasAccessToBYOE,
+    expectedEmailAddress,
+    onCloseCallback,
+    onComplete,
+    ...rest
+}: Props) => {
+    const dispatch = useEasySwitchDispatch();
+    const syncState = useEasySwitchSelector(selectCreateSyncState);
+    const loading = syncState === 'pending';
+
+    const { triggerOAuthPopup, loadingConfig } = useOAuthPopup({
+        // translators: This string is shown when something went wrong during easy switch Gmail oAuth
+        errorMessage: c('Error').t`Permissions request failed.`,
+    });
+
+    const handleGoogleSync = () => {
+        void triggerOAuthPopup({
+            provider: OAUTH_PROVIDER.GOOGLE,
+            features: hasAccessToBYOE ? [EASY_SWITCH_FEATURES.BYOE] : [EASY_SWITCH_FEATURES.IMPORT_MAIL],
+            callback: async (oAuthProps: OAuthProps) => {
+                const { Code, Provider, RedirectUri } = oAuthProps;
+                dispatch(changeCreateLoadingState('pending'));
+                const res = await dispatch(
+                    createSyncItem({
+                        type: SyncTokenStrategy.create,
+                        Code,
+                        Provider,
+                        RedirectUri,
+                        Source: source,
+                        successNotification: hasAccessToBYOE ? undefined : getSyncSuccessNotification(),
+                        errorNotification: hasAccessToBYOE ? getBYOEFailNotification() : undefined,
+                    })
+                );
+                const payload = res.type.endsWith('fulfilled') ? res?.payload : undefined;
+
+                const sync = payload?.sync as Sync;
+
+                const hasError = res.type.endsWith('rejected');
+
+                if (!hasError) {
+                    void onComplete?.();
+                }
+                onSyncCallback?.(hasError, sync);
+            },
+        });
+    };
+
+    const { variant } = useImportPeriodExperiment();
+
+    useEffect(() => {
+        // Without access to BYOE this modal only sets up a Gmail forwarding, which is not a BYOE creation
+        if (hasAccessToBYOE) {
+            trackAccountImportBYOEStarted({ source, isConversion: !!expectedEmailAddress, variant });
+        }
+    }, []);
+
+    const handleBYOEWithImport = (importEmails: boolean, importPeriod?: TIME_PERIOD) => {
+        trackAccountImportBYOESignInClicked({ hasImportEmails: importEmails, importPeriod });
+
+        void triggerOAuthPopup({
+            provider: OAUTH_PROVIDER.GOOGLE,
+            features: [EASY_SWITCH_FEATURES.BYOE],
+            callback: async (oAuthProps: OAuthProps) => {
+                const { Code, Provider, RedirectUri } = oAuthProps;
+                dispatch(changeCreateLoadingState('pending'));
+                const res = await dispatch(
+                    createTokenItem({
+                        Code,
+                        Provider,
+                        RedirectUri,
+                        Source: source,
+                        errorNotification: getBYOEFailNotification(),
+                        Features: [EASY_SWITCH_FEATURES.BYOE],
+                        expectedEmailAddress,
+                    })
+                );
+                const payload = res.type.endsWith('fulfilled') ? res?.payload : undefined;
+
+                const hasError = res.type.endsWith('rejected');
+                onBYOECallback({ hasError, importEmails, importPeriod, token: payload });
+            },
+        });
+    };
+
+    const handleSyncSkip = () => {
+        onSyncSkipCallback?.();
+        rest?.onClose?.();
+        onCloseCallback?.();
+    };
+
+    const handleClose = () => {
+        onSyncSkipCallback?.();
+        rest?.onClose?.();
+        onCloseCallback?.();
+    };
+
+    if (hasAccessToBYOE) {
+        return (
+            <AddBYOEModal
+                {...rest}
+                onClose={handleClose}
+                onSubmit={handleBYOEWithImport}
+                expectedEmailAddress={expectedEmailAddress}
+                isLoading={loading}
+            />
+        );
+    }
+
+    return (
+        <ModalTwo
+            size="xlarge"
+            fullscreenOnMobile
+            {...rest}
+            onClose={handleClose}
+            data-testid="EasySwitch:AddForwardingModal"
+        >
+            <ModalTwoHeader />
+            <ModalTwoContent className="m-8 mt-0 flex flex-row items-center flex-nowrap gap-7">
+                <div className="flex flex-column flex-1 gap-7">
+                    <h1 className="text-break text-4xl">
+                        <strong>{c('Gmail forwarding').t`Automatically forward`}</strong>
+                        &nbsp;
+                        <br className="lg:hidden" />
+                        {c('Gmail forwarding').t`Gmail messages to your inbox`}
+                    </h1>
+                    <div className="lg:hidden grow-2">
+                        <GmailSyncModalAnimation reduceHeight={reduceHeight} />
+                    </div>
+                    <div className="flex flex-column items-center gap-4">
+                        <SignInWithGoogle
+                            onClick={handleGoogleSync}
+                            loading={loading}
+                            disabled={loadingConfig}
+                            fullWidth
+                        />
+                        {!noSkip && (
+                            <Button shape="ghost" color="norm" fullWidth onClick={handleSyncSkip}>{c('Action')
+                                .t`Skip`}</Button>
+                        )}
+                    </div>
+                </div>
+                <div className="hidden lg:block w-6/10">
+                    <GmailSyncModalAnimation reduceHeight={reduceHeight} />
+                </div>
+            </ModalTwoContent>
+        </ModalTwo>
+    );
+};
+
+export default GmailSyncModal;

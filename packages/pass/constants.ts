@@ -1,0 +1,181 @@
+import { PassThemeOption } from './components/Layout/Theme/types';
+import type { FeatureFlagState } from './store/reducers';
+import { PassFeature } from './types/api/features';
+
+/** Invalidate local cache for users whose state version is older
+ * than the minimum state version specified by these constants */
+export const MIN_CACHE_VERSION = '1.10.0';
+
+export const MAX_MAX_BATCH_PER_REQUEST = 100;
+export const MIN_MAX_BATCH_PER_REQUEST = 10;
+export const MAX_BATCH_PER_IMPORT_REQUEST = 50;
+
+export const DEFAULT_LOCK_TTL = 600; /* 10 minutes */
+
+export const MAX_ITEM_NAME_LENGTH = 200;
+export const MAX_ITEM_NOTE_LENGTH = 25_000;
+export const MAX_PASSWORD_HISTORY_RETENTION_WEEKS = 2;
+
+export const MAX_VAULT_MEMBERS = 10;
+export const MAX_CUSTOM_ADDRESSES = 10;
+
+/* Folder limits fallback if we could not retrieve the info from BE */
+export const FOLDER_MAX_COUNT = 100;
+export const FOLDER_MAX_CHILDREN = 10;
+export const FOLDER_MAX_DEPTH = 5;
+
+/** Matches 80% of the `SETTINGS_MAX_CONCURRENT_STREAMS=25`
+ * production API configuration */
+export const API_CONCURRENCY_TRESHOLD = 20;
+
+export const PASS_VIDEO_URL = 'https://proton.me/download/pass/videos/proton-pass-tutorial.webm';
+export const PASS_APP_QR_URL = 'https://proton.me/passapp';
+export const PASS_X_URL = 'https://x.com/Proton_Pass';
+export const PASS_REDDIT_URL = 'https://www.reddit.com/r/ProtonPass/';
+export const PASS_REQUEST_URL = 'https://protonmail.uservoice.com/forums/953584-proton-pass';
+export const PASS_BLOG_TRIAL_URL = 'https://proton.me/support/pass-trial';
+export const PASS_BLOG_MONITORING_URL = 'https://proton.me/support/dark-web-monitoring';
+export const PASS_CHROME_URL = 'https://chrome.google.com/webstore/detail/proton-pass/ghmbeldphafepmbegfdlkpapadhbakde';
+export const PASS_EDGE_URL =
+    'https://microsoftedge.microsoft.com/addons/detail/proton-pass-free-passwor/gcllgfdnfnllodcaambdaknbipemelie';
+export const PASS_FIREFOX_URL = 'https://addons.mozilla.org/en-US/firefox/addon/proton-pass/';
+export const PASS_SENTINEL_LINK = 'https://proton.me/blog/sentinel-included-pass-plus';
+export const PASS_LINUX_VERSION_URL = 'https://proton.me/download/PassDesktop/linux/x64/version.json';
+export const PASS_LINUX_DOWNLOAD_URL = 'https://proton.me/support/set-up-proton-pass-linux';
+export const PASS_DESKTOP_CHANGELOG_URL =
+    'https://github.com/ProtonMail/WebClients/blob/main/applications/pass-desktop/CHANGELOG.md';
+export const SIMPLELOGIN_DOMAIN_SETTINGS_URL = 'https://app.simplelogin.io/dashboard/custom_domain';
+export const PASS_TROUBLESHOOT_URL = 'https://proton.me/support/pass-troubleshooting';
+export const PASS_HOWTO_URL = 'https://proton.me/support/pass/using-proton-pass';
+export const PASS_CREDENTIAL_CHECK_URL = 'https://credential-check.protonweb.com';
+
+export const PRIVATE_DOMAINS_URL = 'https://proton.me/download/pass/auto-detection/public_suffix_list.dat';
+export const WEBSITE_RULES_URL = 'https://proton.me/download/pass/auto-detection/rules.json';
+export const PASS_POPULAR_SERVICES_URL = 'https://proton.me/download/pass/popular-services/services.json';
+
+export const MODEL_REGISTRY_URL = 'https://proton.me/download/pass/model-registry/model-registry.json';
+export const MODEL_ARTIFACTS_BASE_URL = 'https://proton.me/download/pass/model-artifacts';
+
+export const ITEM_COUNT_RATING_PROMPT = 10;
+
+export enum AccountPath {
+    ACCOUNT_PASSWORD = 'pass/account-password',
+    ACCOUNT_PASSWORD_2FA = 'pass/account-password#two-fa',
+    USERS = 'pass/users-addresses',
+    POLICIES = 'pass/policies',
+    DASHBOARD = 'pass/dashboard',
+    PAYMENT_METHODS = 'pass/dashboard#payment-methods',
+}
+
+export enum UpsellRefPrefix {
+    Extension = 'pass_extension',
+    Web = 'pass_web',
+    Desktop = 'pass_desktop',
+}
+
+export enum UpsellRef {
+    DEFAULT = 'banner',
+    CUSTOM_ITEMS = 'custom_items',
+    FREE_TRIAL = 'free_trial_banner',
+    IDENTITY_CUSTOM_FIELDS = 'identity_custom_fields',
+    ITEM_SHARING = 'item_sharing',
+    FILE_ATTACHMENTS = 'file_attachments',
+    FOLDERS = 'folders',
+    LIMIT_2FA = '2fa_limit',
+    LIMIT_ALIAS = 'alias_limit',
+    LIMIT_AUTOFILL = 'autofill_limit',
+    LIMIT_CC = 'credit_card_limit',
+    LIMIT_EXTRA_FIELD = 'extra_field_limit',
+    LIMIT_IMPORT = 'import_limit',
+    LIMIT_SHARING = 'limit_share',
+    LIMIT_VAULT = 'vault_limit',
+    MENU = 'menu',
+    NAVBAR_UPGRADE = 'navbar_upgrade',
+    SECURE_LINKS = 'secure_links',
+    SETTING = 'setting',
+    PASS_MONITOR = 'pass_monitor',
+    PASS_FAMILY_FREE_399 = 'pass_family_free_399',
+    PASS_FAMILY_PLUS_399 = 'pass_family_plus_399',
+    PASS_FAMILY_1LT_299 = 'pass_family_1lt_299',
+    VD_25_PASS_FREE_WEB = 'vd_25_pass_free_web',
+    VD_25_PASS_PLUS_WEB = 'vd_25_pass_plus_web',
+    VD_25_PASS_FREE_EXTENSION = 'vd_25_pass_free_extension',
+    VD_25_PASS_PLUS_EXTENSION = 'vd_25_pass_plus_extension',
+    PROTON_BDAY_25_PASS_PLUS_WEB = 'proton_bday_25_pass_plus_web',
+    PROTON_BDAY_25_BUNDLE_WEB = 'proton_bday_25_bundle_web',
+    PROTON_BDAY_25_DUO_WEB = 'proton_bday_25_duo_web',
+    PROTON_BDAY_25_FAMILY_WEB = 'proton_bday_25_family_web',
+    LIFETIME_PLAN_ONBOARDING = 'lifetime_plan_onboarding',
+    PLUS_PLAN_ONBOARDING = 'plus_plan_onboarding',
+    UNLIMITED_PLAN_ONBOARDING = 'unlimited_plan_onboarding',
+    AUTOTYPE = 'autotype',
+    PAT = 'pat',
+    SSH_AGENT = 'ssh_agent',
+}
+
+export const MAX_LOCAL_STORAGE_SIZE = 5 * 1024 * 1024; /* 5MB */
+export const MAX_LOG_STORAGE_RATIO = 0.2; /* 20% of available storage space */
+export const MAX_LOG_STORAGE_LINES = 2_000;
+export const AVERAGE_BYTES_PER_LOG_LINE = 100;
+export const SAFARI_MESSAGE_KEY = 'application.id';
+export const SAFARI_URL_SCHEME = 'proton-pass:';
+export const BIOMETRICS_KEY = 'offlineKey_biometrics';
+export const PASS_DESKTOP_NATIVE_MESSAGE_KEY = 'me.proton.pass.nm';
+export const PASS_DESKTOP_NATIVE_MESSAGE_TIMEOUT = 30_000;
+
+/** Default feature flag states : These values are used as a
+ * fallback if the feature flag endpoint is unavailable.
+ * FIXME: Remove feature flags that are permanently enabled */
+export const DEFAULT_PASS_FEATURES: FeatureFlagState = {
+    [PassFeature.PassBasicAuthAutofill]: false,
+    [PassFeature.PassCreditCardWebAutofill]: false,
+    [PassFeature.PassEnableDesktopAutoUpdate]: false,
+    [PassFeature.PassExtensionCustomTLDs]: false,
+    [PassFeature.PassHideShowVault]: false,
+    [PassFeature.PassIFrameExtendedAutofill]: false,
+    [PassFeature.PassIFrameKillswitch]: false,
+    [PassFeature.PassItemCloning]: false,
+    [PassFeature.PassNavbarUpgradeToAccount]: false,
+    [PassFeature.PassProtonAnniversaryPromo2025]: false,
+    [PassFeature.PassRenameAdminToManager]: false,
+    [PassFeature.PassUserEventsV1]: false,
+    [PassFeature.PassWebInternalAlpha]: false,
+    [PassFeature.PassWebPrfUnlock]: false,
+};
+
+/** NOTE: Timeout mostly used to avoid Safari extension
+ * limbo state when the service-worker is corrupted */
+export const RUNTIME_RELOAD_TIMEOUT = 2_000; /* ms */
+export const RUNTIME_RELOAD_THROTTLE = 10; /* seconds */
+
+export const PASS_DEFAULT_THEME = PassThemeOption.OS;
+
+export const FILE_CHUNK_SIZE = 4 * 1024 * 1024; // 5MB
+export const FILE_MIME_TYPE_DETECTION_CHUNK_SIZE = 1.5 * 1024 * 1024; // 1.5MB
+
+/** 1.5 minute - matching drive */
+export const FILE_UPLOAD_TIMEOUT = 90_000;
+export const FILE_DOWNLOAD_TIMEOUT = 90_000;
+export const FILE_PUBLIC_SHARE = 'secure-link';
+export const FILE_PENDING_SHARE = 'pending-share';
+export const FILE_ENCRYPTION_VERSION = 2;
+
+export const PASS_PLUS_LIFETIME_PRICE = 19900; // €199
+export const PASS_PLUS_PRICE = 299; // €2.99
+export const PROTON_UNLIMITED_PRICE = 999; // €9.99
+
+/** Pass client platforms. Kept here rather than next to `clients` so that
+ * modules needing only the platform do not pull in the icon components. */
+export enum Clients {
+    Windows = 0,
+    macOS = 1,
+    Linux = 2,
+    Android = 3,
+    iOS = 4,
+    Chrome = 5,
+    Brave = 6,
+    Firefox = 7,
+    Edge = 8,
+    Safari = 9,
+    CLI = 10,
+}

@@ -1,0 +1,107 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended", "group:allNonMajor", ":semanticCommitsDisabled"],
+    "postUpdateOptions": ["pnpmDedupe"],
+    "rangeStrategy": "bump",
+    "rebaseWhen": "conflicted",
+    "prConcurrentLimit": 2,
+    "minimumReleaseAge": "3 days",
+    "ignoreDeps": [
+        "@protontech/drive-sdk",
+        "@proton/proton-foundation-search",
+        "@proton-meet/proton-meet-core",
+        "roosterjs",
+        "emoji-mart",
+        "@emoji-mart/data",
+        "@protontech/crypto",
+        "@protontech/pass-rust-core",
+        "@mlc-ai/web-llm",
+        "pdfjs-dist",
+        "sass",
+        "node"
+    ],
+    "ignorePaths": [
+        "**/node_modules/**",
+        "vendor/**",
+        "applications/authenticator/src-tauri/**",
+        "applications/pass-extension/safari/**",
+        "applications/pass-desktop/native/**",
+        "applications/pass-desktop/macOS/**"
+    ],
+    "customManagers": [
+        {
+            "customType": "regex",
+            "description": "ci-base versions published by schedule:ci-base",
+            "managerFilePatterns": ["/^ci/images/ci-base-version\\.yml$/"],
+            "matchStrings": [
+                "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+CI_BASE_VERSION: (?<currentValue>\\S+)"
+            ]
+        }
+    ],
+    "packageRules": [
+        {
+            "description": "Our own image, in its own MR, opened even when other Renovate MRs have used up prConcurrentLimit. Harbor gives its tags no release timestamp, so minimumReleaseAge would hold every version back.",
+            "groupName": "ci-base",
+            "matchPackageNames": ["harbor.protontech.ch/web-clients/ci-base"],
+            "minimumReleaseAge": null,
+            "prConcurrentLimit": 0
+        },
+        {
+            "groupName": "Playwright",
+            "matchPackageNames": ["/playwright/", "!@vitest/**"]
+        },
+        {
+            "groupName": "msw",
+            "matchPackageNames": ["/msw/"]
+        },
+        {
+            "groupName": "Typescript",
+            "matchPackageNames": ["typescript"]
+        },
+        {
+            "groupName": "lexical",
+            "matchPackageNames": ["@lexical/*", "lexical", "yjs", "y-protocols"]
+        },
+        {
+            "groupName": "Unleash",
+            "matchPackageNames": ["@unleash/proxy-client-react", "unleash-proxy-client"]
+        },
+        {
+            "groupName": "pdfme",
+            "matchPackageNames": ["@pdfme/*"]
+        },
+        {
+            "groupName": "redux",
+            "matchPackageNames": ["/redux/"]
+        },
+        {
+            "groupName": "babel",
+            "matchPackageNames": ["/babel/"]
+        },
+        {
+            "groupName": "pass-desktop and inbox-desktop exclusions",
+            "enabled": false,
+            "matchPackageNames": ["@electron-forge/*", "@electron/fuses", "@vercel/webpack-asset-relocator-loader"]
+        },
+        {
+            "groupName": "quark packages",
+            "enabled": false,
+            "matchPackageNames": ["@tpe/quark-client", "@tpe/quark-types", "@tpe/user-builder"]
+        },
+        {
+            "groupName": "ignore inbox-desktop snapcraft image",
+            "matchPackageNames": ["harbor.protontech.ch/ghcr.io/canonical/snapcraft"],
+            "enabled": false
+        },
+        {
+            "groupName": "ignore ariakit",
+            "matchPackageNames": ["@ariakit/*"],
+            "enabled": false
+        },
+        {
+            "groupName": "ignore standardnotes",
+            "matchPackageNames": ["@standardnotes/*"],
+            "enabled": false
+        }
+    ]
+}

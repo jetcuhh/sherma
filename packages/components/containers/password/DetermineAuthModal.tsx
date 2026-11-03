@@ -1,0 +1,74 @@
+import { useEffect, useState } from 'react';
+
+import { getInfo } from '@proton/shared/lib/api/auth';
+import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import type { InfoAuthedResponse, SSOInfoResponse } from '@proton/shared/lib/authentication/interface';
+import { API_CUSTOM_ERROR_CODES } from '@proton/shared/lib/errors';
+
+import useErrorHandler from '../../hooks/useErrorHandler';
+import { useSilentApi } from '../../hooks/useSilentApi';
+import type { AuthModalProps } from './AuthModal';
+import SSOAuthModal from './SSOAuthModal';
+import SrpAuthModal from './SrpAuthModal';
+
+type InfoResult =
+    | {
+          type: 'sso';
+          data: SSOInfoResponse;
+      }
+    | {
+          type: 'srp';
+          data: InfoAuthedResponse;
+      };
+
+const DetermineAuthModal = (props: AuthModalProps) => {
+    const api = useSilentApi();
+    const handleError = useErrorHandler();
+    const [info, setInfo] = useState<InfoResult | null>(null);
+
+    useEffect(() => {
+        const run = async () => {
+            let result: SSOInfoResponse | InfoAuthedResponse;
+            try {
+                result = await api<SSOInfoResponse | InfoAuthedResponse>(
+                    getInfo({ intent: 'Auto', reauthScope: props.scope })
+                );
+            } catch (e: any) {
+                const { code } = getApiError(e);
+                if (code === API_CUSTOM_ERROR_CODES.AUTH_SWITCH_TO_SSO) {
+                    result = await api<SSOInfoResponse>(getInfo({ intent: 'SSO', reauthScope: props.scope }));
+                } else {
+                    throw e;
+                }
+            }
+            const value =
+                'SSOChallengeToken' in result
+                    ? ({ type: 'sso', data: result } as const)
+                    : 'Modulus' in result
+                      ? ({ type: 'srp', data: result } as const)
+                      : null;
+            if (value === null) {
+                throw new Error('Unknown authentication session');
+            }
+            setInfo(value);
+        };
+        run().catch((error) => {
+            props.onError?.(error);
+            props.onCancel?.();
+            props.onClose?.();
+            handleError(error);
+        });
+    }, []);
+
+    if (!info) {
+        return null;
+    }
+
+    if (info.type === 'sso') {
+        return <SSOAuthModal {...props} info={info.data} />;
+    }
+
+    return <SrpAuthModal {...props} info={info.data} />;
+};
+
+export default DetermineAuthModal;

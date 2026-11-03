@@ -1,0 +1,94 @@
+import { getIs401Error, getIsConnectionIssue } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { HTTP_ERROR_CODES } from '@proton/shared/lib/errors';
+
+import type { ApiOptions, ApiState } from '../../types/api/api';
+import type { Maybe, MaybeNull } from '../../types/utils';
+import { objectHandler } from '../../utils/object/handler';
+import { msToEpoch } from '../../utils/time/epoch';
+import { PassErrorCode } from './errors';
+
+export const API_BODYLESS_STATUS_CODES = [101, 204, 205, 304];
+
+/** Consecutive failures before the API is considered unreachable. Requests
+ * that reached the network keep failing and nothing succeeded in between:
+ * whatever the statuses say, the client cannot complete its work. */
+export const API_FAILURE_THRESHOLD = 3;
+
+export const buildApiState = () =>
+    objectHandler<ApiState>({
+        appVersionBad: false,
+        failureCount: 0,
+        online: true,
+        pendingCount: 0,
+        queued: [],
+        refreshing: false,
+        resumeLocked: false,
+        serverTime: undefined,
+        sessionInactive: false,
+        sessionLocked: false,
+        ticksUntilOnline: 0,
+        unreachable: false,
+    });
+
+export const getSilenced = ({ silence }: ApiOptions = {}, code: string | number): boolean =>
+    Array.isArray(silence) ? silence.includes(code) : !!silence;
+
+/** Widens `getIsConnectionIssue` with 429: during an outage the API answers with a
+ * mix of 503 and 429, and only the former reads as a connection issue. Without this
+ * a rate limited response looks like a legitimate failure, so the offline unlock
+ * screen is skipped and the user lands on an error state. */
+export const getIsApiUnavailable = (err: unknown) =>
+    getIsConnectionIssue(err) || (err as { status?: number })?.status === HTTP_ERROR_CODES.TOO_MANY_REQUESTS;
+
+/** Gates the offline fallback: only a dead session refuses it. Listing what we
+ * refuse rather than what we accept keeps it right for unseen outage shapes.
+ * 422 is unlisted on purpose: a refresh route 422 becomes `InactiveSessionError` in
+ * `handlers.ts` before reaching here, and any other 422 must not kill the session. */
+export const getIsSessionInvalid = (err: unknown) => getIs401Error(err);
+
+export const isAccessRestricted = (code: number, url?: string) =>
+    (code === PassErrorCode.MISSING_ORG_2FA || code === PassErrorCode.NOT_ALLOWED) &&
+    url?.includes('pass/v1/user/access');
+
+type PageIteratorConfig<T> = {
+    request: (cursor?: string) => Promise<{ data: T[]; cursor?: MaybeNull<string> }>;
+    onBatch?: (count: number) => void;
+};
+
+export const createPageIterator = <T>(options: PageIteratorConfig<T>) => {
+    const iterator = async (cursor?: string, count: number = 0): Promise<T[]> => {
+        const result = await options.request(cursor);
+        const nextCount = count + result.data.length;
+        options.onBatch?.(nextCount);
+
+        return result.cursor ? result.data.concat(await iterator(result.cursor, nextCount)) : result.data;
+    };
+
+    return iterator;
+};
+
+/** Don't fetch if resource has not been modified since our last fetch.
+ * `lastRequestedAt` should be an Unix epoch (seconds) */
+export const fetchIfModified = async (url: string, lastRequestedAt: number): Promise<Maybe<Response>> => {
+    if (lastRequestedAt !== 0) {
+        const header = (await fetch(url, { method: 'HEAD' })).headers.get('Last-Modified');
+        const lastModified = header ? msToEpoch(new Date(header).getTime()) : 0;
+        if (lastRequestedAt >= lastModified) return;
+    }
+
+    return fetch(url);
+};
+
+/** Routes required to bridge the offline-booted state back to a fully
+ * authenticated online session. Anything outside this list is a UI-driven
+ * side-effect that must not fire when offline-booted & session is unresumed. */
+const SESSION_RESUME_ROUTES = [
+    'tests/ping', // connectivity check route
+    'pass/v1/user/session/lock', // post-resume login (checkSessionLock/forceLock)
+    'core/v4/users', // resumeSession (getUser)
+    'core/v4/auth', // core auth routes
+    'auth/', // auth routes
+];
+
+export const isSessionResumeRoute = (url?: string): boolean =>
+    !!url && SESSION_RESUME_ROUTES.some((route) => url.startsWith(route));

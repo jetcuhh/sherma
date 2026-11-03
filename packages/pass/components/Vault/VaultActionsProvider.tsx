@@ -1,0 +1,150 @@
+import type { PropsWithChildren } from 'react';
+import { type FC, createContext, useCallback, useMemo, useState } from 'react';
+import { useDispatch } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { createUseContext } from '../../hooks/useContextFactory';
+import { shareLeaveIntent } from '../../store/actions/creators/access';
+import { sharesVisibilityEdit } from '../../store/actions/creators/share';
+import { emptyTrashIntent, restoreTrashIntent } from '../../store/actions/creators/trash';
+import type { VaultShareItem } from '../../store/reducers';
+import { ShareType } from '../../types/data/shares';
+import type { VaultsVisibilityDTO } from '../../types/data/vault.dto';
+import type { MaybeNull } from '../../types/utils';
+import { pipe } from '../../utils/fp/pipe';
+import { ConfirmationModal } from '../Confirmation/ConfirmationModal';
+import { useNavigate } from '../Navigation/NavigationActions';
+import { useNavigationFilters } from '../Navigation/NavigationFilters';
+import { getLocalPath, getTrashRoute } from '../Navigation/routing';
+import { ConfirmTrashEmpty } from './Actions/ConfirmTrashEmpty';
+import { OrganizeVaultsModal } from './OrganizeVaultsModal';
+import { VaultDelete } from './Vault.delete';
+import { VaultEdit } from './Vault.edit';
+import { VaultMove } from './Vault.move';
+import { VaultNew } from './Vault.new';
+
+type VaultActionsContextValue = {
+    create: () => void;
+    delete: (vault: VaultShareItem) => void;
+    edit: (vault: VaultShareItem) => void;
+    leave: (vault: VaultShareItem) => void;
+    moveItems: (vault: VaultShareItem) => void;
+    select: (selected: string) => void;
+    trashEmpty: () => void;
+    trashRestore: () => void;
+    organize: () => void;
+};
+
+type VaultActionState =
+    | { view: 'create' | 'trash-empty' | 'organize' }
+    | { view: 'edit' | 'delete' | 'move' | 'leave'; vault: VaultShareItem };
+
+const VaultActionsContext = createContext<MaybeNull<VaultActionsContextValue>>(null);
+export const useVaultActions = createUseContext(VaultActionsContext);
+
+export const handleSelect = (navigate: ReturnType<typeof useNavigate>, selected: string) => {
+    switch (selected) {
+        case 'all':
+            return navigate(getLocalPath(), {
+                filters: {
+                    selectedShareId: null,
+                    selectedFolderId: null,
+                },
+            });
+        case 'trash':
+            return navigate(getTrashRoute(), {
+                filters: {
+                    selectedShareId: null,
+                    selectedFolderId: null,
+                },
+            });
+        default: {
+            return navigate(getLocalPath(`share/${selected}`), {
+                filters: {
+                    selectedShareId: selected,
+                    selectedFolderId: null,
+                },
+            });
+        }
+    }
+};
+
+export const VaultActionsProvider: FC<PropsWithChildren> = ({ children }) => {
+    const navigate = useNavigate();
+    const { filters, setFilters } = useNavigationFilters();
+    const dispatch = useDispatch();
+
+    const [state, setState] = useState<MaybeNull<VaultActionState>>();
+    const reset = () => setState(null);
+
+    const onTrashEmpty = useCallback(() => dispatch(emptyTrashIntent()), []);
+
+    const onVaultDisabled = (shareId: string) => {
+        if (filters.selectedShareId === shareId) setFilters({ selectedShareId: null, selectedFolderId: null });
+        reset();
+    };
+
+    const onVaultCreated = (selectedShareId: string) => setFilters({ selectedShareId });
+
+    const onVaultLeave = ({ shareId }: VaultShareItem) => {
+        onVaultDisabled(shareId);
+        dispatch(shareLeaveIntent({ shareId, targetType: ShareType.Vault }));
+    };
+
+    const onVaultOrganize = useCallback((dto: VaultsVisibilityDTO) => {
+        dispatch(sharesVisibilityEdit.intent(dto));
+    }, []);
+
+    const actions = useMemo<VaultActionsContextValue>(
+        () => ({
+            create: () => setState({ view: 'create' }),
+            delete: (vault) => setState({ view: 'delete', vault }),
+            edit: (vault) => setState({ view: 'edit', vault }),
+            leave: (vault) => setState({ view: 'leave', vault }),
+            moveItems: (vault) => setState({ view: 'move', vault }),
+            select: (selected) => handleSelect(navigate, selected),
+            trashEmpty: () => setState({ view: 'trash-empty' }),
+            trashRestore: () => dispatch(restoreTrashIntent()),
+            organize: () => setState({ view: 'organize' }),
+        }),
+        []
+    );
+
+    return (
+        <VaultActionsContext.Provider value={actions}>
+            {children}
+
+            {(() => {
+                if (!state) return;
+                switch (state?.view) {
+                    case 'create':
+                        return <VaultNew onSuccess={pipe(onVaultCreated, reset)} onClose={reset} />;
+                    case 'edit':
+                        return <VaultEdit vault={state.vault} onSuccess={reset} onClose={reset} />;
+                    case 'delete':
+                        return <VaultDelete vault={state.vault} onSubmit={onVaultDisabled} onClose={reset} />;
+                    case 'move':
+                        return <VaultMove vault={state.vault} onClose={reset} />;
+
+                    case 'leave':
+                        return (
+                            <ConfirmationModal
+                                open
+                                onClose={reset}
+                                onSubmit={() => onVaultLeave(state.vault)}
+                                title={c('Title').t`Leave vault?`}
+                                submitText={c('Action').t`Leave`}
+                                alertText={c('Warning')
+                                    .t`You will no longer have access to this vault. To join it again, you will need a new invitation.`}
+                            />
+                        );
+                    case 'trash-empty':
+                        return <ConfirmTrashEmpty onCancel={reset} onConfirm={pipe(onTrashEmpty, reset)} />;
+                    case 'organize':
+                        return <OrganizeVaultsModal onConfirm={pipe(onVaultOrganize, reset)} onClose={reset} />;
+                }
+            })()}
+        </VaultActionsContext.Provider>
+    );
+};

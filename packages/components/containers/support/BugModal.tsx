@@ -1,0 +1,388 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+
+import { c } from 'ttag';
+
+import { useApi } from '@proton/app-context/useApi';
+import { useConfig } from '@proton/app-context/useConfig';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import { Href } from '@proton/atoms/Href/Href';
+import { IcChevronDown } from '@proton/icons/icons/IcChevronDown';
+import { reportBug } from '@proton/shared/lib/api/reports';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import { APPS, BRAND_NAME } from '@proton/shared/lib/constants';
+import { isElectronApp } from '@proton/shared/lib/helpers/desktop';
+import { maxLengthValidator, requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import { omit } from '@proton/shared/lib/helpers/object';
+import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
+import { useFlag } from '@proton/unleash/useFlag';
+import noop from '@proton/utils/noop';
+
+import Collapsible from '../../components/collapsible/Collapsible';
+import CollapsibleContent from '../../components/collapsible/CollapsibleContent';
+import CollapsibleHeader from '../../components/collapsible/CollapsibleHeader';
+import CollapsibleHeaderIconButton from '../../components/collapsible/CollapsibleHeaderIconButton';
+import { DropdownSizeUnit } from '../../components/dropdown/utils';
+import Form from '../../components/form/Form';
+import type { ModalProps } from '../../components/modalTwo/Modal';
+import Modal from '../../components/modalTwo/Modal';
+import ModalContent from '../../components/modalTwo/ModalContent';
+import ModalFooter from '../../components/modalTwo/ModalFooter';
+import ModalHeader from '../../components/modalTwo/ModalHeader';
+import Option from '../../components/option/Option';
+import SelectTwo from '../../components/selectTwo/SelectTwo';
+import { InputField as InputFieldTwo } from '../../components/v2/field/InputField';
+import TextAreaTwo from '../../components/v2/input/TextArea';
+import useFormErrors from '../../components/v2/useFormErrors';
+import { getCharacterCountText } from '../../helpers/getCharacterCountText';
+import { getClientName, getReportInfo } from '../../helpers/report';
+import type { Screenshot } from './AttachScreenshot';
+import AttachScreenshot from './AttachScreenshot';
+import BugModalLogs from './BugModalLogs';
+import type { OptionItem, OptionOptionItem } from './bugCategories';
+import { findCategoryOption, getMailOptions, getVPNOptions } from './bugCategories';
+import { REPORT_MAX_CHARS } from './constants';
+import { useBugModalLogs } from './useBugModalLogs';
+
+type BugModalMode = 'chat-no-agents';
+
+interface Model extends ReturnType<typeof getReportInfo> {
+    Category: OptionOptionItem | undefined;
+    Description: string;
+    Email: string;
+    Username: string;
+}
+
+export interface Props {
+    username?: string;
+    email?: string;
+    mode?: BugModalMode;
+    onClose: ModalProps['onClose'];
+    onExit: ModalProps['onExit'];
+    open: ModalProps['open'];
+    app?: APP_NAMES;
+    reportDescriptionContext?: string[];
+    initialDescription?: string;
+    /** Matched case-insensitively against an option's untranslated `value`; falls back to the app default. */
+    initialCategory?: string;
+}
+
+const BugModal = ({
+    username: Username = '',
+    email,
+    mode,
+    open,
+    onClose,
+    onExit,
+    app: maybeApp,
+    reportDescriptionContext,
+    initialDescription,
+    initialCategory,
+}: Props) => {
+    const api = useApi();
+    const location = useLocation();
+    const [loading, setLoading] = useState(false);
+
+    const handleClose = loading ? noop : onClose;
+
+    const { APP_VERSION, CLIENT_TYPE, APP_NAME } = useConfig();
+    const isVpn = APP_NAME === APPS.PROTONVPN_SETTINGS;
+    const isDrive = APP_NAME === APPS.PROTONDRIVE;
+    const clearCacheLink = isVpn
+        ? 'https://protonvpn.com/support/clear-browser-cache-cookies/'
+        : getKnowledgeBaseUrl('/how-to-clean-cache-and-cookies');
+    const Client = getClientName(APP_NAME);
+    const showCategory = !isDrive;
+    const { createNotification } = useNotifications();
+    const isAuthenticatorAvailable = useFlag('AuthenticatorSettingsEnabled');
+
+    const options = useMemo(() => {
+        return isVpn ? getVPNOptions() : getMailOptions({ isAuthenticatorAvailable });
+    }, []);
+
+    const categoryOptions = options.map((option) => {
+        const { type, value } = option;
+        if (type === 'label') {
+            return (
+                <label className="text-semibold px-2 py-1 block" key={value}>
+                    {value}
+                </label>
+            );
+        }
+
+        const { title } = option;
+        return <Option title={title} value={option} key={value} />;
+    });
+
+    const app = maybeApp || APP_NAME;
+    const [model, setModel] = useState<Model>(() => {
+        const defaultCategory = options.find(
+            (option): option is OptionOptionItem => option.type === 'option' && option.app === app
+        );
+        const seededCategory =
+            initialCategory && showCategory ? findCategoryOption(options, initialCategory) : undefined;
+        return {
+            ...getReportInfo(),
+            Category: seededCategory || defaultCategory,
+            Description: initialDescription || '',
+            Email: email || '',
+            Username: Username || '',
+        };
+    });
+    const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+    const [uploadingScreenshots, setUploadingScreenshots] = useState(false);
+    const { collectLogs, collectLogsInboxDesktop, includeLogs, setIncludeLogs, setPreloadedLogs, getLogAttachments } =
+        useBugModalLogs(app);
+
+    const link = <Href key="linkClearCache" href={clearCacheLink}>{c('Link').t`clearing your browser cache`}</Href>;
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    const setModelDiff = (model: Partial<Model>) => {
+        setModel((oldModel) => ({ ...oldModel, ...model }));
+    };
+    const handleChange = <K extends keyof Model>(key: K) => {
+        return (value: Model[K]) => setModelDiff({ [key]: value });
+    };
+
+    const categoryTitle = model.Category?.title || '';
+    const clientType = model.Category?.clientType || CLIENT_TYPE;
+
+    const handleSubmit = async () => {
+        if (!onFormSubmit()) {
+            return;
+        }
+
+        setLoading(true);
+
+        const getParameters = async () => {
+            const screenshotAttachments: { [key: string]: Blob } = screenshots.reduce(
+                (acc: { [key: string]: Blob }, { name, blob }) => {
+                    acc[name] = blob;
+                    return acc;
+                },
+                {}
+            );
+
+            const logsAttachements = await getLogAttachments(screenshotAttachments);
+            const attachments = {
+                ...screenshotAttachments,
+                ...logsAttachements,
+            };
+
+            const Title = [!isVpn && '[V5]', `[${Client}] Bug [${location.pathname}]`, categoryTitle]
+                .filter(Boolean)
+                .join(' ');
+
+            const Description = reportDescriptionContext?.length
+                ? `${model.Description.trimEnd()}\n\n${reportDescriptionContext.join('\n')}`
+                : model.Description;
+
+            return {
+                ...attachments,
+                ...omit(model, ['OSArtificial', 'Category']),
+                Description,
+                Trigger: mode || '',
+                Client,
+                ClientVersion: APP_VERSION,
+                ClientType: clientType,
+                Title,
+            };
+        };
+
+        try {
+            await api(reportBug(await getParameters(), 'form'));
+            onClose?.();
+            createNotification({ text: c('Success').t`Problem reported` });
+        } catch (error) {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!model.Email && email) {
+            setModel({ ...model, Email: email });
+        }
+    }, [email]);
+
+    const OSAndOSVersionFields = (
+        <>
+            <InputFieldTwo
+                id="OS"
+                label={c('Label').t`Operating system`}
+                value={model.OS}
+                onValue={handleChange('OS')}
+                disabled={loading}
+            />
+            <InputFieldTwo
+                id="OSVersion"
+                label={c('Label').t`Operating system version`}
+                value={model.OSVersion}
+                onValue={handleChange('OSVersion')}
+                disabled={loading}
+            />
+        </>
+    );
+
+    const modeAlert = (() => {
+        if (mode === 'chat-no-agents') {
+            return (
+                <p>
+                    {c('Warning')
+                        .t`Unfortunately, we’re not online at the moment. Please complete the form below to describe your issue, and we will look into it and be in touch when we’re back online.`}
+                </p>
+            );
+        }
+
+        return (
+            <>
+                <p>
+                    {c('Info').jt`Refreshing the page or ${link} will automatically resolve most issues.`}
+                    <br />
+                    <br />
+                    {c('Warning')
+                        .t`Reports are not end-to-end encrypted, please do not send any sensitive information.`}
+                </p>
+            </>
+        );
+    })();
+
+    // Retrieves the selected option by title to ensure referential equality for Select's value
+    const selectedValue = options.find(
+        (option) => (option.type === 'option' && option.title === model.Category?.title) || ''
+    );
+
+    return (
+        <Modal as={Form} open={open} onClose={handleClose} onExit={onExit} onSubmit={handleSubmit}>
+            <ModalHeader title={c('Title').t`Report a problem`} />
+            <ModalContent>
+                {modeAlert}
+                {Username ? null : (
+                    <InputFieldTwo
+                        autoFocus
+                        id="Username"
+                        label={c('Label').t`${BRAND_NAME} username`}
+                        value={model.Username}
+                        onValue={handleChange('Username')}
+                        disabled={loading}
+                    />
+                )}
+                <InputFieldTwo
+                    id="Email"
+                    label={c('Label').t`Email address`}
+                    placeholder={c('Placeholder').t`A way to contact you`}
+                    value={model.Email}
+                    onValue={handleChange('Email')}
+                    error={validator([requiredValidator(model.Email)])}
+                    disabled={loading}
+                />
+                {showCategory && (
+                    <InputFieldTwo
+                        as={SelectTwo<OptionItem>}
+                        label={c('Label').t`Category`}
+                        placeholder={c('Placeholder').t`Select`}
+                        id="Title"
+                        value={selectedValue}
+                        onValue={(option: OptionItem) => {
+                            if (option.type === 'option') {
+                                setModelDiff({ Category: option });
+                            }
+                        }}
+                        error={validator([requiredValidator(categoryTitle)])}
+                        disabled={loading}
+                        size={{
+                            width: DropdownSizeUnit.Anchor,
+                            maxWidth: DropdownSizeUnit.Viewport,
+                            maxHeight: '16em',
+                        }}
+                    >
+                        {categoryOptions}
+                    </InputFieldTwo>
+                )}
+                <InputFieldTwo
+                    as={TextAreaTwo}
+                    id="Description"
+                    label={c('Label').t`What happened?`}
+                    placeholder={c('Placeholder').t`Please describe the problem and include any error messages`}
+                    value={model.Description}
+                    onValue={handleChange('Description')}
+                    error={validator([
+                        requiredValidator(model.Description),
+                        maxLengthValidator(model.Description, REPORT_MAX_CHARS),
+                    ])}
+                    assistiveText={
+                        <span
+                            className={`mb-2 ${
+                                model.Description.length > REPORT_MAX_CHARS ? 'color-danger' : undefined
+                            }`}
+                        >
+                            {getCharacterCountText(model.Description.length, REPORT_MAX_CHARS)}
+                        </span>
+                    }
+                    rows={5}
+                    disabled={loading}
+                />
+                <AttachScreenshot
+                    id="Attachments"
+                    screenshots={screenshots}
+                    setScreenshots={setScreenshots}
+                    uploading={uploadingScreenshots}
+                    setUploading={setUploadingScreenshots}
+                    disabled={loading}
+                />
+                <BugModalLogs
+                    collectLogs={collectLogs}
+                    collectLogsInboxDesktop={collectLogsInboxDesktop}
+                    includeLogs={includeLogs}
+                    onIncludeLogsChange={setIncludeLogs}
+                    onLogsLoaded={setPreloadedLogs}
+                    disabled={loading}
+                />
+                {model.OSArtificial && OSAndOSVersionFields}
+
+                <Collapsible className="mt-4">
+                    <CollapsibleHeader
+                        disableFullWidth
+                        suffix={
+                            <CollapsibleHeaderIconButton size="small">
+                                <IcChevronDown />
+                            </CollapsibleHeaderIconButton>
+                        }
+                    >
+                        <label className="text-semibold">{c('Label').t`System information`}</label>
+                    </CollapsibleHeader>
+
+                    <CollapsibleContent className="mt-4">
+                        {!model.OSArtificial && OSAndOSVersionFields}
+
+                        <InputFieldTwo
+                            id="Browser"
+                            label={isElectronApp ? c('Label').t`Client` : c('Label').t`Browser`}
+                            value={model.Browser}
+                            onValue={handleChange('Browser')}
+                            disabled={loading}
+                        />
+                        <InputFieldTwo
+                            id="BrowserVersion"
+                            label={isElectronApp ? c('Label').t`Client version` : c('Label').t`Browser version`}
+                            value={model.BrowserVersion}
+                            onValue={handleChange('BrowserVersion')}
+                            disabled={loading}
+                        />
+                    </CollapsibleContent>
+                </Collapsible>
+            </ModalContent>
+            <ModalFooter>
+                <Button onClick={handleClose} disabled={loading}>
+                    {c('Action').t`Cancel`}
+                </Button>
+                <Button loading={loading} disabled={uploadingScreenshots} type="submit" color="norm">
+                    {c('Action').t`Submit`}
+                </Button>
+            </ModalFooter>
+        </Modal>
+    );
+};
+
+export default BugModal;

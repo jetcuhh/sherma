@@ -1,0 +1,46 @@
+import type { PLANS } from '@proton/payments/core/constants';
+import type { Audience } from '@proton/shared/lib/interfaces/Subscription';
+import type { FreePlanDefault, PlansMap } from '@proton/shared/lib/payments/plan/interface';
+import isTruthy from '@proton/utils/isTruthy';
+
+import { getSupportFeatures, getTeamManagementFeatures } from './b2b';
+import { getCalendarFeatures } from './calendar';
+import { getDriveFeatures } from './drive';
+import { getHighlightFeatures } from './highlights';
+import type { PlanCardFeature } from './interface';
+import { getLumoFeatures } from './lumo';
+import { getMailFeatures } from './mail';
+import { getMeetFeatures } from './meet';
+import { getPassFeatures } from './pass';
+import { getVPNFeatures } from './vpn';
+import { getWalletFeatures } from './wallet';
+
+export const getAllFeatures = ({ plansMap, freePlan }: { plansMap: PlansMap; freePlan: FreePlanDefault }) => {
+    return {
+        highlight: getHighlightFeatures(plansMap, freePlan),
+        mail: getMailFeatures(plansMap),
+        calendar: getCalendarFeatures(plansMap),
+        drive: getDriveFeatures(plansMap, freePlan),
+        pass: getPassFeatures(),
+        vpn: getVPNFeatures(),
+        wallet: getWalletFeatures(),
+        lumo: getLumoFeatures(),
+        meet: getMeetFeatures(),
+        team: getTeamManagementFeatures(),
+        support: getSupportFeatures(),
+    } as const;
+};
+
+export const getFeatureDefinitions = (plan: PLANS, features: PlanCardFeature[], audience: Audience) => {
+    const filterAudience = (feature: PlanCardFeature) => {
+        return feature.target === undefined || feature.target === audience;
+    };
+    return features
+        .filter(filterAudience)
+        .map((feature) => {
+            return feature.plans[plan as keyof typeof feature.plans];
+        })
+        .filter(isTruthy);
+};
+
+export type AllFeatures = ReturnType<typeof getAllFeatures>;

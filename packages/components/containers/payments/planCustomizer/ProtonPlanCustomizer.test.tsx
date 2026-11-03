@@ -1,0 +1,712 @@
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+import { ADDON_NAMES, ADDON_PREFIXES, CYCLE, FREE_SUBSCRIPTION, PLANS } from '@proton/payments/core/constants';
+import type { FreeSubscription, PlanIDs } from '@proton/payments/core/interface';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { buildSubscription } from '@proton/payments/testing/buildSubscription';
+import { PLANS_MAP } from '@proton/payments/testing/data-plans';
+import { Renew } from '@proton/shared/lib/payments/subscription/constants';
+
+import { type Props, ProtonPlanCustomizer } from './ProtonPlanCustomizer';
+
+const onChangePlanIDsMock = jest.fn();
+
+const mockUseFlag = jest.fn().mockReturnValue(false);
+jest.mock('@proton/unleash/useFlag', () => ({
+    useFlag: (...args: any[]) => mockUseFlag(...args),
+}));
+
+// Domain gating reads its feature flag through the standalone client (in showAddonCustomizer), not the hook.
+const mockIsEnabled = jest.fn().mockReturnValue(false);
+jest.mock('@proton/unleash/standaloneClient', () => ({
+    getStandaloneUnleashClient: () => ({ isEnabled: (...args: any[]) => mockIsEnabled(...args) }),
+}));
+
+jest.mock('@proton/app-context/useConfig', () => ({
+    __esModule: true,
+    useConfig: jest.fn().mockReturnValue({
+        APP_NAME: 'proton-account',
+    }),
+}));
+
+beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseFlag.mockReturnValue(false);
+    mockIsEnabled.mockReturnValue(false);
+});
+
+const buildProps = ({
+    selectedPlanIDs,
+    latestSubscription = FREE_SUBSCRIPTION,
+    scribeAddonEnabled = true,
+    lumoAddonEnabled = true,
+    meetAddonEnabled = false,
+    loading = false,
+}: {
+    selectedPlanIDs: PlanIDs;
+    latestSubscription?: Subscription | FreeSubscription;
+    scribeAddonEnabled?: boolean;
+    lumoAddonEnabled?: boolean;
+    meetAddonEnabled?: boolean;
+    loading?: boolean;
+}): Props => ({
+    currency: 'EUR',
+    cycle: CYCLE.MONTHLY,
+    selectedPlanIDs,
+    onChangePlanIDs: onChangePlanIDsMock,
+    plansMap: PLANS_MAP,
+    loading,
+    latestSubscription,
+    // Explicit flags override the pipeline's visibility rules; meet defaults off to keep these expectations stable.
+    addonFlags: {
+        [ADDON_PREFIXES.SCRIBE]: scribeAddonEnabled,
+        [ADDON_PREFIXES.LUMO]: lumoAddonEnabled,
+        [ADDON_PREFIXES.MEET]: meetAddonEnabled,
+    },
+    telemetryContext: 'other',
+});
+
+const defaultProps = buildProps({ selectedPlanIDs: {} });
+
+it('should render', () => {
+    render(<ProtonPlanCustomizer {...buildProps({ selectedPlanIDs: { [PLANS.MAIL]: 1 } })} />);
+});
+
+const lumoAddonBannerTestId = 'lumo-addon-banner';
+
+it.each([
+    {
+        plan: PLANS.DRIVE,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.DRIVE_PRO,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_DRIVE_PRO}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.DRIVE_BUSINESS,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_DRIVE_BUSINESS}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.PASS,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.MAIL,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.MAIL_PRO,
+        expectedCustomizers: [
+            `${ADDON_NAMES.MEMBER_MAIL_PRO}-customizer`,
+            `${ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO}-customizer`,
+            lumoAddonBannerTestId,
+        ],
+    },
+    {
+        plan: PLANS.MAIL_BUSINESS,
+        expectedCustomizers: [
+            `${ADDON_NAMES.MEMBER_MAIL_BUSINESS}-customizer`,
+            `${ADDON_NAMES.MEMBER_SCRIBE_MAIL_BUSINESS}-customizer`,
+            lumoAddonBannerTestId,
+        ],
+    },
+    {
+        plan: PLANS.VPN2024,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.BUNDLE,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.BUNDLE_PRO,
+        expectedCustomizers: [
+            `${ADDON_NAMES.MEMBER_BUNDLE_PRO}-customizer`,
+            `${ADDON_NAMES.MEMBER_SCRIBE_BUNDLE_PRO}-customizer`,
+            `${ADDON_NAMES.IP_BUNDLE_PRO}-customizer`,
+            lumoAddonBannerTestId,
+        ],
+    },
+    {
+        plan: PLANS.BUNDLE_PRO_2024,
+        expectedCustomizers: [
+            `${ADDON_NAMES.MEMBER_BUNDLE_PRO_2024}-customizer`,
+            `${ADDON_NAMES.MEMBER_SCRIBE_BUNDLE_PRO_2024}-customizer`,
+            `${ADDON_NAMES.IP_BUNDLE_PRO_2024}-customizer`,
+            lumoAddonBannerTestId,
+        ],
+    },
+    {
+        plan: PLANS.FAMILY,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.DUO,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.VPN_PRO,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_VPN_PRO}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.VPN_BUSINESS,
+        expectedCustomizers: [
+            `${ADDON_NAMES.MEMBER_VPN_BUSINESS}-customizer`,
+            `${ADDON_NAMES.IP_VPN_BUSINESS}-customizer`,
+            lumoAddonBannerTestId,
+        ],
+    },
+    {
+        plan: PLANS.PASS_PRO,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_PASS_PRO}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.PASS_BUSINESS,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_PASS_BUSINESS}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.PASS_FAMILY,
+        expectedCustomizers: [lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.VPN_PASS_BUNDLE_BUSINESS,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_VPN_PASS_BUNDLE_BUSINESS}-customizer`, lumoAddonBannerTestId],
+    },
+    {
+        plan: PLANS.LUMO_BUSINESS,
+        expectedCustomizers: [`${ADDON_NAMES.MEMBER_LUMO_BUSINESS}-customizer`],
+    },
+])('should show available addons for $plan', ({ plan, expectedCustomizers }) => {
+    render(<ProtonPlanCustomizer {...buildProps({ selectedPlanIDs: { [plan]: 1 } })} />);
+
+    expectedCustomizers.forEach((customizer) => {
+        expect(screen.getByTestId(customizer)).toBeInTheDocument();
+    });
+});
+
+it('should disable decrease button if the user cancelled the subscription', () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 1,
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({
+                selectedPlanIDs: planIDs,
+                latestSubscription: buildSubscription(planIDs, { Renew: Renew.Disabled }),
+            })}
+        />
+    );
+    expect(screen.queryByTestId(`decrease-addon-${ADDON_NAMES.MEMBER_MAIL_PRO}`)).toBeDisabled();
+    expect(screen.getByTestId('decrease-blocked-reason')).toBeInTheDocument();
+});
+
+const plansWithIpAddons = [
+    {
+        plan: PLANS.BUNDLE_PRO,
+        addon: ADDON_NAMES.IP_BUNDLE_PRO,
+    },
+    {
+        plan: PLANS.BUNDLE_PRO_2024,
+        addon: ADDON_NAMES.IP_BUNDLE_PRO_2024,
+    },
+    {
+        plan: PLANS.VPN_BUSINESS,
+        addon: ADDON_NAMES.IP_VPN_BUSINESS,
+    },
+];
+
+it.each(plansWithIpAddons)(
+    'should enable decrease button if the feature flag is enabled - $plan',
+    ({ plan, addon }) => {
+        mockUseFlag.mockReturnValue(true);
+
+        const planIDs: PlanIDs = {
+            [plan]: 1,
+            [addon]: 1,
+        };
+
+        render(
+            <ProtonPlanCustomizer
+                {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+            />
+        );
+        expect(screen.getByTestId(`decrease-addon-${addon}`)).toBeEnabled();
+    }
+);
+
+it('should increase the number of scribes together with the number of members', async () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 1, // 1 member (so makes 2 members in total)
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2, // 2 scribes
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    const increaseMemberButton = screen.getByTestId(`increase-addon-${ADDON_NAMES.MEMBER_MAIL_PRO}`);
+
+    fireEvent.click(increaseMemberButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 2, // 2 members (so makes 3 members in total)
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 3, // 3 scribes
+    });
+});
+
+it('should decrease the number of scribes together with the number of members', async () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 1, // 1 member (so makes 2 members in total)
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2, // 2 scribes
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    const decreaseMemberButton = screen.getByTestId(`decrease-addon-${ADDON_NAMES.MEMBER_MAIL_PRO}`);
+    fireEvent.click(decreaseMemberButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 1, // 1 scribe
+    });
+});
+
+it('should not increase the number of scribes if the number of members is not the same', async () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2, // 2 scribes
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    const increaseMemberButton = screen.getByTestId(`increase-addon-${ADDON_NAMES.MEMBER_MAIL_PRO}`);
+    fireEvent.click(increaseMemberButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2,
+    });
+});
+
+it('should not decrease the number of scribes if the number of members is not the same', async () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 2, // 2 members (so makes 3 members in total)
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2, // 2 scribes
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    const decreaseMemberButton = screen.getByTestId(`decrease-addon-${ADDON_NAMES.MEMBER_MAIL_PRO}`);
+    fireEvent.click(decreaseMemberButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2,
+    });
+});
+
+it('should allow input of members through text field', async () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 2, // 2 scribes
+    };
+
+    render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    const input = screen.getByTestId(`${ADDON_NAMES.MEMBER_MAIL_PRO}-customizer`);
+    fireEvent.change(input, { target: { value: '10' } });
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 9,
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 10,
+    });
+});
+
+describe('domain addon gating (VPN_BUSINESS)', () => {
+    const domainCustomizerId = `${ADDON_NAMES.DOMAIN_VPN_BUSINESS}-customizer`;
+
+    it('renders the domain customizer when DomainVpnBiz2023 flag is true', () => {
+        mockIsEnabled.mockImplementation((flag: string) => flag === 'DomainVpnBiz2023');
+        const planIDs: PlanIDs = { [PLANS.VPN_BUSINESS]: 1 };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={planIDs}
+                latestSubscription={buildSubscription(planIDs)}
+            />
+        );
+
+        expect(screen.getByTestId(domainCustomizerId)).toBeInTheDocument();
+    });
+
+    it('hides the domain customizer when DomainVpnBiz2023 flag is false and no domain addons are selected', () => {
+        const planIDs: PlanIDs = { [PLANS.VPN_BUSINESS]: 1 };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={planIDs}
+                latestSubscription={buildSubscription(planIDs)}
+            />
+        );
+
+        expect(screen.queryByTestId(domainCustomizerId)).not.toBeInTheDocument();
+    });
+
+    it('still renders the domain customizer when disabled but domain addons are already purchased (grandfathered)', () => {
+        const planIDs: PlanIDs = {
+            [PLANS.VPN_BUSINESS]: 1,
+            [ADDON_NAMES.DOMAIN_VPN_BUSINESS]: 2,
+        };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={planIDs}
+                latestSubscription={buildSubscription(planIDs)}
+            />
+        );
+
+        expect(screen.getByTestId(domainCustomizerId)).toBeInTheDocument();
+    });
+
+    it('still renders the domain customizer when latestSubscription has domain addons but selectedPlanIDs does not (regression: must use currentPlan not selectedPlan)', () => {
+        const latestPlanIDs: PlanIDs = {
+            [PLANS.VPN_BUSINESS]: 1,
+            [ADDON_NAMES.DOMAIN_VPN_BUSINESS]: 2,
+        };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={{ [PLANS.VPN_BUSINESS]: 1 }}
+                latestSubscription={buildSubscription(latestPlanIDs)}
+            />
+        );
+
+        expect(screen.getByTestId(domainCustomizerId)).toBeInTheDocument();
+    });
+
+    it('does not affect member or IP customizers when DomainVpnBiz2023 flag is false', () => {
+        const planIDs: PlanIDs = { [PLANS.VPN_BUSINESS]: 1 };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={planIDs}
+                latestSubscription={buildSubscription(planIDs)}
+            />
+        );
+
+        expect(screen.getByTestId(`${ADDON_NAMES.MEMBER_VPN_BUSINESS}-customizer`)).toBeInTheDocument();
+        expect(screen.getByTestId(`${ADDON_NAMES.IP_VPN_BUSINESS}-customizer`)).toBeInTheDocument();
+    });
+
+    it('does not affect non-VPN_BUSINESS domain addons when DomainVpnBiz2023 flag is false', () => {
+        const planIDs: PlanIDs = { [PLANS.BUNDLE_PRO_2024]: 1 };
+
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={planIDs}
+                latestSubscription={buildSubscription(planIDs)}
+            />
+        );
+
+        expect(screen.getByTestId(`${ADDON_NAMES.DOMAIN_BUNDLE_PRO_2024}-customizer`)).toBeInTheDocument();
+    });
+});
+
+describe('rule-gated addons resolve their visibility from config when no flag is passed', () => {
+    it('shows the lumo customizer via its visibility rules when addonFlags omits LUMO', () => {
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={{ [PLANS.MAIL]: 1 }}
+                addonFlags={{ [ADDON_PREFIXES.SCRIBE]: false }}
+            />
+        );
+
+        expect(screen.getByTestId(lumoAddonBannerTestId)).toBeInTheDocument();
+    });
+
+    it('lets an explicit addonFlags override hide a rule-gated addon', () => {
+        render(
+            <ProtonPlanCustomizer
+                {...defaultProps}
+                selectedPlanIDs={{ [PLANS.MAIL]: 1 }}
+                addonFlags={{ [ADDON_PREFIXES.SCRIBE]: false, [ADDON_PREFIXES.LUMO]: false }}
+            />
+        );
+
+        expect(screen.queryByTestId(lumoAddonBannerTestId)).not.toBeInTheDocument();
+    });
+});
+
+it('should balance scribes and lumos when total exceeds members', () => {
+    const planIDs: PlanIDs = {
+        [PLANS.MAIL_PRO]: 1, // 1 member
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 3, // 3 members (so makes 4 members in total)
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 4, // 4 scribes
+    };
+
+    const { rerender } = render(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: planIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    // the banner Add Lumo button replaces all scribes with lumos
+    const lumoBannerAddButton = screen.getByTestId(`lumo-addon-banner-add-button`);
+    fireEvent.click(lumoBannerAddButton);
+    const newPlanIDs = {
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 3,
+        [ADDON_NAMES.LUMO_MAIL_PRO]: 4,
+    };
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith(newPlanIDs);
+    rerender(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: newPlanIDs, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+
+    // at this point we have max number of lumos so addon add button is disabled
+    expect(screen.getByTestId(`increase-addon-${ADDON_NAMES.LUMO_MAIL_PRO}`)).toBeDisabled();
+
+    // when we increase the number of scribes, the number of lumos should be reduced
+    const increaseScribeButton = screen.getByTestId(`increase-addon-${ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO}`);
+    fireEvent.click(increaseScribeButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 3,
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 1,
+        [ADDON_NAMES.LUMO_MAIL_PRO]: 3,
+    });
+
+    // when we increase the number of lumos then it should decrease the number of scribes
+    const newPlanIDs2 = {
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 3,
+        [ADDON_NAMES.MEMBER_SCRIBE_MAIL_PRO]: 1,
+        [ADDON_NAMES.LUMO_MAIL_PRO]: 3,
+    };
+    rerender(
+        <ProtonPlanCustomizer
+            {...buildProps({ selectedPlanIDs: newPlanIDs2, latestSubscription: buildSubscription(planIDs) })}
+        />
+    );
+    const increaseLumoButton = screen.getByTestId(`increase-addon-${ADDON_NAMES.LUMO_MAIL_PRO}`);
+    fireEvent.click(increaseLumoButton);
+    expect(onChangePlanIDsMock).toHaveBeenCalledWith({
+        [PLANS.MAIL_PRO]: 1,
+        [ADDON_NAMES.MEMBER_MAIL_PRO]: 3,
+        [ADDON_NAMES.LUMO_MAIL_PRO]: 4,
+    });
+});
+
+describe('condensed add-ons', () => {
+    const unlimitedProps = buildProps({ selectedPlanIDs: { [PLANS.BUNDLE]: 1 }, meetAddonEnabled: true });
+
+    it('should keep the banners when condensedAddons is not passed', () => {
+        render(<ProtonPlanCustomizer {...unlimitedProps} />);
+
+        expect(screen.getByTestId('lumo-addon-banner')).toBeInTheDocument();
+        expect(screen.getByTestId('meet-addon-banner')).toBeInTheDocument();
+        expect(screen.queryByTestId('condensed-addons-card')).not.toBeInTheDocument();
+    });
+
+    it('should group Meet then Lumo into one card instead of the banners', () => {
+        render(<ProtonPlanCustomizer {...unlimitedProps} condensedAddons />);
+
+        const cards = screen.getAllByTestId('condensed-addons-card');
+        expect(cards).toHaveLength(1);
+        expect(screen.queryByTestId('lumo-addon-banner')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('meet-addon-banner')).not.toBeInTheDocument();
+
+        const meetRow = screen.getByTestId('meet-addon-row');
+        const lumoRow = screen.getByTestId('lumo-addon-row');
+        expect(cards[0]).toContainElement(meetRow);
+        expect(cards[0]).toContainElement(lumoRow);
+        expect(meetRow.compareDocumentPosition(lumoRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+        [
+            { row: meetRow, name: 'Meet Professional' },
+            { row: lumoRow, name: 'Lumo' },
+        ].forEach(({ row, name }) => {
+            expect(within(row).getByText(name)).toBeInTheDocument();
+            expect(within(row).getByText('per month')).toBeInTheDocument();
+            expect(within(row).getByRole('button', { name: `About ${name}` })).toBeInTheDocument();
+            expect(within(row).getByRole('button', { name: `Add ${name}` })).toBeInTheDocument();
+        });
+    });
+
+    // The added state must be whatever the banner layout shows today, rendered inside the card
+    const addedStateTestIds = [
+        `increase-addon-${ADDON_NAMES.LUMO_BUNDLE}`,
+        `decrease-addon-${ADDON_NAMES.LUMO_BUNDLE}`,
+        `increase-addon-${ADDON_NAMES.MEET_BUNDLE}`,
+        `decrease-addon-${ADDON_NAMES.MEET_BUNDLE}`,
+        'meet-addon-active',
+        'decrease-blocked-reason',
+    ];
+
+    const getRenderedTestIds = () => addedStateTestIds.filter((testId) => screen.queryByTestId(testId));
+
+    it.each([
+        { addon: ADDON_NAMES.LUMO_BUNDLE, rowTestId: 'lumo-addon-row', otherRowTestId: 'meet-addon-row' },
+        { addon: ADDON_NAMES.MEET_BUNDLE, rowTestId: 'meet-addon-row', otherRowTestId: 'lumo-addon-row' },
+    ])(
+        'should show the same added state as today inside the card once $addon is added',
+        ({ addon, rowTestId, otherRowTestId }) => {
+            const { rerender } = render(<ProtonPlanCustomizer {...unlimitedProps} condensedAddons />);
+
+            fireEvent.click(screen.getByTestId(`${rowTestId}-add-button`));
+            const newPlanIDs = { [PLANS.BUNDLE]: 1, [addon]: 1 };
+            expect(onChangePlanIDsMock).toHaveBeenCalledWith(newPlanIDs);
+
+            rerender(<ProtonPlanCustomizer {...unlimitedProps} selectedPlanIDs={newPlanIDs} />);
+            const controlTestIds = getRenderedTestIds();
+            expect(controlTestIds.length).toBeGreaterThan(0);
+
+            rerender(<ProtonPlanCustomizer {...unlimitedProps} selectedPlanIDs={newPlanIDs} condensedAddons />);
+            const card = screen.getByTestId('condensed-addons-card');
+            expect(getRenderedTestIds()).toEqual(controlTestIds);
+            controlTestIds.forEach((testId) => {
+                expect(card).toContainElement(screen.getByTestId(testId));
+            });
+            expect(screen.queryByTestId(rowTestId)).not.toBeInTheDocument();
+            expect(card).toContainElement(screen.getByTestId(otherRowTestId));
+        }
+    );
+
+    it('should show the blocked decrease reason inside the card when renewal is disabled', () => {
+        const planIDs: PlanIDs = {
+            [PLANS.MAIL_PRO]: 1,
+            [ADDON_NAMES.MEMBER_MAIL_PRO]: 1,
+            [ADDON_NAMES.LUMO_MAIL_PRO]: 1,
+        };
+
+        render(
+            <ProtonPlanCustomizer
+                {...buildProps({
+                    selectedPlanIDs: planIDs,
+                    latestSubscription: buildSubscription(planIDs, { Renew: Renew.Disabled }),
+                })}
+                condensedAddons
+            />
+        );
+
+        const card = screen.getByTestId('condensed-addons-card');
+        expect(screen.getByTestId(`decrease-addon-${ADDON_NAMES.LUMO_MAIL_PRO}`)).toBeDisabled();
+        expect(card).toContainElement(screen.getByTestId(`decrease-addon-${ADDON_NAMES.LUMO_MAIL_PRO}`));
+        expect(within(card).getByTestId('decrease-blocked-reason')).toHaveTextContent(
+            'Please reactivate your subscription first to decrease the number of add-ons.'
+        );
+    });
+
+    it('should match today when Lumo is already on an Unlimited subscription that does not renew', () => {
+        const planIDs: PlanIDs = { [PLANS.BUNDLE]: 1, [ADDON_NAMES.LUMO_BUNDLE]: 1 };
+        const props = buildProps({
+            selectedPlanIDs: planIDs,
+            latestSubscription: buildSubscription(planIDs, { Renew: Renew.Disabled }),
+            meetAddonEnabled: true,
+        });
+
+        // Single-user plan: with renewal off the Lumo stepper has min === max, so today nothing is shown for Lumo
+        const { rerender } = render(<ProtonPlanCustomizer {...props} />);
+        expect(getRenderedTestIds()).toEqual([]);
+        expect(screen.queryByTestId('lumo-addon-banner')).not.toBeInTheDocument();
+        expect(screen.getByTestId('meet-addon-banner')).toBeInTheDocument();
+
+        rerender(<ProtonPlanCustomizer {...props} condensedAddons />);
+        const card = screen.getByTestId('condensed-addons-card');
+        expect(getRenderedTestIds()).toEqual([]);
+        expect(screen.queryByTestId('lumo-addon-row')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('lumo-addon-banner')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('meet-addon-banner')).not.toBeInTheDocument();
+        expect(card).toContainElement(screen.getByTestId('meet-addon-row'));
+    });
+
+    it('should not render the card when Lumo and Meet are not available', () => {
+        render(
+            <ProtonPlanCustomizer
+                {...buildProps({
+                    selectedPlanIDs: { [PLANS.BUNDLE]: 1 },
+                    lumoAddonEnabled: false,
+                    meetAddonEnabled: false,
+                })}
+                condensedAddons
+            />
+        );
+
+        expect(screen.queryByTestId('condensed-addons-card')).not.toBeInTheDocument();
+    });
+
+    it('should show the added Meet state in the card when Meet is already selected', () => {
+        const planIDs: PlanIDs = { [PLANS.BUNDLE]: 1, [ADDON_NAMES.MEET_BUNDLE]: 1 };
+
+        render(
+            <ProtonPlanCustomizer
+                {...buildProps({
+                    selectedPlanIDs: planIDs,
+                    latestSubscription: buildSubscription(planIDs),
+                    meetAddonEnabled: true,
+                })}
+                condensedAddons
+            />
+        );
+
+        const card = screen.getByTestId('condensed-addons-card');
+        expect(screen.queryByTestId('meet-addon-row')).not.toBeInTheDocument();
+        expect(card).toContainElement(screen.getByTestId('meet-addon-active'));
+        expect(card).toContainElement(screen.getByTestId('lumo-addon-row'));
+    });
+
+    it('should reach the seat stepper inside the card with Tab', async () => {
+        // Multi-user plan, so the Lumo stepper has room to increase and its button is enabled
+        const planIDs: PlanIDs = {
+            [PLANS.MAIL_PRO]: 1,
+            [ADDON_NAMES.MEMBER_MAIL_PRO]: 2,
+            [ADDON_NAMES.LUMO_MAIL_PRO]: 1,
+        };
+
+        render(<ProtonPlanCustomizer {...buildProps({ selectedPlanIDs: planIDs })} condensedAddons />);
+
+        const card = screen.getByTestId('condensed-addons-card');
+        const increaseButton = screen.getByTestId(`increase-addon-${ADDON_NAMES.LUMO_MAIL_PRO}`);
+        expect(increaseButton).toBeEnabled();
+        expect(card).toContainElement(increaseButton);
+
+        // Tab through the page until focus lands on the stepper, bounded so a focus trap fails the test
+        for (let i = 0; i < 20 && document.activeElement !== increaseButton; i++) {
+            await userEvent.tab();
+        }
+        expect(increaseButton).toHaveFocus();
+    });
+});

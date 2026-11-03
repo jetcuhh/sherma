@@ -1,0 +1,126 @@
+import { Children, type FC, type ReactElement, type ReactNode, cloneElement } from 'react';
+
+import type { FieldProps } from 'formik';
+
+import InputButton from '@proton/components/components/input/InputButton';
+import type { InputFieldProps } from '@proton/components/components/v2/field/InputField';
+import { InputField as InputFieldTwo } from '@proton/components/components/v2/field/InputField';
+import type { IconComponent } from '@proton/icons/component';
+import { IcCheckmark } from '@proton/icons/icons/IcCheckmark';
+import clsx from '@proton/utils/clsx';
+
+import { useFieldControl } from '../../../hooks/useFieldControl';
+import type { MaybeArray } from '../../../types/utils';
+import { MaybeTooltip } from '../../Layout/Tooltip/MaybeTooltip';
+import type { RadioValue } from './RadioGroupField';
+
+import './RadioButtonGroupField.scss';
+
+type BaseRadioProps<T> = {
+    checked?: boolean;
+    disabled?: boolean;
+    id?: string;
+    name?: string;
+    onChange?: (value: T) => void;
+    value: T;
+};
+
+type RadioButtonProps<T> = BaseRadioProps<T> & { color?: string; icon?: IconComponent };
+
+export const RadioButton = <T,>({ onChange, id, checked, value, name, color, icon: Icon }: RadioButtonProps<T>) => {
+    return (
+        <InputButton
+            type="radio"
+            id={id}
+            name={name}
+            checked={checked}
+            onChange={(e) => e.target.checked && onChange?.(value)}
+            labelProps={{
+                className: 'pass-radio-group--button',
+                style: { '--radio-button-background': color ? `rgb(${color})` : 'var(--background-weak)' },
+            }}
+        >
+            {Icon && <Icon size={5} />}
+        </InputButton>
+    );
+};
+
+type RadioLabelledButtonProps<T> = BaseRadioProps<T> & { children: MaybeArray<ReactNode>; tooltip?: string };
+
+export const RadioLabelledButton = <T extends RadioValue>({
+    id,
+    name,
+    disabled,
+    value,
+    checked,
+    onChange,
+    children,
+    tooltip,
+}: RadioLabelledButtonProps<T>) => {
+    return (
+        <MaybeTooltip active={Boolean(tooltip)} title={tooltip} placement="top-start">
+            <label
+                htmlFor={id}
+                className={clsx([
+                    'pass-radio-group--labelled-button w-full expand-click-area relative',
+                    disabled && 'opacity-50 pointer-events-none',
+                ])}
+            >
+                <input
+                    id={id}
+                    type="radio"
+                    className="radio"
+                    name={name}
+                    disabled={disabled}
+                    value={value}
+                    onChange={(e) => e.target.checked && onChange?.(value)}
+                />
+                <div className="flex items-center gap-x-3 py-1">
+                    {children}
+                    {checked && <IcCheckmark size={6} color="var(--interaction-norm)" />}
+                </div>
+            </label>
+        </MaybeTooltip>
+    );
+};
+
+type RadioButtonGroupProps<T> = {
+    children: ReactElement<BaseRadioProps<T>>[];
+    className?: string;
+    name: string;
+    onChange?: (value: T) => void;
+    value?: T;
+};
+
+export const RadioButtonGroup = <T extends RadioValue>(props: RadioButtonGroupProps<T>) => {
+    const radioButtons = Children.map(props.children, (child, id) => {
+        return cloneElement(child, {
+            checked: props.value === child.props.value,
+            id: `${props.name}-${id}`,
+            name: props.name,
+            onChange: props.onChange,
+        });
+    });
+
+    return <div className={clsx('flex', props.className)}>{radioButtons}</div>;
+};
+
+type RadioButtonGroupFieldProps = FieldProps & InputFieldProps<typeof RadioButtonGroup>;
+
+export const RadioButtonGroupField: FC<RadioButtonGroupFieldProps> = ({ field, form, meta, onChange, ...props }) => {
+    const { error } = useFieldControl({ field, form, meta });
+
+    return (
+        <InputFieldTwo<typeof RadioButtonGroup>
+            as={RadioButtonGroup}
+            assistContainerClassName="empty:hidden"
+            error={error}
+            {...field}
+            {...props}
+            onChange={async (value: RadioValue) => {
+                onChange?.(value);
+                await form.setFieldValue(field.name, value);
+            }}
+        />
+    );
+};

@@ -1,0 +1,48 @@
+/*
+ * This file is auto-generated. Do not modify it manually!
+ */
+import React from 'react';
+
+import type { IconSize } from '../types';
+
+interface IconProps extends React.SVGProps<SVGSVGElement> {
+    /** If specified, renders an sr-only element for screenreaders */
+    alt?: string;
+    /** If specified, renders an inline title element */
+    title?: string;
+    /**
+     * The size of the icon
+     * Refer to the sizing taxonomy: https://design-system.protontech.ch/?path=/docs/components-icon--basic#sizing
+     */
+    size?: IconSize;
+}
+
+export const IcQuestionCircleFilled = ({
+    alt,
+    title,
+    size = 4,
+    className = '',
+    viewBox = '0 0 16 16',
+    ...rest
+}: IconProps) => {
+    return (
+        <>
+            <svg
+                viewBox={viewBox}
+                className={`icon-size-${size} ${className}`}
+                role="img"
+                focusable="false"
+                aria-hidden="true"
+                {...rest}
+            >
+                {title ? <title>{title}</title> : null}
+
+                <path
+                    fillRule="evenodd"
+                    d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14m0-9.852a1.5 1.5 0 0 0-1.5 1.5.5.5 0 0 1-1 0 2.5 2.5 0 0 1 2.5-2.5h.148A2.35 2.35 0 0 1 10.5 6.5c0 .566-.266 1.098-.719 1.437l-.681.511a1.5 1.5 0 0 0-.6 1.2.5.5 0 0 1-1 0 2.5 2.5 0 0 1 1-2l.681-.51c.201-.151.319-.387.319-.638 0-.746-.605-1.352-1.352-1.352zM7.5 11.5A.5.5 0 0 1 8 11h.01a.5.5 0 0 1 0 1H8a.5.5 0 0 1-.5-.5"
+                ></path>
+            </svg>
+            {alt ? <span className="sr-only">{alt}</span> : null}
+        </>
+    );
+};

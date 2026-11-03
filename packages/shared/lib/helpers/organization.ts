@@ -1,0 +1,55 @@
+import { ORGANIZATION_FLAGS, ORGANIZATION_TWOFA_SETTING, OrganizationPlanFlag } from '../constants';
+import type { Organization } from '../interfaces/Organization';
+import { hasBit } from './bitset';
+
+export const isLoyal = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.LOYAL);
+};
+
+export const hasCovid = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.COVID);
+};
+
+export const isDissident = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.DISSIDENT);
+};
+
+export const hasNoCycleScheduled = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.NO_CYCLE_SCHEDULED);
+};
+
+export const isProtoneer = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.PROTON);
+};
+
+export const hasPhoneSupport = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.PHONE_SUPPORT);
+};
+
+export const hasToMigrateOrgKey = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.TO_MIGRATE_ORG_KEY);
+};
+
+export const hasDeletionWhitelisted = (organization: Partial<Organization> = {}) => {
+    return hasBit(organization.Flags, ORGANIZATION_FLAGS.DELETION_WHITELISTED);
+};
+
+export const hasTwoFARequiredForAdminOnly = (organization: Partial<Organization> = {}) => {
+    return organization.TwoFactorRequired === ORGANIZATION_TWOFA_SETTING.REQUIRED_ADMIN_ONLY;
+};
+
+export const hasTwoFARequiredForAll = (organization: Partial<Organization> = {}) => {
+    return organization.TwoFactorRequired === ORGANIZATION_TWOFA_SETTING.REQUIRED_ALL;
+};
+
+export const hasOrganizationSetup = (organization: Partial<Organization> = {}) => {
+    return Boolean(!organization.RequiresKey && organization.Name);
+};
+
+export const hasOrganizationSetupWithKeys = (organization: Partial<Organization> = {}) => {
+    return Boolean(organization.RequiresKey && organization.HasKeys);
+};
+
+export const hasMailProduct = (organization: Partial<Organization> = {}) => {
+    return hasBit(Number(organization.PlanFlags), Number(OrganizationPlanFlag.Mail));
+};

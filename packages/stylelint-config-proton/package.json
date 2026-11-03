@@ -1,0 +1,23 @@
+{
+    "name": "@proton/stylelint-config-proton",
+    "license": "ISC",
+    "author": "Proton AG",
+    "main": "index.js",
+    "files": [
+        "index.js"
+    ],
+    "scripts": {
+        "lint": "oxlint --quiet"
+    },
+    "dependencies": {
+        "stylelint": "catalog:",
+        "stylelint-config-prettier-scss": "^1.0.0",
+        "stylelint-config-standard-scss": "^10.0.0",
+        "stylelint-use-logical-spec": "^5.0.1"
+    },
+    "devDependencies": {
+        "@proton/oxlint-config": "workspace:^",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:"
+    }
+}

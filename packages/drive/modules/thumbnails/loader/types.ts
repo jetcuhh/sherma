@@ -1,0 +1,59 @@
+import { type ProtonDriveClient, ThumbnailType } from '@protontech/drive-sdk';
+
+type ThumbnailStatus = 'loading' | 'loaded';
+
+/**
+ * Holds the loaded state for a single thumbnail entry, keyed by its store key
+ * (revisionUid, or nodeUid for single-revision nodes — see ThumbnailRequest).
+ * SD (Type1) and HD (Type2) are tracked independently so both can coexist.
+ */
+export type ThumbnailData = {
+    sdStatus?: ThumbnailStatus;
+    sdUrl?: string;
+    hdStatus?: ThumbnailStatus;
+    hdUrl?: string;
+};
+
+/**
+ * Describes a node whose thumbnail(s) should be loaded.
+ *
+ * - `uid` is the node UID used to fetch the thumbnail from the SDK.
+ * - `revisionUid` is the unique ID used as the store key (thumbnailData map).
+ *   It should be unique like revision ID, so cache can be invalidate if thumbnail is updated.
+ * - `thumbnailTypes` controls which resolutions to load. Defaults to ['sd'].
+ * - `shouldLoad` is an optional guard evaluated lazily at batch time — if it
+ *   returns false the item is skipped and no status is set.
+ * - `viewportDistance` is an optional priority hint evaluated lazily when a
+ *   chunk is built. It returns how far the item is from the visible viewport
+ *   (0 = on screen, 1 = first row past the edge, 2 = second, ...); the loader
+ *   fetches lower distances first, so on-screen thumbnails come before the
+ *   pre-render margin rows. Defaults to 0 (highest priority).
+ * - `revisionUid` is optional. When omitted the store/cache is keyed by
+ *   `nodeUid` instead. This should be used only for single-revision nodes (e.g. photos).
+ * - `usePersistentCache` opts the thumbnail into the encrypted IndexedDB cache:
+ *   it is read from the cache before hitting the SDK, and written back on load.
+ *   Defaults to false.
+ */
+export interface ThumbnailRequest {
+    nodeUid: string;
+    revisionUid?: string;
+    thumbnailTypes?: ('hd' | 'sd')[];
+    shouldLoad?: () => boolean;
+    viewportDistance?: () => number;
+    usePersistentCache?: boolean;
+}
+
+export type DriveClient = Pick<ProtonDriveClient, 'iterateThumbnails'>;
+
+export const THUMBNAIL_KEY_MAP: Record<
+    ThumbnailType,
+    { cacheKey: 'sd' | 'hd'; statusKey: 'sdStatus' | 'hdStatus'; urlKey: 'sdUrl' | 'hdUrl' }
+> = {
+    [ThumbnailType.Type1]: { cacheKey: 'sd', statusKey: 'sdStatus', urlKey: 'sdUrl' },
+    [ThumbnailType.Type2]: { cacheKey: 'hd', statusKey: 'hdStatus', urlKey: 'hdUrl' },
+};
+
+export const THUMBNAIL_TYPE_MAP: Record<'sd' | 'hd', ThumbnailType> = {
+    sd: ThumbnailType.Type1,
+    hd: ThumbnailType.Type2,
+};

@@ -1,0 +1,33 @@
+{
+    "name": "@proton/sanitize",
+    "private": true,
+    "description": "HTML/CSS sanitization utilities",
+    "sideEffects": false,
+    "exports": {
+        "./escape": "./src/escape.ts",
+        "./purify": "./src/purify.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "test": "jest",
+        "test:ci": "pnpm run test --ci --runInBand --logHeapUsage",
+        "test:watch": "pnpm run test --watch"
+    },
+    "dependencies": {
+        "dompurify": "catalog:"
+    },
+    "devDependencies": {
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "jest": "catalog:",
+        "jest-environment-jsdom": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "typescript": "catalog:"
+    }
+}

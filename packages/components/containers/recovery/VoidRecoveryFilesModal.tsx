@@ -1,0 +1,57 @@
+import { c } from 'ttag';
+
+import { userThunk } from '@proton/account/user';
+import { useApi } from '@proton/app-context/useApi';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import { CacheType } from '@proton/redux-utilities/interface';
+import { deleteRecoverySecrets } from '@proton/shared/lib/api/settingsRecovery';
+
+import type { ModalProps } from '../../components/modalTwo/Modal';
+import Prompt from '../../components/prompt/Prompt';
+
+interface Props extends Omit<ModalProps, 'children' | 'size'> {
+    deviceRecoveryEnabled: boolean | undefined;
+    onVoid: () => Promise<void>;
+}
+
+const VoidRecoveryFilesModal = ({ deviceRecoveryEnabled, onVoid, onClose, ...rest }: Props) => {
+    const dispatch = useDispatch();
+    const api = useApi();
+    const { createNotification } = useNotifications();
+
+    const [revoking, withRevoking] = useLoading();
+
+    const handleVoidClick = async () => {
+        await api(deleteRecoverySecrets());
+        await dispatch(userThunk({ cache: CacheType.None }));
+        await onVoid();
+        createNotification({ type: 'info', text: c('Info').t`Recovery files have been voided` });
+        onClose?.();
+    };
+
+    return (
+        <Prompt
+            {...rest}
+            onClose={onClose}
+            title={c('Action').t`Void all recovery files?`}
+            buttons={[
+                <Button color="danger" loading={revoking} onClick={() => withRevoking(handleVoidClick())}>
+                    {c('Action').t`Void`}
+                </Button>,
+                <Button onClick={onClose}>{c('Action').t`Cancel`}</Button>,
+            ]}
+        >
+            <p className="m-0">
+                {deviceRecoveryEnabled
+                    ? c('Info')
+                          .t`You won’t be able to recover locked data using your downloaded recovery files. This will also disable device-based recovery.`
+                    : c('Info').t`You won’t be able to recover locked data using your downloaded recovery files.`}
+            </p>
+        </Prompt>
+    );
+};
+
+export default VoidRecoveryFilesModal;

@@ -1,0 +1,90 @@
+import { getSrp } from '@protontech/crypto/srp';
+
+import { queryUnlock } from '@proton/shared/lib/api/user';
+import { binaryStringToUint8Array } from '@proton/shared/lib/helpers/encoding';
+import { srpAuth, srpGetVerify } from '@proton/shared/lib/srp';
+
+import { PassEncryptionTag } from '../../types/crypto/pass-types';
+import type { XorObfuscation } from '../../utils/obfuscate/xor';
+import { api } from '../api/api';
+import { type OfflineComponents, getOfflineKeyDerivation } from '../cache/crypto';
+import { decryptData, importSymmetricKey } from '../crypto/utils/crypto-helpers';
+import type { AuthStore } from './store';
+
+export enum PasswordVerification {
+    LOCAL = 0,
+    EXTRA_PASSWORD = 1,
+    SRP = 2,
+}
+
+export type UnsafePasswordCredentials = { password: string };
+export type PasswordCredentials = { password: XorObfuscation };
+export type PasswordConfirmDTO = PasswordCredentials & { mode?: PasswordVerification };
+export type ExtraPasswordDTO = PasswordCredentials & { enabled: boolean };
+
+export const getPasswordVerification = (authStore: AuthStore) => {
+    if (authStore.hasOfflineComponents()) return PasswordVerification.LOCAL;
+    if (authStore.getExtraPassword()) return PasswordVerification.EXTRA_PASSWORD;
+    return PasswordVerification.SRP;
+};
+
+export const registerExtraPassword = async (credentials: UnsafePasswordCredentials) => {
+    const { Auth } = await srpGetVerify({ api, credentials });
+
+    await api({
+        url: 'pass/v1/user/srp',
+        method: 'post',
+        data: {
+            SrpModulusID: Auth.ModulusID,
+            SrpVerifier: Auth.Verifier,
+            SrpSalt: Auth.Salt,
+        },
+    });
+};
+
+export const removeExtraPassword = async () => api({ url: 'pass/v1/user/srp', method: 'delete' });
+
+/** Checks that the given password can be verified against the `offlineVerifier`.
+ * If we can successfully decrypt the `offlineVerifier`, then password is correct */
+export const verifyOfflinePassword = async (
+    password: string,
+    { offlineVerifier, offlineConfig: { salt, params } }: Omit<OfflineComponents, 'offlineKD'>
+): Promise<boolean> => {
+    const offlineKD = await getOfflineKeyDerivation(password, binaryStringToUint8Array(salt), params);
+    const offlineKey = await importSymmetricKey(offlineKD);
+    await decryptData(offlineKey, binaryStringToUint8Array(offlineVerifier), PassEncryptionTag.Offline);
+
+    return true;
+};
+
+/** Verifies a proton user's encryption password via SRP */
+export const verifyPassword = async (credentials: UnsafePasswordCredentials): Promise<boolean> => {
+    await srpAuth({ api, credentials, config: { ...queryUnlock(), silence: true } });
+    return true;
+};
+
+/** Verifies the pass specific extra-password via SRP */
+export const verifyExtraPassword = async (credentials: UnsafePasswordCredentials): Promise<boolean> => {
+    const info = (await api({ url: 'pass/v1/user/srp/info', method: 'get' })).SRPData!;
+
+    const { Version, SrpSalt: Salt, Modulus, ServerEphemeral } = info;
+    const authInfo = { ServerEphemeral, Modulus, Version, Salt };
+
+    const srp = await getSrp(authInfo, credentials, Version);
+
+    const { ServerProof } = await api({
+        url: 'pass/v1/user/srp/auth',
+        method: 'post',
+        data: {
+            ClientEphemeral: srp.clientEphemeral,
+            ClientProof: srp.clientProof,
+            SrpSessionID: info.SrpSessionID,
+        },
+    });
+
+    if (ServerProof !== srp.expectedServerProof) {
+        throw new Error('Unexpected server proof');
+    }
+
+    return true;
+};

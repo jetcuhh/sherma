@@ -1,0 +1,43 @@
+import { c } from 'ttag';
+
+import { selectRecoveryFileData } from '@proton/account/recovery/recoveryFile';
+import { IcRecoveryFile } from '@proton/icons/icons/IcRecoveryFile';
+import { useSelector } from '@proton/redux-shared-store/sharedProvider';
+
+import SettingsNavItem from '../../layout/SettingsNavItem';
+import { StatusBadge, StatusBadgeStatus } from '../../layout/StatusBadge';
+
+interface Props {
+    to: string;
+}
+
+const RecoveryFileBadge = () => {
+    const { hasOutdatedRecoveryFile, hasCurrentRecoveryFile, loading } = useSelector(selectRecoveryFileData);
+
+    if (loading) {
+        return <StatusBadge status={StatusBadgeStatus.Off} loading={true} />;
+    }
+
+    if (hasOutdatedRecoveryFile) {
+        return <StatusBadge status={StatusBadgeStatus.Warning} text={c('Status').t`Outdated`} />;
+    }
+    if (hasCurrentRecoveryFile) {
+        return <StatusBadge status={StatusBadgeStatus.On} text={c('Status').t`Saved`} />;
+    }
+    return <StatusBadge status={StatusBadgeStatus.Warning} text={c('Status').t`Not saved`} />;
+};
+
+const RecoveryFile = ({ to }: Props) => {
+    return (
+        <SettingsNavItem
+            to={to}
+            icon={IcRecoveryFile}
+            title={c('Title').t`Recovery file`}
+            tooltip={c('Tooltip').t`Save an encryption backup file to recover your data after a password reset`}
+        >
+            <RecoveryFileBadge />
+        </SettingsNavItem>
+    );
+};
+
+export default RecoveryFile;

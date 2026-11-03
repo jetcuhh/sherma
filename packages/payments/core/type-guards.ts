@@ -1,0 +1,136 @@
+import { type ADDON_NAMES, CYCLE, PAYMENT_METHOD_TYPES, PLANS } from './constants';
+import type {
+    ChargeablePaymentParameters,
+    CreateCardDetailsBackend,
+    Cycle,
+    ExistingPaymentMethod,
+    ExtendedTokenPayment,
+    PayPalDetails,
+    PaymentMethodApplePay,
+    PaymentMethodGooglePay,
+    PaymentMethodIdeal,
+    PaymentMethodSepa,
+    PaymentMethodType,
+    PlainPaymentMethodType,
+    SavedCardDetails,
+    SavedMethodDetails,
+    SavedPaymentMethod,
+    SepaDetails,
+    TokenPayment,
+    TokenPaymentMethod,
+    Transaction,
+    V5PaymentToken,
+    V5Payments,
+} from './interface';
+
+export function isTokenPayment(
+    payment:
+        | Omit<
+              ExtendedTokenPayment,
+              'paymentProcessorType' | 'paymentsVersion' | 'paymentMethodType' | 'paymentMethodValue'
+          >
+        | undefined
+): payment is TokenPayment {
+    return payment?.Type === PAYMENT_METHOD_TYPES.TOKEN || !!payment?.Details?.Token;
+}
+
+export function isTokenPaymentMethod(data: TokenPaymentMethod | undefined): data is TokenPaymentMethod {
+    return !!data && isTokenPayment(data.Payment);
+}
+
+export function isPaypalDetails(obj: SavedMethodDetails | undefined): obj is PayPalDetails {
+    if (!obj) {
+        return false;
+    }
+
+    const props: (keyof PayPalDetails)[] = ['BillingAgreementID', 'PayerID'];
+
+    return props.every((prop) => typeof obj[prop as keyof typeof obj] === 'string');
+}
+
+export function isSavedCardDetails(
+    obj: SavedMethodDetails | CreateCardDetailsBackend | undefined
+): obj is SavedCardDetails {
+    if (!obj) {
+        return false;
+    }
+
+    // Name is optional property, so we don't need to check it here
+    const props: (keyof SavedCardDetails)[] = ['ExpMonth', 'ExpYear', 'Country', 'Last4', 'Brand'];
+
+    return props.every((prop) => typeof obj[prop as keyof typeof obj] === 'string');
+}
+
+export function isSavedPaymentMethodSepa(obj: SavedPaymentMethod | undefined): obj is PaymentMethodSepa {
+    return Boolean(obj && obj.Type === PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT && !!obj.Details);
+}
+
+export function isSavedPaymentMethodIdeal(obj: SavedPaymentMethod | undefined): obj is PaymentMethodIdeal {
+    return Boolean(obj && obj.Type === PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL && !!obj.Details);
+}
+
+export function isSavedPaymentMethodApplePay(obj: SavedPaymentMethod | undefined): obj is PaymentMethodApplePay {
+    return !!obj && obj.Type === PAYMENT_METHOD_TYPES.APPLE_PAY && !!obj.Details;
+}
+
+export function isSavedPaymentMethodGooglePay(obj: SavedPaymentMethod | undefined): obj is PaymentMethodGooglePay {
+    return !!obj && obj.Type === PAYMENT_METHOD_TYPES.GOOGLE_PAY && !!obj.Details;
+}
+
+export function methodMatches(
+    method: PaymentMethodType | undefined,
+    methods: PlainPaymentMethodType[]
+): method is PlainPaymentMethodType {
+    if (!method) {
+        return false;
+    }
+
+    return (methods as string[]).includes(method);
+}
+
+export function isExistingPaymentMethod(paymentMethod?: PaymentMethodType): paymentMethod is ExistingPaymentMethod {
+    return (
+        paymentMethod !== undefined &&
+        typeof paymentMethod === 'string' &&
+        !methodMatches(paymentMethod, Object.values(PAYMENT_METHOD_TYPES))
+    );
+}
+
+function isV5Payments(data: { v?: number } | undefined): data is V5Payments {
+    return !!data && data.v === 5;
+}
+
+export function isV5PaymentToken(
+    data: Omit<ChargeablePaymentParameters, 'Amount' | 'Currency' | 'type' | 'chargeable'>
+): data is V5PaymentToken {
+    return Boolean(data.PaymentToken && isV5Payments(data));
+}
+
+export const isValidPlanName = (value: string | PLANS | ADDON_NAMES): value is PLANS =>
+    Object.values(PLANS).includes(value as PLANS);
+
+export const isValidCycle = (value: number | Cycle | undefined): value is Cycle =>
+    typeof value === 'number' && Object.values(CYCLE).includes(value as Cycle);
+
+export function isSepaDetails(obj: any): obj is SepaDetails {
+    if (!obj) {
+        return false;
+    }
+
+    const props: (keyof SepaDetails)[] = ['AccountName', 'Country', 'Last4'];
+
+    return props.every((prop) => typeof obj[prop] === 'string');
+}
+
+export { isFreeSubscription, isPaidSubscription } from '@proton/shared/lib/payments/type-guards';
+
+export function isTransaction(obj: any): obj is Transaction {
+    return !!obj && !!obj.TransactionID;
+}
+
+export function isSavedPaymentMethod(paymentMethodType: PaymentMethodType): boolean {
+    // PAYMENT_METHOD_TYPES lists all plain payment methods. Plain == new == unsaved. Once the payment method is saved
+    // then its type/value becomes a string (ID). So if the paymentMethodType isn't in the list of plain methods, then
+    // it must be an ID and then it means that the method is saved.
+    return !(Object.values(PAYMENT_METHOD_TYPES) as PaymentMethodType[]).includes(paymentMethodType);
+}

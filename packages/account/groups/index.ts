@@ -1,0 +1,377 @@
+import type { PayloadAction, ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { createAsyncModelThunk, handleAsyncModel, previousSelector } from '@proton/redux-utilities/creator';
+import { getInitialModelState } from '@proton/redux-utilities/initialModelState';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import { CacheType } from '@proton/redux-utilities/interface';
+import type { CoreEventV6Response } from '@proton/shared/lib/api/events';
+import { getGroup, getGroups } from '@proton/shared/lib/api/groups';
+import { getGroupOrganizationRoles, updateGroupOrganizationRoles } from '@proton/shared/lib/api/organizationRoles';
+import { KEY_FLAG } from '@proton/shared/lib/constants';
+import { updateCollectionAsyncV6 } from '@proton/shared/lib/eventManager/updateCollectionAsyncV6';
+import { type UpdateCollectionV6, updateCollectionV6 } from '@proton/shared/lib/eventManager/updateCollectionV6';
+import { clearBit, setBit } from '@proton/shared/lib/helpers/bitset';
+import updateCollection from '@proton/shared/lib/helpers/updateCollection';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import type { EnhancedGroup, Group } from '@proton/shared/lib/interfaces/Group';
+import type { GroupMembershipReturn } from '@proton/shared/lib/interfaces/GroupMember';
+import { GROUP_MEMBER_PERMISSIONS } from '@proton/shared/lib/interfaces/GroupMember';
+import type { Organization } from '@proton/shared/lib/interfaces/Organization';
+import type { RoleAssignment } from '@proton/shared/lib/interfaces/OrganizationRole';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+
+import type { DomainsState } from '../domains';
+import { serverEvent } from '../eventLoop';
+import type { GroupMembershipsState } from '../groupMemberships';
+import { groupMembershipsThunk } from '../groupMemberships';
+import { organizationThunk } from '../organization';
+import type { OrganizationKeyState } from '../organizationKey';
+import { userThunk } from '../user';
+
+const name = 'groups';
+
+export interface GroupsState extends DomainsState, OrganizationKeyState, GroupMembershipsState {
+    [name]: ModelState<EnhancedGroup[]>;
+}
+
+type SliceState = GroupsState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+const initialState: SliceState = getInitialModelState<EnhancedGroup[]>();
+
+export const selectGroups = (state: GroupsState) => state[name];
+
+const getGroupFromState = (state: ModelState<EnhancedGroup[]>, target: Pick<Group, 'ID'>) => {
+    return state.value?.find((group) => group.ID === target.ID);
+};
+
+const applyGroupUpdate = (state: ModelState<EnhancedGroup[]>, group: Group) => {
+    if (!state.value) {
+        state.value = [];
+    }
+    const index = state.value.findIndex((g) => g.ID === group.ID);
+    if (index === -1) {
+        return;
+    }
+    const previous = state.value[index];
+    state.value[index] = {
+        ...group,
+        roleState: previous.roleState,
+        GroupOrganizationRoles: previous.GroupOrganizationRoles,
+        requiresOrgKeyPromotion: previous.requiresOrgKeyPromotion,
+    };
+};
+
+const canFetch = (user: UserModel, organization: Organization, memberships: GroupMembershipReturn[]): boolean => {
+    if (user.isAdmin && organization?.ID) {
+        return true; // org admin
+    }
+
+    const isGroupOwner = memberships.some((membership) => membership.Permissions & GROUP_MEMBER_PERMISSIONS.OWNER);
+    return isGroupOwner; // group owner of at least one group
+};
+
+export const fetchGroup = async (groupID: string, api: Api) => {
+    const { Group } = await api<{ Group: Group }>(getGroup(groupID));
+    return Group;
+};
+
+const modelThunk = createAsyncModelThunk<Model, GroupsState, ProtonThunkArguments>(`${name}/fetch`, {
+    miss: async ({ extraArgument, dispatch }) => {
+        const [user, organization, memberships] = await Promise.all([
+            dispatch(userThunk()),
+            dispatch(organizationThunk()),
+            dispatch(groupMembershipsThunk()),
+        ]);
+        if (!canFetch(user, organization, memberships)) {
+            return [];
+        }
+        return extraArgument
+            .api(getGroups())
+            .then(({ Groups }: { Groups: Group[] }) =>
+                Groups.map((group): EnhancedGroup => ({
+                    ...group,
+                    roleState: 'initial',
+                    GroupOrganizationRoles: [],
+                    requiresOrgKeyPromotion: false,
+                }))
+            )
+            .catch(() => []);
+    },
+    previous: previousSelector(selectGroups),
+});
+
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {
+        eventLoopV6: (state, action: PayloadAction<UpdateCollectionV6<Group>>) => {
+            if (state.value) {
+                state.value = updateCollectionV6(state.value, action.payload, {
+                    merge: (a, b): EnhancedGroup => ({
+                        ...a,
+                        ...b,
+                        roleState: 'stale',
+                    }),
+                });
+            }
+        },
+        addGroup: (state, action: PayloadAction<Group>) => {
+            if (!state.value) {
+                state.value = [];
+            }
+
+            // early return if the group already exists
+            if (state.value.find((group) => group.ID === action.payload.ID)) {
+                return;
+            }
+
+            state.value.push({
+                ...action.payload,
+                roleState: 'initial',
+                GroupOrganizationRoles: [],
+                requiresOrgKeyPromotion: false,
+            });
+        },
+        updateGroup: (state, action: PayloadAction<Group>) => {
+            applyGroupUpdate(state, action.payload);
+        },
+        updateGroups: (state, action: PayloadAction<Group[]>) => {
+            action.payload.forEach((group) => applyGroupUpdate(state, group));
+        },
+        groupRoleFetchPending: (state, action: PayloadAction<{ group: Pick<Group, 'ID'> }>) => {
+            const group = getGroupFromState(state, action.payload.group);
+            if (group) {
+                group.roleState = 'pending';
+            }
+        },
+        groupRoleFetchFulfilled: (
+            state,
+            action: PayloadAction<{
+                group: Pick<Group, 'ID'>;
+                organizationRoles: RoleAssignment[];
+                requiresOrgKeyPromotion: boolean;
+            }>
+        ) => {
+            const group = getGroupFromState(state, action.payload.group);
+            if (group) {
+                group.roleState = 'full';
+                group.GroupOrganizationRoles = action.payload.organizationRoles;
+                group.requiresOrgKeyPromotion = action.payload.requiresOrgKeyPromotion;
+            }
+        },
+        groupRoleFetchRejected: (state, action: PayloadAction<{ group: Pick<Group, 'ID'> }>) => {
+            const group = getGroupFromState(state, action.payload.group);
+            if (group) {
+                group.roleState = 'rejected';
+            }
+        },
+        invalidateGroupRoles: (state, action: PayloadAction<{ group: Pick<Group, 'ID'> }>) => {
+            const group = getGroupFromState(state, action.payload.group);
+            if (group && group.roleState !== 'initial') {
+                group.roleState = 'stale';
+            }
+        },
+        removeGroup: (state, action: PayloadAction<string>) => {
+            if (state.value && action.payload) {
+                state.value = state.value.filter((group) => group.ID !== action.payload);
+            }
+        },
+        setNoEncryptFlag: (state, action: PayloadAction<{ addressID: string; noEncryptFlag: boolean }>) => {
+            const addressID = action.payload.addressID;
+            const noEncryptFlag = action.payload.noEncryptFlag;
+            if (!state.value) {
+                return;
+            }
+
+            const index = state.value.findIndex((group) => group.Address.ID === addressID);
+            if (index === -1) {
+                return;
+            }
+
+            const group = state.value[index];
+
+            const groupAddress = group.Address;
+
+            const groupAddressKeys = groupAddress.Keys;
+            const flags = groupAddressKeys[0].Flags;
+            const bit = KEY_FLAG.FLAG_EMAIL_NO_ENCRYPT;
+
+            let newFlags;
+
+            if (noEncryptFlag) {
+                newFlags = setBit(flags, bit);
+            } else {
+                newFlags = clearBit(flags, bit);
+            }
+
+            state.value[index] = {
+                ...group,
+                Address: {
+                    ...groupAddress,
+                    Keys: [
+                        {
+                            ...groupAddressKeys[0],
+                            Flags: newFlags,
+                        },
+                    ],
+                },
+            };
+        },
+    },
+    extraReducers: (builder) => {
+        handleAsyncModel(builder, modelThunk);
+        builder.addCase(serverEvent, (state, action) => {
+            if (!state.value) {
+                return;
+            }
+
+            if (action.payload.Groups) {
+                state.value = updateCollection({
+                    model: state.value,
+                    events: action.payload.Groups,
+                    itemKey: 'Group',
+                    create: (group): EnhancedGroup => ({
+                        ...group,
+                        roleState: 'initial',
+                        GroupOrganizationRoles: [],
+                        requiresOrgKeyPromotion: false,
+                    }),
+                });
+            }
+        });
+    },
+});
+export const { addGroup, updateGroup, updateGroups, removeGroup, setNoEncryptFlag, invalidateGroupRoles } =
+    slice.actions;
+export const groupsReducer = { [name]: slice.reducer };
+export const groupsActions = slice.actions;
+export const groupThunk = modelThunk.thunk;
+
+const getTemporaryRolePromiseMap = (() => {
+    let map: undefined | Map<string, Promise<RoleAssignment[]>>;
+    return () => {
+        if (!map) {
+            map = new Map();
+        }
+        return map;
+    };
+})();
+
+export const getGroupRoles = ({
+    group: targetGroup,
+    retry,
+    cache,
+}: {
+    group: Pick<Group, 'ID'>;
+    retry?: boolean;
+    cache?: CacheType;
+}): ThunkAction<Promise<RoleAssignment[]>, GroupsState, ProtonThunkArguments, UnknownAction> => {
+    const map = getTemporaryRolePromiseMap();
+
+    return async (dispatch, getState, extra) => {
+        const isAdminRoleEnabled = extra.unleashClient?.isEnabled('AdminRoleMVP') ?? false;
+        if (!isAdminRoleEnabled) {
+            return [];
+        }
+        const group = getGroupFromState(selectGroups(getState()), targetGroup);
+        if (!group) {
+            return [];
+        }
+        if (cache !== CacheType.None) {
+            if (group.roleState === 'full') {
+                return group.GroupOrganizationRoles;
+            }
+            if (group.roleState === 'rejected' && !retry) {
+                return [];
+            }
+        }
+        const oldPromise = map.get(group.ID);
+        if (oldPromise) {
+            return oldPromise;
+        }
+        const responsePromise = extra.api<{ RoleAssignments: RoleAssignment[]; RequiresOrgKeyPromotion: boolean }>(
+            getGroupOrganizationRoles(group.ID)
+        );
+        const promise = responsePromise.then(({ RoleAssignments }) => RoleAssignments);
+        try {
+            map.set(group.ID, promise);
+            dispatch(slice.actions.groupRoleFetchPending({ group }));
+            const { RoleAssignments, RequiresOrgKeyPromotion } = await responsePromise;
+            dispatch(
+                slice.actions.groupRoleFetchFulfilled({
+                    group,
+                    organizationRoles: RoleAssignments,
+                    requiresOrgKeyPromotion: RequiresOrgKeyPromotion,
+                })
+            );
+            return RoleAssignments;
+        } catch (e) {
+            dispatch(slice.actions.groupRoleFetchRejected({ group }));
+            throw e;
+        } finally {
+            map.delete(group.ID);
+        }
+    };
+};
+
+export const updateGroupRoles = ({
+    group,
+    currentRoleIds,
+    desiredRoleIds,
+    api,
+}: {
+    group: Pick<Group, 'ID'>;
+    currentRoleIds: Set<string>;
+    desiredRoleIds: Set<string>;
+    api: Api;
+}): ThunkAction<Promise<RoleAssignment[]>, GroupsState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch, _getState, extra) => {
+        const isAdminRoleEnabled = extra.unleashClient?.isEnabled('AdminRoleMVP') ?? false;
+        if (!isAdminRoleEnabled) {
+            return [];
+        }
+        const add = [...desiredRoleIds].filter((id) => !currentRoleIds.has(id));
+        const remove = [...currentRoleIds].filter((id) => !desiredRoleIds.has(id));
+        const { RoleAssignments, RequiresOrgKeyPromotion } = await api<{
+            RoleAssignments: RoleAssignment[];
+            RequiresOrgKeyPromotion: boolean;
+        }>(updateGroupOrganizationRoles(group.ID, { add, remove }));
+        dispatch(
+            slice.actions.groupRoleFetchFulfilled({
+                group,
+                organizationRoles: RoleAssignments,
+                requiresOrgKeyPromotion: RequiresOrgKeyPromotion,
+            })
+        );
+        return RoleAssignments;
+    };
+};
+
+export const groupsEventLoopV6Thunk = ({
+    event,
+    api,
+}: {
+    event: CoreEventV6Response;
+    api: Api;
+}): ThunkAction<Promise<void>, GroupsState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch) => {
+        const [user, organization, memberships] = await Promise.all([
+            dispatch(userThunk()),
+            dispatch(organizationThunk()),
+            dispatch(groupMembershipsThunk()),
+        ]);
+
+        if (!canFetch(user, organization, memberships)) {
+            return;
+        }
+        await updateCollectionAsyncV6({
+            events: event.Groups,
+            get: (ID) => fetchGroup(ID, api),
+            refetch: () => dispatch(groupThunk({ cache: CacheType.None })),
+            update: (result) => dispatch(groupsActions.eventLoopV6(result)),
+        });
+    };
+};

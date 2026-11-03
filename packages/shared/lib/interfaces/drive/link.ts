@@ -1,0 +1,171 @@
+import type { DriveFileRevisionPayload, PhotoTag } from './file';
+
+export enum LinkType {
+    FOLDER = 1,
+    FILE = 2,
+    ALBUM = 3,
+}
+
+export type LinkSharedUrlInfo = {
+    CreateTime: number;
+    ExpireTime: number | null;
+    ShareUrlID: string;
+    Token: string;
+    NumAccesses?: number;
+};
+
+type SharingDetails = {
+    ShareUrl: LinkSharedUrlInfo | null;
+    ShareID: string;
+};
+
+interface FileProperties {
+    ContentKeyPacket: string;
+    ContentKeyPacketSignature: string;
+    ActiveRevision: DriveFileRevisionPayload | null;
+}
+
+interface FolderProperties {
+    NodeHashKey: string;
+}
+
+interface AlbumProperties {
+    NodeHashKey: string;
+    CoverLinkID: string;
+    PhotoCount: number;
+    LastActivityTime: number;
+    Locked: boolean;
+}
+
+interface PhotoProperties {
+    Albums: {
+        AlbumLinkID: string;
+        Hash: string;
+        ContentHash: string;
+        AddedTime: number;
+    }[];
+    Tags: PhotoTag[];
+}
+
+interface DocumentProperties {
+    Size: number;
+}
+
+interface DriveLink {
+    LinkID: string;
+    ParentLinkID: string;
+    Type: LinkType;
+    Name: string;
+    NameSignatureEmail: string;
+    EncryptedName: string;
+    Size: number;
+    MIMEType: string;
+    Hash: string;
+    CreateTime: number;
+    // API returns only ModifyTime which represents modification on API, i.e.,
+    // the time when the last revision was uploaded. The real modification time
+    // (set by file system) is available in XAttr and these times are properly
+    // set during decryption of the link.
+    ModifyTime: number;
+    RealModifyTime: number;
+    Trashed: number | null;
+    State: number;
+    NodeKey: string;
+    NodePassphrase: string;
+    NodePassphraseSignature: string;
+    SignatureEmail: string;
+    Attributes: number;
+    Permissions: number;
+    FileProperties: FileProperties | null;
+    FolderProperties: FolderProperties | null;
+    AlbumProperties: AlbumProperties | null;
+    PhotoProperties: PhotoProperties | null;
+    DocumentProperties: DocumentProperties | null;
+    Shared: number;
+    ShareIDs: string[];
+    ShareUrls: LinkSharedUrlInfo[];
+    SharingDetails: SharingDetails | null;
+    // XAttr has following JSON structure encrypted by node key:
+    // {
+    //    Common: {
+    //        ModificationTime: "2021-09-16T07:40:54+0000",
+    //        Size: 13283,
+    //    },
+    // }
+    XAttr: string;
+    // CachedThumbnailURL is computed URL to cached image. This is not part
+    // of any request and not filled automatically. To get this value, use
+    // `loadLinkThumbnail` from `useDrive`.
+    CachedThumbnailURL: string;
+    ThumbnailIsLoading: boolean;
+    VolumeID: string;
+}
+
+interface FileLinkMeta extends DriveLink {
+    Type: LinkType.FILE;
+    FileProperties: FileProperties;
+    FolderProperties: null;
+    PhotoProperties: PhotoProperties | null;
+}
+
+interface FolderLinkMeta extends DriveLink {
+    Type: LinkType.FOLDER;
+    FolderProperties: FolderProperties;
+    FileProperties: null;
+}
+
+interface AlbumLinkMeta extends DriveLink {
+    Type: LinkType.ALBUM;
+    FolderProperties: null;
+    FileProperties: null;
+    AlbumProperties: AlbumProperties;
+}
+
+export type LinkMeta = FileLinkMeta | FolderLinkMeta | AlbumLinkMeta;
+
+export interface LinkMetaResult {
+    Link: LinkMeta;
+}
+
+export interface LinkChildrenResult {
+    Links: LinkMeta[];
+}
+
+export interface HashCheckResult {
+    AvailableHashes: string[];
+    PendingHashes: {
+        ClientUID: string;
+        Hash: string;
+        LinkID: string;
+        RevisionID: string;
+    }[];
+}
+
+export interface MoveLink {
+    Name: string;
+    Hash: string;
+    ParentLinkID: string;
+    NodePassphrase: string;
+    NameSignatureEmail: string;
+    NewShareID?: string;
+    ContentHash?: string;
+}
+
+export interface MovePhotoLink extends MoveLink {
+    OriginalHash: string;
+    LinkID: string;
+}
+
+export interface RecoverPhotoLinks {
+    ParentLinkID: string;
+    Links: MoveLink[];
+    NameSignatureEmail: string;
+    NewShareId: string;
+}
+
+export type TransferPhotoLinks = Omit<RecoverPhotoLinks, 'NewShareId'>;
+
+export interface LinkMetaBatchPayload {
+    Links: LinkMeta[];
+    Parents: LinkMeta[];
+}

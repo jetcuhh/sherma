@@ -1,0 +1,102 @@
+import { c } from 'ttag';
+
+import { usePlans } from '@proton/account/plans/hooks';
+import { useSubscription } from '@proton/account/subscription/hooks';
+import { useUser } from '@proton/account/user/hooks';
+import { Button } from '@proton/atoms/Button/Button';
+import { DashboardGridSection } from '@proton/atoms/DashboardGrid/DashboardGrid';
+import { IcArrowRight } from '@proton/icons/icons/IcArrowRight';
+import { PLANS, PLAN_NAMES } from '@proton/payments/core/constants';
+import { hasFreeOrPlus, isManagedExternally } from '@proton/payments/core/subscription/helpers';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { getExploreText } from '@proton/shared/lib/apps/i18n';
+import {
+    type APP_NAMES,
+    BRAND_NAME,
+    CALENDAR_SHORT_APP_NAME,
+    DOCS_SHORT_APP_NAME,
+    DRIVE_SHORT_APP_NAME,
+    LUMO_SHORT_APP_NAME,
+    MAIL_SHORT_APP_NAME,
+    MEET_SHORT_APP_NAME,
+    PASS_SHORT_APP_NAME,
+    SHEETS_SHORT_APP_NAME,
+    VPN_SHORT_APP_NAME,
+} from '@proton/shared/lib/constants';
+
+import useDashboardPaymentFlow from '../../../../../../hooks/useDashboardPaymentFlow';
+import useLoad from '../../../../../../hooks/useLoad';
+import { PromotionBanner } from '../../../../../banner/PromotionBanner';
+import { useSubscriptionModal } from '../../../SubscriptionModalProvider';
+import { PlanIcon } from '../../PlanIcon';
+
+const BundleUpsellBanner = ({ app }: { app: APP_NAMES }) => {
+    const [user] = useUser();
+    const [subscription, loadingSubscription] = useSubscription();
+    const [openSubscriptionModal, loadingSubscriptionModal] = useSubscriptionModal();
+    const telemetryFlow = useDashboardPaymentFlow(app);
+    const plan = PLANS.BUNDLE_PRO_2024;
+    const planIsManagedExternally = isManagedExternally(subscription);
+
+    useLoad();
+
+    const [plansResult, loadingPlans] = usePlans();
+    const plans = plansResult?.plans;
+
+    const loading = loadingSubscription || loadingPlans;
+
+    if (!subscription || !plans || loading) {
+        return null;
+    }
+
+    const showBanner = user.canPay && hasFreeOrPlus(subscription) && !planIsManagedExternally;
+
+    if (!showBanner) {
+        return null;
+    }
+
+    const handleGetPlan = () => {
+        void openSubscriptionModal({
+            step: SUBSCRIPTION_STEPS.PLAN_SELECTION,
+            plan: plan,
+            telemetryFlow,
+        });
+    };
+
+    return (
+        <DashboardGridSection spanAll="footer">
+            <PromotionBanner
+                rounded="lg"
+                mode="banner"
+                gradient="vertical"
+                contentCentered={false}
+                description={
+                    <div className="flex flex-nowrap items-center gap-3 p-1">
+                        <PlanIcon planName={plan} />
+                        <div className="text-left">
+                            <b className="color-hint text-sm text-semibold">{c('Info').t`Did you know?`}</b>
+                            <p className="m-0 text-lg color-norm">
+                                {c('Upsell')
+                                    .t`Everything you need to collaborate securely in a single subscription. Get access to ${BRAND_NAME} ${MAIL_SHORT_APP_NAME}, ${CALENDAR_SHORT_APP_NAME}, ${DRIVE_SHORT_APP_NAME}, ${DOCS_SHORT_APP_NAME}, ${SHEETS_SHORT_APP_NAME}, ${MEET_SHORT_APP_NAME}, ${VPN_SHORT_APP_NAME}, ${PASS_SHORT_APP_NAME} and ${LUMO_SHORT_APP_NAME} AI Assistant.`}{' '}
+                            </p>
+                        </div>
+                    </div>
+                }
+                cta={
+                    <Button
+                        color="norm"
+                        shape="ghost"
+                        className="flex items-center gap-1 flex-nowrap"
+                        loading={loadingSubscriptionModal}
+                        onClick={handleGetPlan}
+                    >
+                        {getExploreText(PLAN_NAMES[plan])}
+                        <IcArrowRight className="shrink-0 rtl:mirror" />
+                    </Button>
+                }
+            />
+        </DashboardGridSection>
+    );
+};
+
+export default BundleUpsellBanner;

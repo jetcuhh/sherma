@@ -1,0 +1,66 @@
+import type { getEnrichedOutgoingDelegatedAccess, getMetaOutgoingDelegatedAccess } from './helper';
+
+export type MetaIncomingDelegatedAccess = ReturnType<typeof getMetaOutgoingDelegatedAccess>;
+export type EnrichedOutgoingDelegatedAccess = ReturnType<typeof getEnrichedOutgoingDelegatedAccess>;
+
+export interface AddActionPayload {
+    type: 'add';
+    value: 'emergency-contact' | 'recovery-contact';
+}
+
+interface UpsellActionPayload {
+    type: 'upsell';
+}
+
+interface DeleteActionPayload {
+    type: 'delete-emergency-contact' | 'delete-recovery-contact';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+interface ChangeWaitTimeActionPayload {
+    type: 'change-wait-time';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+interface GrantAccessActionPayload {
+    type: 'grant-access';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+export interface RefuseAccessActionPayload {
+    type: 'refuse-access';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+export interface RevokeAccessActionPayload {
+    type: 'revoke-access';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+interface ViewAccessActionPayload {
+    type: 'view-access';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+export interface RecoverActionPayload {
+    type: 'recover' | 'recover-info' | 'recover-token';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+export interface ReEnableActionPayload {
+    type: 'enable-recovery-contact' | 'enable-emergency-contact';
+    value: EnrichedOutgoingDelegatedAccess;
+}
+
+export type ActionPayload =
+    | AddActionPayload
+    | DeleteActionPayload
+    | ChangeWaitTimeActionPayload
+    | GrantAccessActionPayload
+    | ViewAccessActionPayload
+    | RefuseAccessActionPayload
+    | RevokeAccessActionPayload
+    | UpsellActionPayload
+    | RecoverActionPayload
+    | ReEnableActionPayload;
+export type ActionListener = (payload: ActionPayload) => undefined;

@@ -1,0 +1,48 @@
+import { memo } from 'react';
+
+import { c, msgid } from 'ttag';
+
+import type { IconComponent } from '@proton/icons/component';
+import { omit } from '@proton/shared/lib/helpers/object';
+import clsx from '@proton/utils/clsx';
+import noop from '@proton/utils/noop';
+
+import { pipe } from '../../../utils/fp/pipe';
+import { DropdownMenuButton } from '../../Layout/Dropdown/DropdownMenuButton';
+import { useNavigate } from '../../Navigation/NavigationActions';
+import { getInitialFilters, getLocalPath } from '../../Navigation/routing';
+import { VaultIcon } from '../../Vault/VaultIcon';
+
+type Props = {
+    count: number;
+    icon: IconComponent;
+    label?: string;
+    selected: boolean;
+    subLabel?: string;
+    to: string;
+    onAction?: () => void;
+};
+
+export const SharedMenuItem = memo(({ to, count, selected, label, subLabel, icon, onAction = noop }: Props) => {
+    const navigate = useNavigate();
+    const onSelect = () => navigate(getLocalPath(to), { filters: omit(getInitialFilters(), ['search']) });
+
+    return (
+        <DropdownMenuButton
+            onClick={pipe(() => !selected && onSelect(), onAction)}
+            label={
+                <div>
+                    <div className="text-ellipsis">{label}</div>
+                    <div className="text-ellipsis color-weak">
+                        {subLabel ? subLabel : c('Label').ngettext(msgid`${count} item`, `${count} items`, count)}
+                    </div>
+                </div>
+            }
+            parentClassName="w-full pass-vault-submenu-vault-item"
+            className={clsx(selected && 'is-selected', 'pl-2 pr-2')}
+            icon={<VaultIcon className="shrink-0 mr-1" icon={icon} size={4} background />}
+        />
+    );
+});
+
+SharedMenuItem.displayName = 'SharedMenuItemMemo';

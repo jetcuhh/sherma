@@ -1,0 +1,48 @@
+import { createSlice } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { createAsyncModelThunk, handleAsyncModel, previousSelector } from '@proton/redux-utilities/creator';
+import { getInitialModelState } from '@proton/redux-utilities/initialModelState';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import { getOrganizationRoles } from '@proton/shared/lib/api/organizationRoles';
+import type { OrganizationRole } from '@proton/shared/lib/interfaces/OrganizationRole';
+
+import type { UserState } from '../user';
+import { isOwnerRoleSyncEnabled } from './helpers';
+
+const name = 'organizationRoles' as const;
+
+export interface OrganizationRolesState extends UserState {
+    [name]: ModelState<OrganizationRole[]>;
+}
+
+type SliceState = OrganizationRolesState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+export const selectOrganizationRoles = (state: OrganizationRolesState) => state[name];
+
+const modelThunk = createAsyncModelThunk<Model, OrganizationRolesState, ProtonThunkArguments>(`${name}/fetch`, {
+    miss: async ({ extraArgument }) => {
+        const unleashClient = extraArgument.unleashClient;
+        const isEnabled = isOwnerRoleSyncEnabled(unleashClient) || (unleashClient?.isEnabled('AdminRoleMVP') ?? false);
+        if (!isEnabled) {
+            return [];
+        }
+        const { Roles } = await extraArgument.api<{ Roles: OrganizationRole[] }>(getOrganizationRoles());
+        return Roles;
+    },
+    previous: previousSelector(selectOrganizationRoles),
+});
+
+const initialState = getInitialModelState<Model>();
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {},
+    extraReducers: (builder) => {
+        handleAsyncModel(builder, modelThunk);
+    },
+});
+
+export const organizationRolesReducer = { [name]: slice.reducer };
+export const organizationRolesThunk = modelThunk.thunk;

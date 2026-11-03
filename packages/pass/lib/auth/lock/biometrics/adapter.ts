@@ -1,0 +1,189 @@
+import { c } from 'ttag';
+
+import { binaryStringToUint8Array, uint8ArrayToBinaryString } from '@proton/shared/lib/helpers/encoding';
+import noop from '@proton/utils/noop';
+
+import type { PassCoreContextValue } from '../../../../components/Core/PassCoreProvider';
+import { PassEncryptionTag } from '../../../../types/crypto/pass-types';
+import { SilentError } from '../../../../utils/errors/errors';
+import { logger } from '../../../../utils/logger';
+import { deobfuscate } from '../../../../utils/obfuscate/xor';
+import { getEpoch } from '../../../../utils/time/epoch';
+import { generateOfflineComponents } from '../../../cache/crypto';
+import { decryptData, encryptData, importSymmetricKey } from '../../../crypto/utils/crypto-helpers';
+import { PassCryptoError } from '../../../crypto/utils/errors';
+import { loadCoreCryptoWorker } from '../../../crypto/utils/worker';
+import type { AuthService } from '../../service';
+import { getInvalidPasswordString } from '../../utils';
+import type { LockAdapterBiometrics } from '../types';
+import { LockMode } from '../types';
+import { fromBiometricsEncryptedOfflineKD, intoBiometricsEncryptedOfflineKD } from './utils';
+
+export const generateBiometricsKey = async (core: PassCoreContextValue, offlineKD: string): Promise<string> => {
+    const key = await core.generateBiometricsKey!();
+    const rawOfflineKD = binaryStringToUint8Array(offlineKD);
+    const rawEncryptedOfflineKD = await encryptData(key, rawOfflineKD, PassEncryptionTag.BiometricOfflineKD);
+    return intoBiometricsEncryptedOfflineKD(uint8ArrayToBinaryString(rawEncryptedOfflineKD));
+};
+
+/** Password locking involves the offline configuration. As such,
+ * we can only password lock if we have a valid offline config in
+ * order to be able to verify the user password locally without an
+ * SRP flow. Booting offline should rely on this lock adapter */
+export const biometricsLockAdapterFactory = (auth: AuthService, core: PassCoreContextValue): LockAdapterBiometrics => {
+    const { authStore, api } = auth.config;
+
+    /** Persist the `unlockRetryCount` without re-encrypting
+     * the authentication session blob */
+    const setRetryCount = async (unlockRetryCount: number) => {
+        if (unlockRetryCount >= 3) {
+            authStore.setEncryptedOfflineKD(undefined);
+            authStore.setLockMode(LockMode.PASSWORD);
+            await auth.syncLock({ unlockRetryCount: 0 });
+            await auth.lock(LockMode.PASSWORD, { broadcast: true, soft: true });
+            throw new Error(c('Warning').t`Too many attempts`);
+        }
+
+        await auth.syncLock({ unlockRetryCount });
+    };
+
+    const adapter: LockAdapterBiometrics = {
+        type: LockMode.BIOMETRICS,
+
+        check: async () => {
+            logger.info(`[BiometricLock] checking lock`);
+            if (!authStore.hasOfflineComponents()) return { mode: LockMode.NONE, locked: false };
+            return { mode: adapter.type, locked: false, ttl: authStore.getLockTTL() };
+        },
+
+        /** Creating a password lock should first verify the user password
+         * with SRP. Only then should we compute the offline components.
+         * Repersists the session with the `offlineKD` encrypted in the session
+         * blob. As such creating a biometrics lock is online-only. */
+        create: async (passwordBuff, ttl, onBeforeCreate) => {
+            logger.info(`[BiometricLock] creating biometrics lock`);
+            const password = deobfuscate(passwordBuff, { zeroize: true });
+
+            const verified = await auth.confirmPassword(password);
+            if (!verified) throw new Error(getInvalidPasswordString(authStore));
+
+            if (!authStore.hasOfflinePassword()) {
+                const components = await generateOfflineComponents(password);
+                authStore.setOfflineComponents(components);
+            }
+
+            const offlineKD = authStore.getOfflineKD();
+            if (!offlineKD) throw new Error('Missing offline KD');
+
+            const encryptedOfflineKD = await generateBiometricsKey(core, offlineKD);
+
+            await onBeforeCreate?.();
+
+            authStore.setEncryptedOfflineKD(encryptedOfflineKD);
+            authStore.setLockMode(adapter.type);
+            authStore.setLockTTL(ttl);
+            authStore.setLockLastExtendTime(getEpoch());
+            authStore.setUnlockRetryCount(0);
+
+            await auth.persistSession().catch(noop);
+
+            return { mode: adapter.type, locked: false, ttl };
+        },
+
+        /** Resets every auth store properties relative to offline
+         * mode and re-persists the session accordingly */
+        delete: async () => {
+            logger.info(`[BiometricLock] deleting biometrics lock`);
+            authStore.setLockLastExtendTime(undefined);
+            authStore.setLockTTL(undefined);
+            authStore.setLockMode(LockMode.NONE);
+            authStore.setLocked(false);
+            authStore.setUnlockRetryCount(0);
+            authStore.setEncryptedOfflineKD(undefined);
+
+            await auth.persistSession().catch(noop);
+
+            return { mode: LockMode.NONE, locked: false };
+        },
+
+        /** Password locking should reset the in-memory `OfflineKD`.
+         * Remove the session lock token as well preeventively in case
+         * a user ends up in a situation with both a password and an
+         * API lock - this should not happen */
+        lock: async () => {
+            logger.info(`[BiometricLock] locking session`);
+            authStore.setOfflineKD(undefined);
+            authStore.setLockToken(undefined);
+            authStore.setLocked(true);
+
+            return { mode: adapter.type, locked: true };
+        },
+
+        /** Password unlocking involves checking if we can decrypt the
+         * `encryptedCacheKey` with the argon2 derivation of the provided
+         * secret. The `offlineKD` is encrypted in the session blob, as
+         * such, we cannot rely on it for comparison when booting offline.
+         * Load the crypto workers early in case password unlocking
+         * happens before we boot the application state (hydrate.saga) */
+        unlock: async (biometricsSecret: string) => {
+            const retryCount = authStore.getUnlockRetryCount() + 1;
+
+            /** API may have been flagged as sessionLocked before
+             * booting offline - as such reset the api state to
+             * avoid failing subsequent requests. */
+            await api.reset();
+
+            try {
+                /** Errors with fetching the biometrics secret
+                 * will be handled during fetching it - here we only need
+                 * to make sure we're still increasing the count  */
+                if (!biometricsSecret) throw new SilentError();
+
+                await loadCoreCryptoWorker();
+
+                const offlineConfig = authStore.getOfflineConfig();
+                const offlineVerifier = authStore.getOfflineVerifier();
+                const offlineEncryptedKD = authStore.getEncryptedOfflineKD();
+
+                if (!(offlineConfig && offlineVerifier && offlineEncryptedKD)) {
+                    throw new PassCryptoError('Invalid biometric lock');
+                }
+
+                const biometricsCryptoKey = await importSymmetricKey(binaryStringToUint8Array(biometricsSecret));
+
+                const offlineKD = await decryptData(
+                    biometricsCryptoKey,
+                    binaryStringToUint8Array(fromBiometricsEncryptedOfflineKD(offlineEncryptedKD).key),
+                    PassEncryptionTag.BiometricOfflineKD
+                );
+
+                const offlineKey = await importSymmetricKey(offlineKD);
+
+                /** this will throw if the derived offlineKD is incorrect */
+                await decryptData(offlineKey, binaryStringToUint8Array(offlineVerifier), PassEncryptionTag.Offline);
+                const hash = uint8ArrayToBinaryString(offlineKD);
+
+                authStore.setOfflineKD(hash);
+                authStore.setLocked(false);
+
+                await auth.syncLock({ unlockRetryCount: 0, lockLastExtendTime: getEpoch() });
+                return hash;
+            } catch (err) {
+                if (err instanceof PassCryptoError) {
+                    /* Fall back to password lock in case the biometrics key can't be decrypted */
+                    authStore.setEncryptedOfflineKD(undefined);
+                    authStore.setLockMode(LockMode.PASSWORD);
+                    await auth.syncLock({ unlockRetryCount: 0 });
+                    await auth.lock(LockMode.PASSWORD, { broadcast: true, soft: true });
+                    throw err;
+                }
+
+                await setRetryCount(retryCount);
+                await auth.lock(adapter.type, { broadcast: true, soft: true });
+                throw err;
+            }
+        },
+    };
+
+    return adapter;
+};

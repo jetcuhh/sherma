@@ -1,0 +1,171 @@
+import { renderHook, waitFor } from '@testing-library/react';
+
+import { Autopay, PAYMENT_METHOD_TYPES } from '@proton/payments/core/constants';
+import type { ChargebeeIframeEvents, SavedPaymentMethod } from '@proton/payments/core/interface';
+import { apiMock } from '@proton/test-api/api';
+
+import { getMockedIframeHandles, mockPostV5Token } from './__mocks__/mock-helpers';
+import { type Dependencies, type Props, useSavedChargebeeMethod } from './useSavedChargebeeMethod';
+
+beforeEach(() => {
+    jest.clearAllMocks();
+});
+
+const mockSavedMethod: SavedPaymentMethod = {
+    ID: 'saved-method-id',
+    Type: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD,
+    Details: {
+        Last4: '1234',
+        Brand: 'visa',
+        ExpMonth: '12',
+        ExpYear: '2025',
+        ZIP: '12345',
+        Country: 'US',
+    },
+    Order: 500,
+    Autopay: Autopay.ENABLE,
+};
+
+const setupHook = (props: Partial<Props> = {}, dependenciesProps: Partial<Dependencies> = {}) => {
+    const defaultProps: Props = {
+        amountAndCurrency: {
+            Amount: 500,
+            Currency: 'EUR',
+        },
+        savedMethod: mockSavedMethod,
+        onChargeable: jest.fn(),
+        onDeclined: jest.fn(),
+    };
+
+    const handles = getMockedIframeHandles();
+    handles.validateSavedCreditCard = jest.fn().mockResolvedValue({
+        data: {
+            authorized: true,
+            authorizedPaymentIntent: {
+                payment_method_type: 'card',
+            },
+        },
+    });
+
+    const dependencies: Dependencies = {
+        api: apiMock,
+        events: {
+            onThreeDsChallenge: jest.fn().mockReturnValue(jest.fn()),
+        } as unknown as ChargebeeIframeEvents,
+        handles,
+        verifyPayment: jest.fn(),
+        ...dependenciesProps,
+    };
+
+    return renderHook(() => useSavedChargebeeMethod({ ...defaultProps, ...props }, dependencies));
+};
+
+describe('useSavedChargebeeMethod', () => {
+    it('should render', () => {
+        const { result } = setupHook();
+        expect(result.current).toBeDefined();
+    });
+
+    it('should fetch payment token', async () => {
+        const { result } = setupHook();
+
+        mockPostV5Token({});
+        const promise = result.current.fetchPaymentToken();
+
+        await promise;
+
+        expect(result.current.fetchingToken).toBe(false);
+        expect(result.current.paymentProcessor?.fetchedPaymentToken).toEqual({
+            Amount: 500,
+            Currency: 'EUR',
+            PaymentToken: 'token',
+            v: 5,
+            chargeable: true,
+            authorized: true,
+            type: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD,
+        });
+    });
+
+    it('should not request payment token if onBeforeSepaPayment returns false', async () => {
+        const onBeforeSepaPayment = jest.fn().mockResolvedValue(false);
+        const { result } = setupHook({
+            savedMethod: {
+                ...mockSavedMethod,
+                Type: PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT,
+                Details: {
+                    AccountName: '123',
+                    Country: 'US',
+                    Last4: '1234',
+                },
+            },
+            onBeforeSepaPayment,
+        });
+
+        const promise = result.current.fetchPaymentToken();
+        await promise;
+
+        expect(onBeforeSepaPayment).toHaveBeenCalled();
+        expect(result.current.fetchingToken).toBe(false);
+        expect(result.current.paymentProcessor?.fetchedPaymentToken).toBe(null);
+    });
+
+    describe('userInitiatedProcessing', () => {
+        it('starts as false', () => {
+            const { result } = setupHook();
+            expect(result.current.userInitiatedProcessing).toBe(false);
+        });
+
+        it('is true while processPaymentToken is pending and resets to false after success', async () => {
+            const { result } = setupHook();
+
+            mockPostV5Token({});
+            let resolveVerify: (value: any) => void = () => {};
+            const verifyPayment = jest.fn(() => new Promise((resolve) => (resolveVerify = resolve))) as any;
+            result.current.paymentProcessor!.verifyPayment = verifyPayment;
+
+            const promise = result.current.processPaymentToken();
+            await waitFor(() => expect(result.current.userInitiatedProcessing).toBe(true));
+
+            resolveVerify({ PaymentToken: 'verified-token', v: 5 });
+            await promise;
+            await waitFor(() => expect(result.current.userInitiatedProcessing).toBe(false));
+        });
+
+        it('resets to false when processPaymentToken fails', async () => {
+            const { result } = setupHook();
+
+            mockPostV5Token({});
+            const verifyPayment = jest.fn().mockRejectedValue(new Error('boom'));
+            result.current.paymentProcessor!.verifyPayment = verifyPayment;
+
+            await expect(result.current.processPaymentToken()).rejects.toThrow('boom');
+            expect(result.current.userInitiatedProcessing).toBe(false);
+        });
+    });
+
+    it('should verify payment token', async () => {
+        const { result } = setupHook();
+
+        mockPostV5Token({});
+        await result.current.fetchPaymentToken();
+
+        const verifyPayment = jest.fn().mockResolvedValue({
+            PaymentToken: 'verified-token',
+            v: 5,
+        });
+
+        result.current.paymentProcessor!.verifyPayment = verifyPayment;
+
+        const verifiedToken = await result.current.verifyPaymentToken();
+
+        expect(verifyPayment).toHaveBeenCalled();
+        expect(verifiedToken).toEqual({
+            Amount: 500,
+            Currency: 'EUR',
+            PaymentToken: 'verified-token',
+            v: 5,
+            chargeable: true,
+            type: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD,
+        });
+    });
+});

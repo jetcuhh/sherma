@@ -1,0 +1,22 @@
+import type { Api } from '../interfaces/Api';
+import type { PasswordPolicies } from '../interfaces/PasswordPolicy';
+import type { User } from '../interfaces/User';
+import { isPaid } from '../user/helpers';
+
+// Only doing password policies for users in an org as of 25.04.2025
+export const getShouldUsePasswordPolicies = (user: User) => {
+    return isPaid(user);
+};
+
+export const getPasswordPolicies = async ({ api }: { api: Api }): Promise<PasswordPolicies> => {
+    try {
+        const { PasswordPolicies } = await api<{ PasswordPolicies: PasswordPolicies }>({
+            silence: true,
+            method: 'get',
+            url: `auth/v4/password-policies`,
+        });
+        return PasswordPolicies;
+    } catch {
+        return [];
+    }
+};

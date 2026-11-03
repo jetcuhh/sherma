@@ -1,0 +1,50 @@
+import type { ReactNode } from 'react';
+
+import { c } from 'ttag';
+
+import { useUser } from '@proton/account/user/hooks';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { Card } from '@proton/atoms/Card/Card';
+import { PLANS } from '@proton/payments/core/constants';
+import { getUpgradePath } from '@proton/payments/core/subscription/upsell';
+import { Audience } from '@proton/shared/lib/interfaces/Subscription';
+import clsx from '@proton/utils/clsx';
+
+import SettingsLink from '../../components/link/SettingsLink';
+import { useBundleProPlan } from '../../hooks/useHasPlan';
+
+interface Props {
+    children: ReactNode;
+    className?: string;
+    audience?: Audience;
+    upsellPath?: string;
+}
+
+const UpgradeBanner = ({ className, children, audience, upsellPath }: Props) => {
+    const [user] = useUser();
+    const bundleProPlan = useBundleProPlan();
+
+    return (
+        <Card className={clsx(['flex items-center', className])} rounded>
+            <p className="m-0 mr-8 flex-1">{children}</p>
+            <ButtonLike
+                as={SettingsLink}
+                path={(() => {
+                    return getUpgradePath(
+                        {
+                            user,
+                            plan: audience === Audience.B2B ? bundleProPlan : PLANS.BUNDLE,
+                            audience,
+                        },
+                        upsellPath
+                    );
+                })()}
+                color="norm"
+                className="mt-auto"
+                aria-label={c('Action').t`Upgrade your plan`}
+            >{c('Action').t`Upgrade`}</ButtonLike>
+        </Card>
+    );
+};
+
+export default UpgradeBanner;

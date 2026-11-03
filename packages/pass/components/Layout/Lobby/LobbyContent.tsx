@@ -1,0 +1,256 @@
+import { type FC, type ReactNode, useEffect, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { CircleLoader } from '@proton/atoms/CircleLoader/CircleLoader';
+import { BRAND_NAME, PASS_APP_NAME, PASS_SHORT_APP_NAME } from '@proton/shared/lib/constants';
+import clsx from '@proton/utils/clsx';
+
+import { PasswordVerification } from '../../../lib/auth/password';
+import type { AuthOptions } from '../../../lib/auth/service';
+import {
+    clientBusy,
+    clientDesktopLocked,
+    clientErrored,
+    clientMissingScope,
+    clientPasswordLocked,
+    clientSessionLocked,
+    clientStale,
+} from '../../../lib/client';
+import type { Maybe } from '../../../types/utils';
+import { AppStatus } from '../../../types/worker/state';
+import { useAuthStore } from '../../Core/AuthStoreProvider';
+import { useOnline } from '../../Core/ConnectivityProvider';
+import { BiometricsUnlock } from '../../Lock/BiometricsUnlock';
+import { DesktopUnlock } from '../../Lock/DesktopUnlock';
+import { PasswordConfirm } from '../../Lock/PasswordConfirm';
+import { PasswordUnlock } from '../../Lock/PasswordUnlock';
+import { useAuthStorePasswordTypeSwitch } from '../../Lock/PasswordUnlockProvider';
+import { PinUnlock } from '../../Lock/PinUnlock';
+import { Card } from '../Card/Card';
+import { PassTextLogo } from '../Logo/PassTextLogo';
+
+import './LobbyContent.scss';
+
+const ERROR_TIMEOUT = 60_000;
+
+type Props = {
+    error?: string;
+    status: AppStatus;
+    warning?: string;
+    onFork: () => void;
+    onLogin: (options: AuthOptions) => void;
+    onLogout: (options: { soft: boolean }) => void;
+    /** Called when the user explicitly requests to switch to offline
+     * password unlock. Only relevant when the app is locked, the device
+     * is offline, and the active lock type does not support offline boot */
+    onOfflineFallback: () => void;
+    onRegister: () => void;
+    renderAccountSwitcher?: () => ReactNode;
+    renderError: (error: string) => ReactNode;
+    renderFooter?: () => ReactNode;
+};
+
+export const LobbyContent: FC<Props> = ({
+    error,
+    status,
+    warning,
+    onFork,
+    onLogin,
+    onLogout,
+    onOfflineFallback,
+    onRegister,
+    renderAccountSwitcher,
+    renderError,
+    renderFooter,
+}) => {
+    const online = useOnline();
+    const authStore = useAuthStore();
+    const [criticalError, setCriticalError] = useState<Maybe<string>>(undefined);
+    const [unlocking, setUnlocking] = useState(false);
+
+    /** Resolved from the crypto material rather than the `offlineEnabled` setting:
+     * synchronous, so the unlock form is never disabled while a read settles, and
+     * immune to a settings read failing into defaults that read as "disabled". */
+    const offlineEnabled = Boolean(authStore?.hasOfflineComponents());
+
+    const hasExtraPassword = Boolean(authStore?.getExtraPassword());
+    const isSSO = Boolean(authStore?.getSSO());
+
+    const passwordTypeSwitch = useAuthStorePasswordTypeSwitch();
+
+    const stale = clientStale(status);
+    const locked = clientSessionLocked(status) || clientDesktopLocked(status);
+    const errored = clientErrored(status);
+    const passwordLocked = clientPasswordLocked(status);
+    const missingScope = clientMissingScope(status);
+    const busy = clientBusy(status);
+    const canSignOut = errored || locked || passwordLocked || missingScope;
+
+    useEffect(() => {
+        if (error) return setCriticalError(error);
+        if (stale) {
+            const staleErrorText = c('Warning')
+                .t`Something went wrong while starting ${PASS_APP_NAME}. Please try refreshing or reloading the extension`;
+            const timer = setTimeout(() => setCriticalError(staleErrorText), ERROR_TIMEOUT);
+            return () => clearTimeout(timer);
+        }
+    }, [stale, error]);
+
+    const brandNameJSX = <PassTextLogo key="pass-text-logo" className="pass-lobby--brand-text shrink-0 logo" />;
+
+    if (criticalError) return renderError(criticalError);
+
+    if (busy) {
+        return (
+            <div
+                key="lobby-loading"
+                className="flex flex-column items-center gap-3 mt-12 w-full anime-fade-in"
+                style={{ '--anime-delay': '250ms' }}
+            >
+                <CircleLoader size="medium" />
+                <span className="block text-sm text-weak">
+                    {(() => {
+                        switch (status) {
+                            case AppStatus.AUTHORIZED:
+                            case AppStatus.AUTHORIZING:
+                                // translator: status message displayed when loading
+                                return c('Info').t`Signing you in`;
+                            case AppStatus.BOOTING:
+                                return c('Info').t`Decrypting your data`;
+                            default:
+                                return c('Info').t`Loading ${PASS_APP_NAME}`;
+                        }
+                    })()}
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <div key="lobby" className="anime-fade-in" style={{ '--anime-delay': '250ms' }}>
+            <div className="flex flex-column items-center gap-3">
+                <span className="pass-lobby--heading w-full text-bold text-norm text-no-wrap flex flex-nowrap gap-2 items-end justify-center user-select-none">
+                    {locked || passwordLocked || missingScope
+                        ? c('Title').jt`Unlock ${brandNameJSX}`
+                        : c('Title').jt`Welcome to ${brandNameJSX}`}
+                </span>
+                <span className="text-norm">
+                    {(() => {
+                        switch (status) {
+                            case AppStatus.SESSION_LOCKED:
+                                return c('Info').jt`Enter your PIN code`;
+                            case AppStatus.PASSWORD_LOCKED:
+                                return passwordTypeSwitch({
+                                    sso: c('Info').t`Unlock ${PASS_SHORT_APP_NAME} with your backup password`,
+                                    extra: c('Info').t`Unlock ${PASS_SHORT_APP_NAME} with your extra password`,
+                                    twoPwd: c('Info').t`Unlock ${PASS_SHORT_APP_NAME} with your second password`,
+                                    default: c('Info')
+                                        .t`Unlock ${PASS_SHORT_APP_NAME} with your ${BRAND_NAME} password`,
+                                });
+                            case AppStatus.BIOMETRICS_LOCKED:
+                                return c('Info').t`Unlock ${PASS_SHORT_APP_NAME} with biometrics`;
+                            case AppStatus.DESKTOP_LOCKED:
+                                return c('Info').t`Unlock ${PASS_SHORT_APP_NAME} with biometrics`;
+                            case AppStatus.MISSING_SCOPE:
+                                return c('Info').t`Enter your extra password`;
+                            case AppStatus.ERROR:
+                                return;
+                            default:
+                                return c('Info').jt`Sign in to your account`;
+                        }
+                    })()}
+                </span>
+                <span className="text-xs text-bold color-weak">
+                    {(() => {
+                        switch (status) {
+                            case AppStatus.PASSWORD_LOCKED:
+                                if (isSSO) {
+                                    return c('Info').t`You can also define a PIN code to unlock ${PASS_APP_NAME}`;
+                                }
+                        }
+                    })()}
+                </span>
+            </div>
+
+            {warning && (
+                <Card type="danger" className={clsx('text-sm', EXTENSION_BUILD ? 'mt-4' : 'mt-6')}>
+                    {warning}
+                </Card>
+            )}
+
+            <div className={clsx('flex-1 flex flex-column gap-2 mt-6')}>
+                {renderAccountSwitcher?.()}
+                {(() => {
+                    switch (status) {
+                        case AppStatus.MISSING_SCOPE:
+                            return (
+                                <PasswordConfirm
+                                    mode={PasswordVerification.EXTRA_PASSWORD}
+                                    onSuccess={() => onLogin({ forceLock: false })}
+                                />
+                            );
+
+                        case AppStatus.SESSION_LOCKED:
+                            return (
+                                <PinUnlock
+                                    onLoading={setUnlocking}
+                                    onOffline={onOfflineFallback}
+                                    offlineEnabled={offlineEnabled}
+                                />
+                            );
+
+                        case AppStatus.PASSWORD_LOCKED:
+                            return <PasswordUnlock offlineEnabled={offlineEnabled} extraPassword={hasExtraPassword} />;
+
+                        case AppStatus.BIOMETRICS_LOCKED:
+                            return <BiometricsUnlock offlineEnabled={offlineEnabled} />;
+
+                        case AppStatus.DESKTOP_LOCKED:
+                            return <DesktopUnlock onOffline={onOfflineFallback} offlineEnabled={offlineEnabled} />;
+
+                        default:
+                            return (
+                                <Button
+                                    pill
+                                    shape="solid"
+                                    color="norm"
+                                    className="w-full"
+                                    onClick={() => (errored ? onLogin({ forceLock: true }) : onFork())}
+                                    disabled={!online && (errored ? !offlineEnabled : true)}
+                                >
+                                    {errored ? c('Action').t`Retry` : c('Action').t`Sign in with ${BRAND_NAME}`}
+                                </Button>
+                            );
+                    }
+                })()}
+                {!(busy || unlocking) &&
+                    (canSignOut ? (
+                        <Button
+                            className="w-full"
+                            color={'weak'}
+                            onClick={() => onLogout({ soft: true })}
+                            pill
+                            shape="ghost"
+                        >
+                            {c('Action').t`Sign out`}
+                        </Button>
+                    ) : (
+                        <Button
+                            pill
+                            shape="solid"
+                            color="weak"
+                            className="w-full"
+                            onClick={onRegister}
+                            disabled={!online}
+                        >
+                            {c('Action').t`Create a ${BRAND_NAME} account`}
+                        </Button>
+                    ))}
+            </div>
+
+            {renderFooter?.()}
+        </div>
+    );
+};

@@ -1,0 +1,236 @@
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
+
+import type { MeetState } from '../rootReducer';
+
+export enum MeetingSideBars {
+    Participants = 'Participants',
+    AssignHost = 'AssignHost',
+    Settings = 'Settings',
+    Chat = 'Chat',
+    MeetingDetails = 'MeetingDetails',
+    Backgrounds = 'Backgrounds',
+}
+
+export enum PopUpControls {
+    Microphone = 'Microphone',
+    Camera = 'Camera',
+    LeaveMeetingParticipant = 'LeaveMeetingParticipant',
+    LeaveMeeting = 'LeaveMeeting',
+    EndMeeting = 'EndMeeting',
+    ScreenShareLeaveWarning = 'ScreenShareLeaveWarning',
+}
+
+export enum PermissionPromptStatus {
+    CAMERA = 'CAMERA',
+    MICROPHONE = 'MICROPHONE',
+    CLOSED = 'CLOSED',
+}
+
+enum ParticipantListTabs {
+    WaitingRoom = 0,
+    AllParticipants = 1,
+}
+
+interface UIState {
+    meetingReadyPopupOpen: boolean;
+    emojiReactionPopupOpen: boolean;
+    showDuration: boolean;
+    sideBarState: {
+        [MeetingSideBars.Participants]: boolean;
+        [MeetingSideBars.AssignHost]: boolean;
+        [MeetingSideBars.Settings]: boolean;
+        [MeetingSideBars.Chat]: boolean;
+        [MeetingSideBars.MeetingDetails]: boolean;
+        [MeetingSideBars.Backgrounds]: boolean;
+    };
+    popupState: Record<PopUpControls, boolean>;
+    permissionPromptStatus: PermissionPromptStatus;
+    noDeviceDetected: PermissionPromptStatus;
+    participantListTab: ParticipantListTabs;
+    chatFocusedMessageId: string | null;
+    participantCountMismatchSince: number | null;
+    participantCountMismatchBannerDismissed: boolean;
+    transcriptionEnabled: boolean;
+}
+
+const initialState: UIState = {
+    meetingReadyPopupOpen: false,
+    emojiReactionPopupOpen: false,
+    showDuration: true,
+    sideBarState: {
+        [MeetingSideBars.Participants]: false,
+        [MeetingSideBars.AssignHost]: false,
+        [MeetingSideBars.Settings]: false,
+        [MeetingSideBars.Chat]: false,
+        [MeetingSideBars.MeetingDetails]: false,
+        [MeetingSideBars.Backgrounds]: false,
+    },
+    popupState: {
+        [PopUpControls.Microphone]: false,
+        [PopUpControls.Camera]: false,
+        [PopUpControls.LeaveMeeting]: false,
+        [PopUpControls.LeaveMeetingParticipant]: false,
+        [PopUpControls.ScreenShareLeaveWarning]: false,
+        [PopUpControls.EndMeeting]: false,
+    },
+    permissionPromptStatus: PermissionPromptStatus.CLOSED,
+    noDeviceDetected: PermissionPromptStatus.CLOSED,
+    participantListTab: ParticipantListTabs.AllParticipants,
+    chatFocusedMessageId: null,
+    participantCountMismatchSince: null,
+    participantCountMismatchBannerDismissed: false,
+    transcriptionEnabled: false,
+};
+
+const slice = createSlice({
+    name: 'uiState',
+    initialState,
+    reducers: {
+        toggleShowDuration: (state) => {
+            state.showDuration = !state.showDuration;
+        },
+        setMeetingReadyPopupOpen: (state, action: PayloadAction<boolean>) => {
+            state.meetingReadyPopupOpen = action.payload;
+        },
+        setEmojiReactionPopupOpen: (state, action: PayloadAction<boolean>) => {
+            state.emojiReactionPopupOpen = action.payload;
+        },
+        toggleSideBarState: (state, action: PayloadAction<MeetingSideBars>) => {
+            const sidebar = action.payload;
+            const wasOpen = state.sideBarState[sidebar];
+
+            Object.keys(state.sideBarState).forEach((key) => {
+                state.sideBarState[key as MeetingSideBars] = false;
+            });
+
+            state.sideBarState[sidebar] = !wasOpen;
+            state.chatFocusedMessageId = null;
+        },
+        openChatAtMessage: (state, action: PayloadAction<string>) => {
+            Object.keys(state.sideBarState).forEach((key) => {
+                state.sideBarState[key as MeetingSideBars] = false;
+            });
+
+            state.sideBarState[MeetingSideBars.Chat] = true;
+            state.chatFocusedMessageId = action.payload;
+        },
+        clearChatFocusedMessage: (state) => {
+            state.chatFocusedMessageId = null;
+        },
+        openSideBar: (state, action: PayloadAction<MeetingSideBars>) => {
+            Object.keys(state.sideBarState).forEach((key) => {
+                state.sideBarState[key as MeetingSideBars] = false;
+            });
+
+            state.sideBarState[action.payload] = true;
+        },
+        closeSideBar: (state, action: PayloadAction<MeetingSideBars>) => {
+            state.sideBarState[action.payload] = false;
+        },
+        closeAllSideBars: (state) => {
+            Object.keys(state.sideBarState).forEach((key) => {
+                state.sideBarState[key as MeetingSideBars] = false;
+            });
+        },
+        togglePopupState: (state, action: PayloadAction<PopUpControls>) => {
+            const popup = action.payload;
+            const wasOpen = state.popupState[popup];
+
+            Object.keys(state.popupState).forEach((key) => {
+                state.popupState[key as PopUpControls] = false;
+            });
+
+            state.popupState[popup] = !wasOpen;
+        },
+        setPopupStateValue: (state, action: PayloadAction<{ popup: PopUpControls; value: boolean }>) => {
+            const { popup, value } = action.payload;
+            state.popupState[popup] = value;
+        },
+        closeAllPopups: (state) => {
+            Object.keys(state.popupState).forEach((key) => {
+                state.popupState[key as PopUpControls] = false;
+            });
+        },
+        setPermissionPromptStatus: (state, action: PayloadAction<PermissionPromptStatus>) => {
+            state.permissionPromptStatus = action.payload;
+        },
+        setNoDeviceDetected: (state, action: PayloadAction<PermissionPromptStatus>) => {
+            state.noDeviceDetected = action.payload;
+        },
+        setParticipantListTab: (state, action: PayloadAction<ParticipantListTabs>) => {
+            state.participantListTab = action.payload;
+        },
+        setParticipantCountMismatchSince: (state, action: PayloadAction<number | null>) => {
+            state.participantCountMismatchSince = action.payload;
+            // A dismissal only covers the mismatch it was made for, so a later one is surfaced again.
+            state.participantCountMismatchBannerDismissed = false;
+        },
+        dismissParticipantCountMismatchBanner: (state) => {
+            state.participantCountMismatchBannerDismissed = true;
+        },
+        toggleTranscription: (state) => {
+            state.transcriptionEnabled = !state.transcriptionEnabled;
+        },
+        openWaitingRoomSideBar: (state) => {
+            Object.keys(state.sideBarState).forEach((key) => {
+                state.sideBarState[key as MeetingSideBars] = false;
+            });
+            state.sideBarState[MeetingSideBars.Participants] = true;
+            state.participantListTab = ParticipantListTabs.WaitingRoom;
+        },
+        resetUiState: (state) => {
+            state.meetingReadyPopupOpen = initialState.meetingReadyPopupOpen;
+            state.emojiReactionPopupOpen = initialState.emojiReactionPopupOpen;
+            state.showDuration = initialState.showDuration;
+            state.sideBarState = initialState.sideBarState;
+            state.popupState = initialState.popupState;
+            state.permissionPromptStatus = initialState.permissionPromptStatus;
+            state.noDeviceDetected = initialState.noDeviceDetected;
+            state.participantListTab = initialState.participantListTab;
+            state.chatFocusedMessageId = initialState.chatFocusedMessageId;
+            state.participantCountMismatchSince = initialState.participantCountMismatchSince;
+            state.participantCountMismatchBannerDismissed = initialState.participantCountMismatchBannerDismissed;
+            state.transcriptionEnabled = initialState.transcriptionEnabled;
+        },
+    },
+});
+
+export const {
+    setMeetingReadyPopupOpen,
+    setEmojiReactionPopupOpen,
+    toggleShowDuration,
+    toggleSideBarState,
+    openChatAtMessage,
+    clearChatFocusedMessage,
+    setParticipantListTab,
+    openSideBar,
+    openWaitingRoomSideBar,
+    togglePopupState,
+    setPopupStateValue,
+    setPermissionPromptStatus,
+    setNoDeviceDetected,
+    setParticipantCountMismatchSince,
+    dismissParticipantCountMismatchBanner,
+    toggleTranscription,
+    resetUiState,
+} = slice.actions;
+
+// Selectors
+export const selectMeetingReadyPopupOpen = (state: MeetState) => state.uiState.meetingReadyPopupOpen;
+export const selectEmojiReactionPopupOpen = (state: MeetState) => state.uiState.emojiReactionPopupOpen;
+export const selectSideBarState = (state: MeetState) => state.uiState.sideBarState;
+export const selectPopupState = (state: MeetState) => state.uiState.popupState;
+export const selectPermissionPromptStatus = (state: MeetState) => state.uiState.permissionPromptStatus;
+export const selectNoDeviceDetected = (state: MeetState) => state.uiState.noDeviceDetected;
+export const selectShowDuration = (state: MeetState) => state.uiState.showDuration;
+export const selectParticipantListTab = (state: MeetState) => state.uiState.participantListTab;
+export const selectChatFocusedMessageId = (state: MeetState) => state.uiState.chatFocusedMessageId;
+export const selectParticipantCountMismatchSince = (state: MeetState) => state.uiState.participantCountMismatchSince;
+export const selectParticipantCountMismatchBannerDismissed = (state: MeetState) =>
+    state.uiState.participantCountMismatchBannerDismissed;
+export const selectTranscriptionEnabled = (state: MeetState) => state.uiState.transcriptionEnabled;
+export const selectIsSideBarOpen = (state: MeetState) =>
+    Object.values(state.uiState.sideBarState).some((value) => value);
+
+export const uiStateReducer = { uiState: slice.reducer };

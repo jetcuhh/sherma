@@ -1,0 +1,267 @@
+import { updateServerTime } from '@protontech/crypto/serverTime';
+
+import { configureApi } from '@proton/shared/lib/api';
+import {
+    getApiError,
+    getApiErrorMessage,
+    getIsOfflineError,
+    getIsTimeoutError,
+    getIsUnreachableError,
+} from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { getClientID } from '@proton/shared/lib/apps/helper';
+import { DEFAULT_TIMEOUT } from '@proton/shared/lib/constants';
+import { createOfflineError } from '@proton/shared/lib/fetch/ApiError';
+import { protonFetch } from '@proton/shared/lib/fetch/fetch';
+import { withLocaleHeaders } from '@proton/shared/lib/fetch/headers';
+import { getDateHeader } from '@proton/shared/lib/fetch/helpers';
+import { localeCode } from '@proton/shared/lib/i18n';
+import type { ProtonConfig } from '@proton/shared/lib/interfaces/config';
+import noop from '@proton/utils/noop';
+
+import { API_CONCURRENCY_TRESHOLD } from '../../constants';
+import {
+    type Api,
+    type ApiAuth,
+    type ApiCallFn,
+    type ApiOptions,
+    type ApiResult,
+    type ApiSubscriptionEvent,
+    AuthMode,
+} from '../../types/api/api';
+import type { Maybe } from '../../types/utils';
+import { awaiter } from '../../utils/fp/promises';
+import { waitUntil } from '../../utils/fp/wait-until';
+import { logger } from '../../utils/logger';
+import { createPubSub } from '../../utils/pubsub/factory';
+import { authStore } from '../auth/store';
+import { withQARefreshStatus } from '../qa/api';
+import { PassErrorCode, isAbortError, isShareRemovedError } from './errors';
+import { withApiHandlers } from './handlers';
+import { refreshHandlerFactory } from './refresh';
+import {
+    API_FAILURE_THRESHOLD,
+    buildApiState,
+    getIsSessionInvalid,
+    getSilenced,
+    isAccessRestricted,
+    isSessionResumeRoute,
+} from './utils';
+
+export type ApiFactoryOptions = {
+    config: ProtonConfig;
+    /** Specifies the maximum number of concurrent requests. If not provided,
+     * all requests will be processed immediately. When a value is set, ongoing
+     * requests will be deferred until the threshold is ready for additional processing. */
+    threshold?: number;
+    getAuth?: () => Maybe<ApiAuth>;
+};
+
+/** Provides dynamic API auth options based on the current session state.
+ * Supports upgrading from token-based to cookie-based authentication.
+ * This is crucial for scenarios where token-based auth is required
+ * before transitioning to cookies, enabling seamless auth upgrades. */
+const getDynamicAuth = (): Maybe<ApiAuth> => {
+    const { cookies, UID, AccessToken, RefreshToken, RefreshTime } = authStore.getSession();
+    if (!UID) return undefined;
+
+    if (cookies) return { type: AuthMode.COOKIE, UID, RefreshTime };
+    if (AccessToken && RefreshToken) return { type: AuthMode.TOKEN, UID, AccessToken, RefreshToken, RefreshTime };
+};
+
+export const createApi = ({
+    config,
+    getAuth = getDynamicAuth,
+    threshold = API_CONCURRENCY_TRESHOLD,
+}: ApiFactoryOptions): Api => {
+    const state = buildApiState();
+    const pubsub = createPubSub<ApiSubscriptionEvent>();
+    const clientID = getClientID(config.APP_NAME);
+
+    const call = withQARefreshStatus(configureApi({ ...config, clientID, protonFetch } as any) as ApiCallFn);
+
+    const refreshHandler = refreshHandlerFactory({
+        call,
+        getAuth,
+        onRefresh: (data) => pubsub.publishAsync({ type: 'refresh', data }),
+    });
+
+    const apiCall = withApiHandlers({ call, getAuth, refreshHandler, state });
+
+    const api = (async (options: ApiOptions): Promise<ApiResult> => {
+        if (state.get('resumeLocked') && !isSessionResumeRoute(options?.url)) {
+            logger.debug(`[API] blocked by resume gate`, options.url);
+            throw createOfflineError(options);
+        }
+
+        const pending = state.get('pendingCount') + 1;
+        state.set('pendingCount', pending);
+
+        if (threshold && pending > threshold && !options.prioritize) {
+            const trigger = awaiter<void>();
+            state.get('queued').push(trigger);
+            await trigger;
+        }
+
+        /** According to the API specification : no requests
+         * should be made if a refresh is ongoing */
+        await waitUntil(() => !state.get('refreshing'), 250, DEFAULT_TIMEOUT);
+
+        const { output = 'json', sideEffects = true, ...rest } = options;
+        const config = getAuth() ? rest : withLocaleHeaders(localeCode, rest);
+        let aborted = false;
+
+        return apiCall(config)
+            .then((response) => {
+                const latestServerTime = state.get('serverTime')?.getTime() ?? 0;
+                const serverTime = getDateHeader(response.headers);
+
+                /* The HTTP Date header is mandatory, so this should never
+                 * occur. We need the server time for proper time sync: falling
+                 * back to the local time can result in e.g. unverifiable signatures */
+                if (!serverTime) throw new Error('Could not fetch server time');
+
+                /** If the server time isn't greater than the last seen
+                 * server time value - then we may be dealing with a cached
+                 * response. In such cases, avoid mutating API state */
+                if (sideEffects && serverTime.getTime() >= latestServerTime) {
+                    const broadcast = !state.get('online') || state.get('unreachable');
+                    const pendingCount = state.get('pendingCount');
+                    state.set('serverTime', updateServerTime(serverTime));
+                    state.set('failureCount', 0);
+                    state.set('unreachable', false);
+                    state.set('online', true);
+
+                    /** Deferred ONLINE broadcast: arm a one-shot countdown so we don't publish
+                     * recovery on a single lucky success while concurrent requests may still
+                     * fail. Each settled request (success or failure) drains the counter via
+                     * `.finally`. ONLINE fires when it hits 0. Subsequent concurrent successes
+                     * can't re-arm. Cap at `threshold` to avoid long resolution. */
+                    if (broadcast) state.set('ticksUntilOnline', Math.min(pendingCount, threshold));
+                }
+
+                return Promise.resolve(
+                    (() => {
+                        switch (output) {
+                            case 'stream':
+                                return response.body;
+                            case 'raw':
+                                return response;
+                            default:
+                                return response[output]();
+                        }
+                    })()
+                );
+            })
+            .catch((e: any) => {
+                if (isAbortError(e)) aborted = true;
+                if (!sideEffects || aborted) throw e;
+
+                const serverTime = e.response?.headers ? getDateHeader(e.response.headers) : undefined;
+                const { code } = getApiError(e);
+                const error = getApiErrorMessage(e);
+                const silent = getSilenced(options, code);
+
+                const networkError = code === PassErrorCode.SERVICE_NETWORK_ERROR;
+                const timedOut = getIsTimeoutError(e);
+                const offline = getIsOfflineError(e);
+                const missingScope = code === PassErrorCode.MISSING_SCOPE;
+                const restricted = isAccessRestricted(code, options.url);
+                const online = !(offline || timedOut || networkError);
+                const sessionLocked = e.name === 'LockedSession';
+                const sessionInactive = e.name === 'InactiveSession' || code === PassErrorCode.SRP_ERROR;
+
+                /** Count failures that reached the network and left the session valid. A single
+                 * status cannot tell an outage from a legitimate error, but a run of failures
+                 * with nothing succeeding in between means the API is unusable whatever it
+                 * answers. This is what surfaces a rate-limited outage as DOWNTIME, since
+                 * `getIsUnreachableError` only covers 5xx. Only a success clears the count:
+                 * losing the network or the session says nothing about server health.
+                 * `status > 0` excludes errors thrown before the request left the client
+                 * (`handlers.ts` short-circuits on a bad app version or a locked session).
+                 * A removed share fails every request on its items and folders: a healthy
+                 * answer that must not stop event polling. */
+                const counts = online && e.status > 0 && !getIsSessionInvalid(e) && !isShareRemovedError(e);
+                const failureCount = state.get('failureCount') + (counts ? 1 : 0);
+                const unreachable = getIsUnreachableError(e) || failureCount >= API_FAILURE_THRESHOLD;
+                const broadcast = state.get('online') !== online || state.get('unreachable') !== unreachable;
+
+                if (serverTime) state.set('serverTime', updateServerTime(serverTime));
+                state.set('appVersionBad', e.name === 'AppVersionBadError');
+                state.set('failureCount', failureCount);
+                state.set('sessionInactive', sessionInactive);
+                state.set('sessionLocked', sessionLocked);
+                state.set('unreachable', unreachable);
+                state.set('online', online);
+
+                if (broadcast) {
+                    /** Failure supersedes any deferred ONLINE: reset the countdown and
+                     * publish OFFLINE/DOWNTIME immediately. A concurrent success can
+                     * still re-arm on its next tick if state flips back. */
+                    state.set('ticksUntilOnline', 0);
+                    pubsub.publish({ type: 'connectivity', online, unreachable });
+                }
+
+                if (sessionLocked) pubsub.publish({ type: 'session', status: 'locked' });
+                if (sessionInactive) pubsub.publish({ type: 'session', status: 'inactive', silent });
+                if (restricted) pubsub.publish({ type: 'session', status: 'restricted', error });
+                if (missingScope) pubsub.publish({ type: 'session', status: 'missing-scope' });
+                if (error) pubsub.publish({ type: 'error', error, silent });
+
+                throw e;
+            })
+            .finally(() => {
+                state.set('pendingCount', (prev) => prev - 1);
+                state.get('queued').shift()?.resolve();
+
+                if (sideEffects && !aborted) {
+                    /** Drain the deferred-ONLINE countdown. Each settled request contributes
+                     * one tick. Publish ONLINE on the final tick. Hardcoded `online: true,
+                     * unreachable: false` is invariant here: the only path that can arm the
+                     * counter is the success-block flip to ONLINE, and any failure mid-drain
+                     * would have reset it to 0 via the catch path. */
+                    const pending = state.get('ticksUntilOnline');
+                    if (pending > 0) {
+                        const next = pending - 1;
+                        state.set('ticksUntilOnline', next);
+                        if (next === 0) pubsub.publish({ type: 'connectivity', online: true, unreachable: false });
+                    }
+                }
+            });
+    }) as Api;
+
+    api.getState = () => state.data;
+
+    api.idle = async () => {
+        /* if API has pending requests - wait for API to be completely idle before
+         * resetting state - this allows propagating API error state correctly.
+         * For instance, on an inactive session, we want to avoid resetting the state
+         * before every ongoing request has terminated (possible retries or refreshes) */
+        if (state.get('pendingCount') > 0) {
+            logger.info(`[API] Reset deferred until API idle`);
+            await waitUntil(() => state.get('pendingCount') === 0, 50, DEFAULT_TIMEOUT).catch(noop);
+        }
+    };
+
+    api.reset = async () => {
+        await api.idle();
+
+        state.set('pendingCount', 0);
+        state.set('queued', []);
+        state.set('serverTime', undefined);
+        state.set('appVersionBad', false);
+        state.set('sessionInactive', false);
+        state.set('sessionLocked', false);
+
+        logger.info(`[API] internal api state reset`);
+    };
+
+    api.subscribe = pubsub.subscribe;
+    api.unsubscribe = pubsub.unsubscribe;
+
+    /** Toggle the offline-resume gate. Engaged (`locked: true`) during
+     * offline boot. Released (`locked: false`) once `offlineResume`
+     * succeeds and the session is fully re-authenticated. */
+    api.setResumeLock = (locked) => state.set('resumeLocked', locked);
+
+    return api;
+};

@@ -1,0 +1,195 @@
+import { c } from 'ttag';
+
+import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { PASS_APP_NAME } from '@proton/shared/lib/constants';
+import noop from '@proton/utils/noop';
+
+import type { Maybe } from '../../../../types/utils';
+import { NotificationKey } from '../../../../types/worker/notification';
+import { logger } from '../../../../utils/logger';
+import { getEpoch } from '../../../../utils/time/epoch';
+import { PassErrorCode } from '../../../api/errors';
+import { getIsApiUnavailable } from '../../../api/utils';
+import type { AuthService } from '../../service';
+import { SESSION_VERSION, decryptSessionBlob, getPersistedSessionKey } from '../../session';
+import type { LockAdapterSession } from '../types';
+import { LockMode } from '../types';
+import {
+    checkSessionLock,
+    createSessionLock,
+    deleteSessionLock,
+    forceSessionLock,
+    unlockSession,
+} from './lock.requests';
+
+export const sessionLockAdapterFactory = (auth: AuthService): LockAdapterSession => {
+    const { authStore, api, onNotification } = auth.config;
+
+    const getPersistedToken = async (localID: Maybe<number>): Promise<Maybe<string>> => {
+        const session = await auth.config.getPersistedSession(localID);
+        const clientKey = await getPersistedSessionKey(auth.config.api, authStore);
+        const payloadVersion = session?.payloadVersion ?? SESSION_VERSION;
+
+        if (!(session?.blob && clientKey)) throw new Error('Could not verify unlock request against persisted session');
+        const decryptedSession = await decryptSessionBlob(clientKey, session?.blob, payloadVersion);
+        return decryptedSession.sessionLockToken;
+    };
+
+    const adapter: LockAdapterSession = {
+        type: LockMode.SESSION,
+
+        /** Calling this function when a lock is registered and active will extend
+         * the lock by resetting the ttl server-side. The local `lockLastExtendTime`
+         * is bumped in-memory BEFORE the API call (intentionally not persisted here
+         * as `service.checkLock` owns the post-call persist) so a slow `checkSessionLock`
+         * roundtrip cannot race `checkAutoLock`. */
+        check: async () => {
+            logger.info(`[SessionLock] checking session lock`);
+            authStore.setLockLastExtendTime(getEpoch());
+
+            const lock = await checkSessionLock().catch((err) => {
+                /** On connectivity failures, `checkAutoLock` already passed meaning the
+                 * local TTL has not expired. Treat as non-locked to ensure `onLockUpdate`
+                 * still fires and resets the auto-lock auth alarm. */
+                const ttl = authStore.getLockTTL();
+                if (getIsApiUnavailable(err)) return { mode: adapter.type, ttl, locked: false };
+                throw err;
+            });
+
+            authStore.setLocked(lock.locked);
+            authStore.setLockTTL(lock.ttl);
+
+            /* another client may have mutated the API lock */
+            if (authStore.getLockMode() !== lock.mode) {
+                authStore.setLockMode(lock.mode);
+
+                switch (lock.mode) {
+                    case LockMode.NONE:
+                        authStore.setLockToken(undefined);
+                        authStore.setLockLastExtendTime(undefined);
+                        await auth.config.onLockUpdate?.(lock, authStore.getLocalID(), true);
+                        await auth.persistSession().catch(noop);
+                        break;
+                    case LockMode.SESSION:
+                        await auth.lock(adapter.type, { broadcast: true, soft: true });
+                        break;
+                }
+            }
+
+            return lock;
+        },
+
+        /** Creates a session lock. Automatically updates the authentication
+         * store and immediately persists the session on success. */
+        create: async (pin, ttl, onBeforeCreate) => {
+            await onBeforeCreate?.();
+
+            logger.info(`[SessionLock] creating session lock`);
+            const token = await createSessionLock(pin, ttl);
+
+            authStore.setLockToken(token);
+            authStore.setLockTTL(ttl);
+            authStore.setLockLastExtendTime(getEpoch());
+            authStore.setLocked(false);
+            authStore.setLockMode(adapter.type);
+
+            await auth.persistSession().catch(noop);
+
+            return { mode: adapter.type, locked: false, ttl };
+        },
+
+        /** Deletes a registered session lock. Requires the session lock code.
+         * Immediately persists the session on success. */
+        delete: async (secret) => {
+            logger.info(`[SessionLock] deleting session lock`);
+            await deleteSessionLock(secret);
+
+            authStore.setLockToken(undefined);
+            authStore.setLockTTL(undefined);
+            authStore.setLockLastExtendTime(undefined);
+            authStore.setLocked(false);
+            authStore.setLockMode(LockMode.NONE);
+
+            await auth.persistSession().catch(noop);
+            return { mode: LockMode.NONE, locked: false };
+        },
+
+        lock: async (options) => {
+            logger.info(`[SessionLock] locking session`);
+            const sessionLocked = authStore.getLocked();
+            const shouldLockSession = !sessionLocked && !options?.soft;
+
+            if (shouldLockSession) await forceSessionLock().catch(noop);
+
+            authStore.setLockToken(undefined);
+            authStore.setLockLastExtendTime(undefined);
+            authStore.setLocked(true);
+            authStore.setLockMode(adapter.type);
+
+            return { mode: adapter.type, locked: true };
+        },
+
+        unlock: async (secret: string) => {
+            logger.info(`[SessionLock] unlocking session`);
+            await api.reset();
+
+            const currentMode = authStore.getLockMode();
+
+            const token = await unlockSession(secret).catch(async (error) => {
+                /** When unlocking the session, if the lock was unregistered by
+                 * another client we will hit a 400 status-code with the 300008 response
+                 * code. At this point we can login the user without requiring unlock.
+                 * FIXME: BE should reply a custom error code. */
+                const { code, status } = getApiError(error);
+                if (code === PassErrorCode.SESSION_LOCKED && status === 400) {
+                    onNotification?.({
+                        key: NotificationKey.LOCK,
+                        text: c('Error').t`Your PIN code was removed by another ${PASS_APP_NAME} client`,
+                        type: 'error',
+                    });
+
+                    authStore.setLocked(false);
+                    authStore.setLockLastExtendTime(undefined);
+                    authStore.setLockMode(LockMode.NONE);
+                    authStore.setLockTTL(undefined);
+
+                    return undefined;
+                }
+
+                throw error;
+            });
+
+            /** Validate unlock token against persisted session data. This
+             * prevents bypass attacks where an attacker might tamper with
+             * unlock requests when the session is only locked client-side.
+             * We avoid relying on `authStore.getLockToken()` as it is
+             * unstable prior to a full app boot (can reset on auth init/lock). */
+            const currentToken = await getPersistedToken(authStore.getLocalID());
+
+            if (currentToken && currentToken !== token) {
+                await auth.logout({ soft: false, broadcast: true });
+                throw new Error('Invalid session unlock response');
+            }
+
+            const now = getEpoch();
+            authStore.setLockToken(token);
+            authStore.setLockMode(LockMode.SESSION);
+            authStore.setLockLastExtendTime(now);
+            authStore.setUnlockRetryCount(0);
+
+            /** session may be partially hydrated when unlocking  */
+            const validSession = authStore.validSession(authStore.getSession());
+            const shouldPersist = validSession && (currentToken !== token || currentMode !== LockMode.SESSION);
+
+            /** When `shouldPersist`, the full `persistSession` re-encrypts the entire
+             * authStore (including the just-bumped `lockLastExtendTime`). Otherwise
+             * issue a targeted `syncLock` so the persisted session doesn't drift. */
+            if (shouldPersist) await auth.persistSession().catch(noop);
+            else await auth.syncLock({ unlockRetryCount: 0, lockLastExtendTime: now });
+
+            return token;
+        },
+    };
+
+    return adapter;
+};

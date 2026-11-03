@@ -1,0 +1,294 @@
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+
+import { Form, FormikProvider, useFormik } from 'formik';
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { IcAlias } from '@proton/icons/icons/IcAlias';
+import { IcCogWheel } from '@proton/icons/icons/IcCogWheel';
+import { IcNote } from '@proton/icons/icons/IcNote';
+
+import { MAX_ITEM_NAME_LENGTH, MAX_ITEM_NOTE_LENGTH, UpsellRef } from '../../../constants';
+import { useAliasOptions } from '../../../hooks/useAliasOptions';
+import { useItemDraft } from '../../../hooks/useItemDraft';
+import { usePortal } from '../../../hooks/usePortal';
+import { deriveAliasPrefix } from '../../../lib/alias/alias.utils';
+import { filesFormInitializer } from '../../../lib/file-attachments/helpers';
+import { obfuscateExtraFields } from '../../../lib/items/item.obfuscation';
+import { bindOTPSanitizer, sanitizeExtraField } from '../../../lib/items/item.utils';
+import { resolveSubdomain } from '../../../lib/urls/utils/utils';
+import { reconciliateAliasFromDraft, validateNewAliasForm } from '../../../lib/validation/alias';
+import { selectAliasLimits } from '../../../store/selectors/limits';
+import { PassFeature } from '../../../types/api/features';
+import type { NewAliasFormValues } from '../../../types/forms/item';
+import type { MaybeNull } from '../../../types/utils';
+import { SpotlightMessage } from '../../../types/worker/spotlight';
+import { awaiter } from '../../../utils/fp/promises';
+import { obfuscate } from '../../../utils/obfuscate/xor';
+import { isEmptyString } from '../../../utils/string/is-empty-string';
+import { uniqueId } from '../../../utils/string/unique-id';
+import { FeatureFlag } from '../../Core/WithFeatureFlag';
+import { FileAttachmentsField } from '../../FileAttachments/FileAttachmentsField';
+import { ValueControl } from '../../Form/Field/Control/ValueControl';
+import { ExtraFieldGroup } from '../../Form/Field/ExtraFieldGroup/ExtraFieldGroup';
+import { Field } from '../../Form/Field/Field';
+import { FieldsetCluster } from '../../Form/Field/Layout/FieldsetCluster';
+import { TextAreaField } from '../../Form/Field/TextareaField';
+import { TitleField } from '../../Form/Field/TitleField';
+import { VaultFolderPickerField } from '../../Form/Field/VaultFolderPickerField';
+import { Card } from '../../Layout/Card/Card';
+import { ItemCreatePanel } from '../../Layout/Panel/ItemCreatePanel';
+import { SpotlightGradient } from '../../Spotlight/SpotlightGradient';
+import { useSpotlightFor } from '../../Spotlight/WithSpotlight';
+import { UpgradeButton } from '../../Upsell/UpgradeButton';
+import type { ItemNewViewProps } from '../../Views/types';
+import { AliasForm } from './Alias.form';
+
+const FORM_ID = 'new-alias';
+
+/** NOTE: extracted to avoid translation with duplicate variable keys.
+ * see `proton-pass-extension/src/app/worker/services/alias.ts` */
+const getPlaceholderNote = (url: string) => c('Placeholder').t`Used on ${url}`;
+
+export const AliasNew: FC<ItemNewViewProps<'alias'>> = ({ shareId, folderId, url, onSubmit, onCancel }) => {
+    const { ParentPortal, openPortal } = usePortal();
+    const { current: draftHydrated } = useRef(awaiter<MaybeNull<NewAliasFormValues>>());
+
+    const [reconciled, setReconciled] = useState(false);
+    const [showAdvanced, setShowAdvanced] = useState(false);
+    const customizeAliasDiscovery = useSpotlightFor(SpotlightMessage.ALIAS_DISCOVERY_CUSTOMIZE);
+
+    const toggleShowAdvanced = () => {
+        if (customizeAliasDiscovery.open) customizeAliasDiscovery.close();
+        setShowAdvanced((state) => !state);
+    };
+
+    const { needsUpgrade } = useSelector(selectAliasLimits);
+
+    const { aliasPrefix: defaultAliasPrefix, ...defaults } = useMemo(() => {
+        const domain = url ? resolveSubdomain(url) : null;
+
+        return domain
+            ? { name: domain, note: getPlaceholderNote(domain), aliasPrefix: deriveAliasPrefix(domain) }
+            : { name: '', note: '', aliasPrefix: '' };
+    }, []);
+
+    /* set initial `aliasPrefix` to an empty string to avoid a
+     * form error state if `aliasOptions` have not loaded yet */
+    const initialValues = useMemo<NewAliasFormValues>(
+        () => ({
+            shareId,
+            folderId,
+            aliasPrefix: '',
+            aliasSuffix: undefined,
+            files: filesFormInitializer(),
+            mailboxes: [],
+            extraFields: [],
+            ...defaults,
+        }),
+        []
+    );
+
+    const form = useFormik<NewAliasFormValues>({
+        initialValues,
+        onSubmit: ({ name, note, shareId, folderId, aliasPrefix, aliasSuffix, mailboxes, files, extraFields }) => {
+            if (needsUpgrade) return;
+
+            if (aliasPrefix !== undefined && aliasSuffix !== undefined) {
+                const optimisticId = uniqueId();
+                const aliasEmail = aliasPrefix + aliasSuffix.value;
+                const sanitizeOTP = bindOTPSanitizer(aliasEmail, name);
+
+                onSubmit({
+                    type: 'alias',
+                    optimisticId,
+                    shareId,
+                    folderId,
+                    metadata: {
+                        name,
+                        note: obfuscate(note),
+                        itemUuid: optimisticId,
+                    },
+                    files,
+                    content: {},
+                    extraFields: obfuscateExtraFields(extraFields.map(sanitizeExtraField(sanitizeOTP))),
+                    extraData: {
+                        mailboxes,
+                        prefix: aliasPrefix,
+                        signedSuffix: aliasSuffix.signature,
+                        aliasEmail,
+                    },
+                });
+            }
+        },
+        validate: validateNewAliasForm,
+        validateOnChange: true,
+        validateOnMount: true,
+    });
+
+    const draft = useItemDraft<NewAliasFormValues>(form, {
+        type: 'alias',
+        mode: 'new',
+        onHydrated: draftHydrated.resolve,
+    });
+
+    const aliasOptions = useAliasOptions({
+        shareId,
+        onAliasOptions: async (res) => {
+            try {
+                if (!res.ok) return;
+
+                const options = res.aliasOptions;
+                const draft = await draftHydrated;
+                const formValues = draft ?? form.values;
+
+                const firstSuffix = options.suffixes[0];
+                const firstMailBox = options.mailboxes[0];
+                const prefixFromURL = !isEmptyString(defaultAliasPrefix);
+                const aliasPrefix = prefixFromURL ? defaultAliasPrefix : deriveAliasPrefix(formValues.name);
+
+                const defaultAlias = { aliasPrefix, aliasSuffix: firstSuffix, mailboxes: [firstMailBox] };
+                const draftAlias = draft ? reconciliateAliasFromDraft(formValues, options, defaultAlias) : null;
+
+                const values = { ...formValues, ...(draftAlias ?? defaultAlias) };
+                const errors = await validateNewAliasForm(values);
+
+                if (draft) {
+                    await form.setTouched({ aliasPrefix: deriveAliasPrefix(draft.name) !== draft.aliasPrefix }, false);
+                    await form.setValues(values, true);
+                    form.setErrors(errors);
+                } else form.resetForm({ values, errors, touched: {} });
+            } finally {
+                setReconciled(true);
+            }
+        },
+    });
+
+    const { values, touched, isValid, status, errors, setFieldValue } = form;
+    const { name, aliasPrefix, aliasSuffix } = values;
+    const { unverified, loading } = aliasOptions;
+
+    const canCreate = !(unverified || needsUpgrade);
+    const valid = canCreate && !loading && isValid && !status?.isBusy;
+
+    const gearIcon = <IcCogWheel key="alias-customize-icon" />;
+
+    useEffect(() => {
+        if (reconciled) {
+            const allowPrefixDerivation = !touched.aliasPrefix;
+            if (allowPrefixDerivation) void setFieldValue('aliasPrefix', deriveAliasPrefix(name));
+        }
+    }, [name]);
+
+    return (
+        <ItemCreatePanel
+            discardable={!form.dirty}
+            formId={FORM_ID}
+            handleCancelClick={onCancel}
+            submitButton={needsUpgrade && <UpgradeButton key="upgrade-button" upsellRef={UpsellRef.LIMIT_ALIAS} />}
+            type="alias"
+            valid={valid}
+            actions={ParentPortal}
+        >
+            {({ didEnter }) => (
+                <>
+                    {needsUpgrade && (
+                        <Card className="mb-2 text-sm" type="primary">
+                            {c('Info')
+                                .t`You have reached the limit of aliases you can create.`}
+                        </Card>
+                    )}
+
+                    {unverified && (
+                        <Card className="mb-2 text-sm" type="primary">
+                            {c('Warning').t`Please verify your email address in order to use email aliases`}
+                        </Card>
+                    )}
+
+                    <FormikProvider value={form}>
+                        <Form id={FORM_ID}>
+                            <FieldsetCluster>
+                                {openPortal(<VaultFolderPickerField />)}
+                                <Field
+                                    lengthLimiters
+                                    name="name"
+                                    label={c('Label').t`Title`}
+                                    placeholder={c('Label').t`Untitled`}
+                                    component={TitleField}
+                                    autoFocus={!draft && didEnter && !loading && !needsUpgrade}
+                                    key={`alias-name-${didEnter}-${loading}`}
+                                    maxLength={MAX_ITEM_NAME_LENGTH}
+                                    disabled={unverified || loading}
+                                />
+                            </FieldsetCluster>
+
+                            <FieldsetCluster mode="read" as="div">
+                                <ValueControl
+                                    icon={IcAlias}
+                                    label={c('Label').t`You are about to create`}
+                                    loading={loading}
+                                    error={Boolean(
+                                        Object.keys(form.touched).length > 0 &&
+                                        (errors.aliasPrefix || errors.aliasSuffix)
+                                    )}
+                                    actions={
+                                        <Button
+                                            shape="ghost"
+                                            icon
+                                            pill
+                                            onClick={toggleShowAdvanced}
+                                            title={c('Action').t`Show advanced options`}
+                                        >
+                                            <IcCogWheel />
+                                        </Button>
+                                    }
+                                >
+                                    {`${aliasPrefix}${aliasSuffix?.value ?? ''}`}
+                                </ValueControl>
+                            </FieldsetCluster>
+
+                            {customizeAliasDiscovery.open && (
+                                <SpotlightGradient
+                                    title={c('Title').t`Did you know?`}
+                                    message={c('Info')
+                                        .jt`Tap the icon ${gearIcon} to customize the alias the way you want.`}
+                                    className="mb-2"
+                                    onClose={customizeAliasDiscovery.close}
+                                    withArrow
+                                />
+                            )}
+
+                            <AliasForm
+                                aliasOptions={aliasOptions.value}
+                                loading={loading}
+                                form={form}
+                                showAdvanced={showAdvanced}
+                            />
+
+                            <FieldsetCluster>
+                                <Field name="files" component={FileAttachmentsField} shareId={form.values.shareId} />
+                            </FieldsetCluster>
+
+                            <FieldsetCluster>
+                                <Field
+                                    name="note"
+                                    label={c('Label').t`Note`}
+                                    placeholder={c('Placeholder').t`Enter a note...`}
+                                    component={TextAreaField}
+                                    icon={IcNote}
+                                    maxLength={MAX_ITEM_NOTE_LENGTH}
+                                    disabled={unverified}
+                                />
+                            </FieldsetCluster>
+
+                            <FeatureFlag feature={PassFeature.PassCustomTypeV1}>
+                                <ExtraFieldGroup form={form} />
+                            </FeatureFlag>
+                        </Form>
+                    </FormikProvider>
+                </>
+            )}
+        </ItemCreatePanel>
+    );
+};

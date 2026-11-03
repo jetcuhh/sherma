@@ -1,0 +1,107 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import orderBy from '@proton/utils/orderBy';
+
+import { ApiImporterError, ApiImporterState } from '../../api/api.interface';
+import { ImportType } from '../../interface';
+import type { EasySwitchState } from '../store';
+import type { ActiveImporter, ActiveImportersMap, Importer, ImportersMap } from './importers.interface';
+
+const selectImportersMap = (state: EasySwitchState): ImportersMap => state.importers.importers;
+const selectActiveImportersMap = (state: EasySwitchState): ActiveImportersMap => state.importers.activeImporters;
+const selectImportersLoading = (state: EasySwitchState) => state.importers.loading;
+
+const selectActiveImporters = createSelector(selectActiveImportersMap, (activeImportersMap): ActiveImporter[] =>
+    Object.values(activeImportersMap)
+);
+
+export const selectActiveImporterEntriesByDate = createSelector(
+    [selectActiveImporters, selectImportersMap],
+    (activeImporters, importersMap): { activeImporter: ActiveImporter; importer: Importer }[] =>
+        orderBy(activeImporters, 'startDate')
+            .flatMap((activeImporter) => {
+                const importer = importersMap[activeImporter.importerID];
+                return importer ? [{ activeImporter, importer }] : [];
+            })
+            .reverse()
+);
+
+export const selectActiveImportersErrors = createSelector(
+    [selectImportersMap, selectActiveImporters],
+    (importersMap, activeImporters) => {
+        const delayedImportAccounts: string[] = [];
+        const importErrors = activeImporters.reduce<('storageLimit' | 'authConnection' | 'delayedImport')[]>(
+            (acc, activeImporter) => {
+                const { importState, errorCode, importerID } = activeImporter;
+                const { account } = importersMap[importerID];
+
+                if (
+                    !acc.includes('storageLimit') &&
+                    importState === ApiImporterState.PAUSED &&
+                    errorCode === ApiImporterError.ERROR_CODE_QUOTA_LIMIT
+                ) {
+                    acc.push('storageLimit');
+                }
+
+                if (
+                    !acc.includes('authConnection') &&
+                    importState === ApiImporterState.PAUSED &&
+                    errorCode === ApiImporterError.ERROR_CODE_IMAP_CONNECTION
+                ) {
+                    acc.push('authConnection');
+                }
+
+                if (!acc.includes('authConnection') && importState === ApiImporterState.DELAYED) {
+                    acc.push('delayedImport');
+                }
+                if (importState === ApiImporterState.DELAYED) {
+                    delayedImportAccounts.push(account);
+                }
+
+                return acc;
+            },
+            []
+        );
+
+        return { importErrors, delayedImportAccounts };
+    }
+);
+
+// TODO: Check if we need to implement something for ApiImporterState.CANCELED
+const DRIVE_IMPORT_RUNNING_STATES = [ApiImporterState.QUEUED, ApiImporterState.RUNNING, ApiImporterState.DELAYED];
+
+const selectHasDriveImporter = createSelector(selectImportersMap, (importersMap): boolean =>
+    Object.values(importersMap).some((importer) => importer.products.includes(ImportType.DRIVE))
+);
+
+const selectIsDriveImportRunning = createSelector(selectActiveImporters, (activeImporters): boolean =>
+    activeImporters.some(
+        ({ product, importState }) => product === ImportType.DRIVE && DRIVE_IMPORT_RUNNING_STATES.includes(importState)
+    )
+);
+
+// Drive is only paused by the backend when the user runs out of storage, no ErrorCode is sent.
+const selectIsDriveImportPaused = createSelector(selectActiveImporters, (activeImporters): boolean =>
+    activeImporters.some(
+        ({ product, importState }) => product === ImportType.DRIVE && importState === ApiImporterState.PAUSED
+    )
+);
+
+export interface DriveImportStatus {
+    /** False until loadImporters resolved once, so callers can tell "not known yet" apart from "nothing imported". */
+    isLoaded: boolean;
+    isImporting: boolean;
+    /** Stopped by the backend because the user ran out of storage --> resumable from settings. */
+    isPaused: boolean;
+    hasCompletedImport: boolean;
+}
+
+export const selectDriveImportStatus = createSelector(
+    [selectHasDriveImporter, selectIsDriveImportRunning, selectIsDriveImportPaused, selectImportersLoading],
+    (hasDriveImporter, isImporting, isPaused, loading): DriveImportStatus => ({
+        isLoaded: loading === 'success' || loading === 'failed',
+        isImporting,
+        isPaused,
+        hasCompletedImport: hasDriveImporter && !isImporting && !isPaused,
+    })
+);

@@ -1,0 +1,557 @@
+import { act } from 'react';
+
+import { renderHook } from '@testing-library/react';
+
+import {
+    type VatFormFields,
+    checkVatNumber,
+    getVatFormErrors,
+} from '@proton/payments/core/billing-address/vat-helpers';
+import { isProduction } from '@proton/shared/lib/helpers/sentry';
+
+import { useVatFormValidation } from './useVatFormValidation';
+
+jest.mock('@proton/shared/lib/helpers/sentry', () => ({
+    ...jest.requireActual('@proton/shared/lib/helpers/sentry'),
+    isProduction: jest.fn().mockReturnValue(true),
+}));
+
+const mockIsProduction = isProduction as jest.MockedFunction<typeof isProduction>;
+
+const emptyFields: VatFormFields = {
+    CountryCode: 'US',
+    State: '',
+    ZipCode: '',
+    VatId: '',
+    Company: '',
+    FirstName: '',
+    LastName: '',
+    Address: '',
+    City: '',
+};
+
+const withVat = (overrides: Partial<VatFormFields> = {}): VatFormFields => ({
+    ...emptyFields,
+    CountryCode: 'DE',
+    VatId: 'DE123456788',
+    ...overrides,
+});
+
+describe('getVatFormErrors', () => {
+    describe('no VAT number', () => {
+        it('should return no errors when VAT number is empty', () => {
+            const errors = getVatFormErrors(emptyFields);
+
+            expect(errors.errorMessages.VatId).toBe('');
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBe('');
+        });
+
+        it('should return no errors regardless of other fields when VAT is empty', () => {
+            const errors = getVatFormErrors({
+                ...emptyFields,
+                Company: 'Acme',
+                FirstName: 'John',
+            });
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBe('');
+        });
+    });
+
+    describe('bare prefix is treated as empty', () => {
+        it.each([
+            ['DE', 'DE'],
+            ['CH', 'CHE'],
+            ['GR', 'EL'],
+        ])('returns no errors for the bare prefix of %s', (CountryCode, VatId) => {
+            const errors = getVatFormErrors({ ...emptyFields, CountryCode, VatId });
+
+            expect(errors.hasErrors).toBe(false);
+        });
+
+        it('does not require the extended billing-address fields for a bare prefix', () => {
+            const errors = getVatFormErrors({ ...emptyFields, CountryCode: 'DE', VatId: 'DE' });
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBe('');
+        });
+
+        it('still validates a prefix followed by digits', () => {
+            const errors = getVatFormErrors({ ...emptyFields, CountryCode: 'DE', VatId: 'DE1' });
+
+            expect(errors.errorMessages.VatId).not.toBe('');
+        });
+    });
+
+    describe('at least one path required', () => {
+        it('should show company, address and city errors when nothing is filled', () => {
+            const errors = getVatFormErrors(withVat());
+
+            expect(errors.errorMessages.Company).toBeTruthy();
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should not show company error when company is filled', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+        });
+
+        it('should not show company error when both first and last name are filled', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John', LastName: 'Doe' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should not show "at least one path" error when name pair error is already shown', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.LastName).toBeTruthy();
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should not show "at least one path" error when only last name is provided', () => {
+            const errors = getVatFormErrors(withVat({ LastName: 'Doe' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.FirstName).toBeTruthy();
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should show company error when only address is filled (no path started)', () => {
+            const errors = getVatFormErrors(withVat({ Address: 'Main St' }));
+
+            expect(errors.errorMessages.Company).toBeTruthy();
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should show company error when only city is filled (no path started)', () => {
+            const errors = getVatFormErrors(withVat({ City: 'Berlin' }));
+
+            expect(errors.errorMessages.Company).toBeTruthy();
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBe('');
+        });
+    });
+
+    describe('company requires address and city', () => {
+        it('should require address when company is provided', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme', City: 'Berlin' }));
+
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBe('');
+        });
+
+        it('should require city when company is provided', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme', Address: 'Main St' }));
+
+            expect(errors.errorMessages.City).toBeTruthy();
+            expect(errors.errorMessages.Address).toBe('');
+        });
+
+        it('should require both address and city when company is provided alone', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme' }));
+
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+            expect(errors.errorMessages.Company).toBe('');
+        });
+
+        it('should have no errors when company + address + city are all provided', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme', Address: 'Main St', City: 'Berlin' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBe('');
+        });
+
+        it('should still require address and city when company is provided alongside full name', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme', FirstName: 'John', LastName: 'Doe' }));
+
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+        });
+    });
+
+    describe('first name and last name pairing', () => {
+        it('should require last name when only first name is provided', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John' }));
+
+            expect(errors.errorMessages.LastName).toBeTruthy();
+            expect(errors.errorMessages.FirstName).toBe('');
+        });
+
+        it('should require first name when only last name is provided', () => {
+            const errors = getVatFormErrors(withVat({ LastName: 'Doe' }));
+
+            expect(errors.errorMessages.FirstName).toBeTruthy();
+            expect(errors.errorMessages.LastName).toBe('');
+        });
+
+        it('should have no name errors when both first and last name are provided', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John', LastName: 'Doe' }));
+
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+        });
+    });
+
+    describe('address and city are always required when VAT is present', () => {
+        it('should require address and city even when only first and last name are provided', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John', LastName: 'Doe' }));
+
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should still require city when address is provided with name path', () => {
+            const errors = getVatFormErrors(withVat({ FirstName: 'John', LastName: 'Doe', Address: 'Main St' }));
+
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBeTruthy();
+        });
+
+        it('should have no errors when name path is complete with address and city', () => {
+            const errors = getVatFormErrors(
+                withVat({ FirstName: 'John', LastName: 'Doe', Address: 'Main St', City: 'Berlin' })
+            );
+
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBe('');
+            expect(errors.errorMessages.Address).toBe('');
+            expect(errors.errorMessages.City).toBe('');
+            expect(errors.errorMessages.Company).toBe('');
+        });
+    });
+
+    describe('combined scenarios', () => {
+        it('should show all completion errors when company + first name but no last name, address, city', () => {
+            const errors = getVatFormErrors(withVat({ Company: 'Acme', FirstName: 'John' }));
+
+            expect(errors.errorMessages.Company).toBe('');
+            expect(errors.errorMessages.Address).toBeTruthy();
+            expect(errors.errorMessages.City).toBeTruthy();
+            expect(errors.errorMessages.FirstName).toBe('');
+            expect(errors.errorMessages.LastName).toBeTruthy();
+        });
+
+        it('should be fully valid with company + address + city + first + last name', () => {
+            const errors = getVatFormErrors(
+                withVat({
+                    Company: 'Acme',
+                    Address: 'Main St',
+                    City: 'Berlin',
+                    FirstName: 'John',
+                    LastName: 'Doe',
+                })
+            );
+
+            expect(errors.hasErrors).toBe(false);
+        });
+    });
+});
+
+describe('useVatFormValidation', () => {
+    describe('error visibility', () => {
+        it('should not show errors initially', () => {
+            const { result } = renderHook(() => useVatFormValidation(withVat()));
+
+            expect(result.current.errors.errorMessages.Company).toBe('');
+        });
+
+        it('should show errors after form blur when VAT is present', () => {
+            const { result } = renderHook(() => useVatFormValidation(withVat()));
+
+            act(() => {
+                result.current.handleFormBlur({
+                    relatedTarget: document.body,
+                } as unknown as React.FocusEvent);
+            });
+
+            expect(result.current.errors.errorMessages.Company).toBeTruthy();
+        });
+
+        it('should not show errors after blur when VAT is empty', () => {
+            const { result } = renderHook(() => useVatFormValidation(emptyFields));
+
+            act(() => {
+                result.current.handleFormBlur({
+                    relatedTarget: document.body,
+                } as unknown as React.FocusEvent);
+            });
+
+            expect(result.current.errors.errorMessages.Company).toBe('');
+        });
+
+        it('should reset errors when VAT is cleared', () => {
+            const { result, rerender } = renderHook((fields: VatFormFields) => useVatFormValidation(fields), {
+                initialProps: withVat(),
+            });
+
+            act(() => {
+                result.current.handleFormBlur({
+                    relatedTarget: document.body,
+                } as unknown as React.FocusEvent);
+            });
+
+            expect(result.current.errors.errorMessages.Company).toBeTruthy();
+
+            rerender(emptyFields);
+
+            expect(result.current.errors.errorMessages.Company).toBe('');
+        });
+
+        it('should reset errors when collapsed', () => {
+            const { result, rerender } = renderHook(
+                ({ fields, collapsed }: { fields: VatFormFields; collapsed: boolean }) =>
+                    useVatFormValidation(fields, { collapsed }),
+                { initialProps: { fields: withVat(), collapsed: false } }
+            );
+
+            act(() => {
+                result.current.handleFormBlur({
+                    relatedTarget: document.body,
+                } as unknown as React.FocusEvent);
+            });
+
+            expect(result.current.errors.errorMessages.Company).toBeTruthy();
+
+            rerender({ fields: withVat(), collapsed: true });
+
+            expect(result.current.errors.errorMessages.Company).toBe('');
+        });
+    });
+
+    describe('isValid', () => {
+        it('should be true when no VAT number is provided', () => {
+            const { result } = renderHook(() => useVatFormValidation(emptyFields));
+
+            expect(result.current.isValid).toBe(true);
+        });
+
+        it('should be false when VAT is provided but nothing else', () => {
+            const { result } = renderHook(() => useVatFormValidation(withVat()));
+
+            expect(result.current.isValid).toBe(false);
+        });
+
+        it('should be true when company path is complete', () => {
+            const { result } = renderHook(() =>
+                useVatFormValidation(withVat({ Company: 'Acme', Address: 'Main St', City: 'Berlin' }))
+            );
+
+            expect(result.current.isValid).toBe(true);
+        });
+
+        it('should be true when name path is complete with address and city', () => {
+            const { result } = renderHook(() =>
+                useVatFormValidation(
+                    withVat({ FirstName: 'John', LastName: 'Doe', Address: 'Main St', City: 'Berlin' })
+                )
+            );
+
+            expect(result.current.isValid).toBe(true);
+        });
+
+        it('should be false when company is provided without address', () => {
+            const { result } = renderHook(() => useVatFormValidation(withVat({ Company: 'Acme', City: 'Berlin' })));
+
+            expect(result.current.isValid).toBe(false);
+        });
+
+        it('should reflect validity regardless of showErrors state', () => {
+            const { result } = renderHook(() => useVatFormValidation(withVat()));
+
+            expect(result.current.isValid).toBe(false);
+            expect(result.current.errors.errorMessages.Company).toBe('');
+        });
+    });
+});
+
+describe('checkVatNumber', () => {
+    beforeEach(() => {
+        mockIsProduction.mockReturnValue(true);
+    });
+
+    describe('valid VAT numbers', () => {
+        it.each([
+            ['DE', 'DE111111125'],
+            ['DE', 'DE813495425'],
+            ['FR', 'FR00300076965'],
+            ['FR', 'FR82494628696'],
+            ['ES', 'ESA0011012B'],
+            ['ES', 'ESB61979175'],
+            ['GB', 'GB000472631'],
+            ['GB', 'GB834549605'],
+            ['CH', 'CHE100416306MWST'],
+            ['CH', 'CHE432825998TVA'],
+            ['AU', 'AU51824753556'],
+            ['AU', 'AU53004085616'],
+            ['SG', 'SG200512345G'],
+            ['SG', 'SGT12SS3456L'],
+        ])('should accept valid VAT number for %s: %s', (countryCode, vatNumber) => {
+            expect(checkVatNumber(vatNumber, countryCode)).toBe(true);
+        });
+    });
+
+    describe('invalid VAT numbers', () => {
+        it.each([
+            ['DE', 'DE111111126'],
+            ['DE', 'DE000000020'],
+            ['FR', 'FR00300076967'],
+            ['FR', 'FR90000000027'],
+            ['ES', 'ESA0011012A'],
+            ['ES', 'ES00000001A'],
+            ['GB', 'GB999000103'],
+            ['GB', 'GB010123456'],
+            ['CH', 'CHE43282599MWST'],
+            ['AU', 'AU51824753557'],
+            ['AU', 'AU1234567890'],
+            ['SG', 'SG12345678'],
+            ['SG', 'SGX12SS3456L'],
+        ])('should reject invalid VAT number for %s: %s', (countryCode, vatNumber) => {
+            expect(checkVatNumber(vatNumber, countryCode)).toBe(false);
+        });
+    });
+
+    describe('countries not in countriesWithVatId', () => {
+        it.each(['TH', 'TR', 'JP', 'US', 'CN', 'BR', 'RU'])(
+            'should return true for any VAT number when country is %s',
+            (countryCode) => {
+                expect(checkVatNumber('ANYTHING123', countryCode)).toBe(true);
+                expect(checkVatNumber('12345', countryCode)).toBe(true);
+            }
+        );
+    });
+
+    describe('countries in countriesWithVatId but not covered by vat-validation library', () => {
+        it.each(['LI', 'IS'])(
+            'should return true for any VAT number when country is %s (not in vat-validation)',
+            (countryCode) => {
+                expect(checkVatNumber('ANYTHING123', countryCode)).toBe(true);
+                expect(checkVatNumber('12345', countryCode)).toBe(true);
+            }
+        );
+    });
+
+    describe('dev bypass', () => {
+        beforeEach(() => {
+            mockIsProduction.mockReturnValue(false);
+        });
+
+        it('should accept IT01231231234 in non-production', () => {
+            expect(checkVatNumber('IT01231231234', 'IT')).toBe(true);
+        });
+
+        it('should accept BE0123123123 in non-production', () => {
+            expect(checkVatNumber('BE0123123123', 'BE')).toBe(true);
+        });
+    });
+});
+
+describe('getVatFormErrors — prefix validation', () => {
+    it('returns prefix error when VAT is missing country prefix', () => {
+        const errors = getVatFormErrors({ CountryCode: 'DE', VatId: '123456789' });
+
+        expect(errors.errorMessages.VatId).toMatch(/DE/);
+        expect(errors.hasErrors).toBe(true);
+    });
+
+    it('returns format error (not prefix error) when prefix is present but format is invalid', () => {
+        const errors = getVatFormErrors({ CountryCode: 'DE', VatId: 'DE1' });
+
+        expect(errors.errorMessages.VatId).toBe('Invalid VAT number');
+    });
+
+    it('returns no prefix error for US (no prefix required)', () => {
+        const errors = getVatFormErrors({ CountryCode: 'US', VatId: '12-3456789' });
+
+        expect(errors.errorMessages.VatId).toBe('');
+    });
+
+    it('requires AU prefix for AU (ABN is prefixed with AU)', () => {
+        const withoutPrefix = getVatFormErrors({ CountryCode: 'AU', VatId: '51824753556' });
+        expect(withoutPrefix.errorMessages.VatId).toMatch(/AU/);
+
+        const withPrefix = getVatFormErrors({ CountryCode: 'AU', VatId: 'AU51824753556' });
+        expect(withPrefix.errorMessages.VatId).toBe('');
+    });
+
+    it('requires EL prefix for GR, not GR', () => {
+        const withGr = getVatFormErrors({ CountryCode: 'GR', VatId: 'GR123456789' });
+        expect(withGr.errorMessages.VatId).toMatch(/EL/);
+
+        const withEl = getVatFormErrors({ CountryCode: 'GR', VatId: 'EL123456783' });
+        expect(withEl.errorMessages.VatId).toBe('');
+    });
+
+    it('accepts XI prefix for GB (Northern Ireland)', () => {
+        const errors = getVatFormErrors({ CountryCode: 'GB', VatId: 'XI000472631' });
+
+        expect(errors.errorMessages.VatId).toBe('');
+    });
+
+    it('returns prefix error message containing the required prefix', () => {
+        const errors = getVatFormErrors({ CountryCode: 'FR', VatId: '123456789' });
+
+        expect(errors.errorMessages.VatId).toContain('FR');
+    });
+
+    it('treats a value equal to exactly the prefix as empty (no error)', () => {
+        // A bare prefix is the prefilled placeholder, not a VAT number the user supplied.
+        const errors = getVatFormErrors({ CountryCode: 'DE', VatId: 'DE' });
+
+        expect(errors.errorMessages.VatId).toBe('');
+        expect(errors.hasErrors).toBe(false);
+    });
+
+    it('requires SG prefix for SG', () => {
+        const withoutPrefix = getVatFormErrors({ CountryCode: 'SG', VatId: '200512345G' });
+        expect(withoutPrefix.errorMessages.VatId).toMatch(/SG/);
+
+        const withPrefix = getVatFormErrors({ CountryCode: 'SG', VatId: 'SG200512345G' });
+        expect(withPrefix.errorMessages.VatId).toBe('');
+    });
+});
+
+describe('useVatFormValidation — blur and country interaction', () => {
+    it('should reset errors when country changes while errors are visible', () => {
+        const { result, rerender } = renderHook(
+            ({ fields }: { fields: VatFormFields }) => useVatFormValidation(fields),
+            { initialProps: { fields: withVat() } }
+        );
+
+        act(() => {
+            result.current.handleFormBlur({
+                relatedTarget: document.body,
+            } as unknown as React.FocusEvent);
+        });
+
+        expect(result.current.errors.errorMessages.Company).toBeTruthy();
+
+        // Country changes while errors are visible — errors should reset
+        rerender({ fields: { ...withVat(), CountryCode: 'FR', VatId: 'FR00300076965' } });
+
+        expect(result.current.errors.errorMessages.Company).toBe('');
+        expect(result.current.errors.errorMessages.VatId).toBe('');
+    });
+});

@@ -1,0 +1,317 @@
+import { serverTime } from '@protontech/crypto';
+import { importKey } from '@protontech/crypto/subtle/aesGcm.ts';
+
+import { pushForkSession } from '../../api/auth';
+import { getAppHref, getClientID } from '../../apps/helper';
+import type { APP_CLIENT_IDS, APP_NAMES } from '../../constants';
+import { SSO_PATHS } from '../../constants';
+import type { Api } from '../../interfaces/Api';
+import type { User } from '../../interfaces/User';
+import { isSelf } from '../../user/helpers';
+import { SessionSource } from '../SessionInterface';
+import type { PushForkResponse } from '../interface';
+import type { ResumedSessionResult } from '../persistedSessionHelper';
+import { type ReturnUrlResult, getReturnUrl } from '../returnUrl';
+import { getForkBlobData, getForkEncryptedBlob } from './blob';
+import type { ForkPayloadVersion, ForkType } from './constants';
+import { ForkSearchParameters } from './constants';
+import { type ValidatedRedirectUrl, getRedirectForkUrl, getValidatedRedirectUrl } from './getValidatedRedirectUrl';
+import {
+    getEmailSessionForkSearchParameter,
+    getLocalIDForkSearchParameter,
+    getValidatedApp,
+    getValidatedClientID,
+    getValidatedForkType,
+    getValidatedPayloadVersion,
+} from './validation';
+
+export interface ProduceForkPayload {
+    selector: string;
+    state: string;
+    key: string;
+    persistent: boolean;
+    trusted: boolean;
+    forkType: ForkType | undefined;
+    forkVersion: number;
+    source: SessionSource;
+    app: APP_NAMES;
+    encryptedPayload: { payloadVersion: ForkPayloadVersion; payloadType: 'offline' | 'default' };
+}
+
+interface ProduceForkArguments {
+    api: Api;
+    session: ResumedSessionResult;
+    forkParameters: ProduceForkParameters;
+}
+
+export const produceFork = async ({
+    api,
+    session: { keyPassword, offlineKey, persistedSession },
+    forkParameters: {
+        state,
+        app,
+        independent,
+        forkType,
+        forkVersion,
+        payloadType,
+        payloadVersion,
+        forkChallenge,
+        childClientID: maybeChildClientID,
+    },
+}: ProduceForkArguments): Promise<ProduceForkPayload> => {
+    const rawKey = crypto.getRandomValues(new Uint8Array(32));
+    const base64StringKey = rawKey.toBase64({ alphabet: 'base64url', omitPadding: true });
+    const encryptedPayload = await (async () => {
+        const forkData = getForkBlobData({ keyPassword, offlineKey, payloadType });
+        return {
+            blob: await getForkEncryptedBlob(await importKey(rawKey), forkData, payloadVersion),
+            payloadType: forkData.type,
+            payloadVersion,
+        };
+    })();
+
+    const childClientID = maybeChildClientID || getClientID(app);
+    const { Selector: selector } = await api<PushForkResponse>(
+        pushForkSession({
+            Payload: encryptedPayload.blob,
+            ChildClientID: childClientID,
+            Independent: independent ? 1 : 0,
+            ForkChallenge: forkChallenge,
+        })
+    );
+
+    return {
+        selector,
+        state,
+        key: base64StringKey,
+        persistent: persistedSession.persistent,
+        trusted: persistedSession.trusted,
+        forkType,
+        forkVersion,
+        source: persistedSession.source,
+        app,
+        encryptedPayload,
+    };
+};
+
+const produceForkConsumption = (
+    {
+        selector,
+        state,
+        key,
+        persistent,
+        trusted,
+        forkType,
+        forkVersion,
+        encryptedPayload,
+        app,
+        source,
+    }: ProduceForkPayload,
+    searchParameters?: URLSearchParams
+) => {
+    const fragmentSearchParams = new URLSearchParams();
+    fragmentSearchParams.append(ForkSearchParameters.Selector, selector);
+    fragmentSearchParams.append(ForkSearchParameters.Base64Key, key);
+    fragmentSearchParams.append(ForkSearchParameters.Version, `${forkVersion}`);
+    if (state) {
+        fragmentSearchParams.append(ForkSearchParameters.State, state);
+    }
+    if (persistent) {
+        fragmentSearchParams.append(ForkSearchParameters.Persistent, '1');
+    }
+    if (trusted) {
+        fragmentSearchParams.append(ForkSearchParameters.Trusted, '1');
+    }
+    if (forkType !== undefined) {
+        fragmentSearchParams.append(ForkSearchParameters.ForkType, forkType);
+    }
+    if (encryptedPayload.payloadVersion !== undefined) {
+        fragmentSearchParams.append(ForkSearchParameters.PayloadVersion, `${encryptedPayload.payloadVersion}`);
+    }
+    if (encryptedPayload.payloadType !== undefined) {
+        fragmentSearchParams.append(ForkSearchParameters.PayloadType, `${encryptedPayload.payloadType}`);
+    }
+    if (source !== undefined) {
+        fragmentSearchParams.append(ForkSearchParameters.Source, `${source}`);
+    }
+
+    const searchParamsString = searchParameters?.toString() || '';
+    const search = searchParamsString ? `?${searchParamsString}` : '';
+    const fragment = `#${fragmentSearchParams.toString()}`;
+
+    return getAppHref(`${SSO_PATHS.FORK}${search}${fragment}`, app);
+};
+
+export const getProduceForkUrl = (
+    payload: ProduceForkPayload,
+    produceForkParameters: ProduceForkParametersFull,
+    searchParameters?: URLSearchParams
+) => {
+    const url = new URL(produceForkConsumption(payload, searchParameters));
+
+    const redirectUrl = produceForkParameters.redirectUrl;
+    if (redirectUrl) {
+        return getRedirectForkUrl({ url, redirectUrl, app: produceForkParameters.app });
+    }
+
+    const returnUrl = produceForkParameters.returnUrl;
+    if (returnUrl && returnUrl.target === 'app') {
+        url.pathname = returnUrl.location.pathname;
+        const returnUrlSearchParams = new URLSearchParams(returnUrl.location.search);
+        returnUrlSearchParams.forEach((value, key) => {
+            url.searchParams.append(key, value);
+        });
+    }
+
+    return url;
+};
+
+export interface ProduceForkParameters {
+    state: string;
+    app: APP_NAMES;
+    plan?: string;
+    independent: boolean;
+    forkType?: ForkType;
+    forkVersion: number;
+    forkChallenge: string | undefined;
+    prompt: 'login' | undefined;
+    promptType: 'offline-bypass' | 'offline' | 'default';
+    promptBypass: 'none' | 'sso';
+    payloadType: 'offline' | 'default';
+    payloadVersion: ForkPayloadVersion;
+    unauthenticatedReturnUrl: string;
+    returnUrl: ReturnUrlResult | undefined;
+    redirectUrl: ValidatedRedirectUrl | null;
+    email?: string;
+    partnerId?: string;
+    /**
+     * Overrides the client ID the fork is pushed to. Defaults to the client ID of the requested app.
+     */
+    childClientID?: APP_CLIENT_IDS;
+}
+
+export interface ProduceForkParametersFull extends ProduceForkParameters {
+    localID: number | undefined;
+}
+
+/** The redirect url of a fork, from the url or saved fork state, validated before anything asks to confirm it. */
+export const getForkRedirectUrl = (value: string | null | undefined, app: APP_NAMES | undefined) => {
+    if (!app || !value || !URL.canParse(value)) {
+        return null;
+    }
+    const forkUrl = new URL(getAppHref(SSO_PATHS.FORK, app));
+    return getValidatedRedirectUrl({ redirectUrl: new URL(value), url: forkUrl, app }) ?? null;
+};
+
+export const getProduceForkParameters = (
+    searchParams: URLSearchParams
+): Omit<ProduceForkParametersFull, 'localID' | 'app'> & Partial<Pick<ProduceForkParametersFull, 'localID' | 'app'>> => {
+    const app = searchParams.get(ForkSearchParameters.App) || '';
+    const state = searchParams.get(ForkSearchParameters.State) || '';
+    const localID = getLocalIDForkSearchParameter(searchParams);
+    const forkType = searchParams.get(ForkSearchParameters.ForkType) || '';
+    const prompt = searchParams.get(ForkSearchParameters.Prompt) || '';
+    const plan = searchParams.get(ForkSearchParameters.Plan) || '';
+    const partnerId = searchParams.get(ForkSearchParameters.PartnerId) || '';
+    const forkVersion = Number(searchParams.get(ForkSearchParameters.Version) || '1');
+    const forkChallenge = searchParams.get(ForkSearchParameters.ForkChallenge) || undefined;
+    const independent = searchParams.get(ForkSearchParameters.Independent) || '0';
+    const unauthenticatedReturnUrl = (() => {
+        const value = searchParams.get(ForkSearchParameters.UnauthenticatedReturnUrl) || '';
+        if (value) {
+            try {
+                const decodedValue = decodeURIComponent(value);
+                if (decodedValue.startsWith('/')) {
+                    return decodedValue;
+                }
+            } catch {}
+        }
+        return '';
+    })();
+    const returnUrl = getReturnUrl(searchParams);
+    const validatedApp = getValidatedApp(app);
+    const redirectUrl = getForkRedirectUrl(searchParams.get('redirectUrl'), validatedApp);
+    const payloadType = (() => {
+        const value = searchParams.get(ForkSearchParameters.PayloadType) || '';
+        if (value === 'offline') {
+            return value;
+        }
+        return 'default';
+    })();
+    const payloadVersion = getValidatedPayloadVersion(searchParams.get(ForkSearchParameters.PayloadVersion));
+    const promptType = (() => {
+        const value = searchParams.get(ForkSearchParameters.PromptType) || '';
+        if (value === 'offline' || value === 'offline-bypass') {
+            return value;
+        }
+        return 'default';
+    })();
+    const promptBypass = (() => {
+        const value = searchParams.get(ForkSearchParameters.PromptBypass) || '';
+        if (value === 'none' || value === 'sso') {
+            return value;
+        }
+        // By default, re-auth prompts are disabled for SSO users due to bad UX.
+        // But it's still allowed in some flows, like exporting passwords.
+        return 'sso';
+    })();
+    const email = getEmailSessionForkSearchParameter(searchParams);
+    const childClientID = getValidatedClientID(searchParams.get(ForkSearchParameters.ChildClientID) || '');
+
+    return {
+        childClientID,
+        state: state.slice(0, 100),
+        localID,
+        app: validatedApp,
+        forkType: getValidatedForkType(forkType),
+        prompt: prompt === 'login' ? 'login' : undefined,
+        promptType,
+        promptBypass,
+        plan,
+        independent: independent === '1' || independent === 'true',
+        payloadType,
+        payloadVersion,
+        email,
+        forkVersion,
+        forkChallenge,
+        partnerId,
+        unauthenticatedReturnUrl,
+        returnUrl,
+        redirectUrl,
+    };
+};
+
+export const getRequiredForkParameters = (
+    forkParameters: ReturnType<typeof getProduceForkParameters>
+): forkParameters is ProduceForkParametersFull => {
+    return Boolean(forkParameters.app);
+};
+
+const getCanUserReAuth = (user: User) => {
+    // The reauth container doesn't support non-self
+    return isSelf(user);
+};
+
+const BYPASS_SESSION_MIN_AGE = 30_000; // 30 seconds
+export const getShouldReAuth = (
+    forkParameters: Pick<ProduceForkParameters, 'prompt' | 'promptType' | 'promptBypass'>,
+    authSession: { data: ResumedSessionResult }
+) => {
+    if (forkParameters.prompt !== 'login') {
+        return false;
+    }
+    // OAuth sessions are only allowed for the VPN browser extension at the moment. They cannot reauth.
+    if (authSession.data.persistedSession.source === SessionSource.Oauth) {
+        return false;
+    }
+    if (!getCanUserReAuth(authSession.data.User)) {
+        return false;
+    }
+    if (forkParameters.promptType === 'offline-bypass' && authSession.data.offlineKey) {
+        /** `offline-bypass` is valid only if session was just persisted (<30seconds).
+         * This avoids triggering re-auth during a sign-up flow to pass. In any other
+         * scenario, we should avoid processing the by-pass and ask for password. */
+        return +serverTime() - authSession.data.persistedSession.persistedAt > BYPASS_SESSION_MIN_AGE;
+    }
+    return true;
+};

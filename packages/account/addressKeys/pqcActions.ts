@@ -1,0 +1,162 @@
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import { createKTVerifier } from '@proton/key-transparency/helpers/createKTVerifier';
+import { resignSKLWithPrimaryKey } from '@proton/key-transparency/shared/resignSKLWithPrimaryKey';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { CacheType } from '@proton/redux-utilities/interface';
+import { getSilentApi } from '@proton/shared/lib/api/helpers/customConfig';
+import { updateFlags } from '@proton/shared/lib/api/settings';
+import { KEYGEN_CONFIGS } from '@proton/shared/lib/constants';
+import { DelegatedAccessStateEnum } from '@proton/shared/lib/interfaces/DelegatedAccess';
+import { addAddressKeysProcess, addUserKeysProcess } from '@proton/shared/lib/keys/add/addKeysProcess';
+import { getPrimaryAddressKeysForSigning } from '@proton/shared/lib/keys/getPrimaryKey';
+import { getIsDeviceRecoveryEnabled } from '@proton/shared/lib/recoveryFile/deviceRecovery';
+import { getIsRecoveryFileAvailable } from '@proton/shared/lib/recoveryFile/recoveryFile';
+
+import { type AddressKeysState, addressKeysThunk } from '../addressKeys/index';
+import { addressesThunk } from '../addresses';
+import type { DelegatedAccessState } from '../delegatedAccess';
+import { getHasAccountKeyChangeBlockingDelegatedAccess } from '../delegatedAccess/accountKeyChangeBlocking';
+import { listOutgoingDelegatedAccess, updateDelegatedAccess } from '../delegatedAccess/outgoingActions';
+import type { KtState } from '../kt';
+import { getKTActivation } from '../kt/actions';
+import { type OrganizationKeyState, organizationKeyThunk } from '../organizationKey';
+import { userThunk } from '../user';
+import { userKeysThunk } from '../userKeys';
+import { type UserSettingsState, userSettingsActions, userSettingsThunk } from '../userSettings';
+
+export const generatePqcAddressKeys = (): ThunkAction<
+    Promise<void>,
+    AddressKeysState & OrganizationKeyState & KtState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, _, extra) => {
+        const [user, userKeys, addresses] = await Promise.all([
+            dispatch(userThunk()),
+            dispatch(userKeysThunk()),
+            dispatch(addressesThunk()),
+        ]);
+        const api = getSilentApi(extra.api);
+        await Promise.all(
+            addresses.map(async (address) => {
+                const { ID: addressID } = address;
+                const addressKeys = await dispatch(addressKeysThunk({ addressID }));
+                // v6 key already present, skip
+                // (this action is used also to generate missing PQC address keys if the setup
+                // flow was cut short by errors)
+                // No need to check for PQC key algo since v6 keys can only be imported after opt-in
+                if (addressKeys.some((key) => key.privateKey.isPrivateKeyV6())) {
+                    return;
+                }
+                const { keyTransparencyVerify, keyTransparencyCommit } = createKTVerifier({
+                    ktActivation: dispatch(getKTActivation()),
+                    api,
+                    config: extra.config,
+                });
+                const [, updatedActiveKeys, formerActiveKeys] = await addAddressKeysProcess({
+                    api,
+                    userKeys,
+                    keyGenConfig: KEYGEN_CONFIGS.PQC,
+                    addresses,
+                    address,
+                    addressKeys,
+                    keyPassword: extra.authentication.getPassword(),
+                    keyTransparencyVerify,
+                });
+                await Promise.all([
+                    resignSKLWithPrimaryKey({
+                        api,
+                        ktActivation: dispatch(getKTActivation()),
+                        address,
+                        newPrimaryKeys: getPrimaryAddressKeysForSigning(updatedActiveKeys, true),
+                        formerPrimaryKeys: getPrimaryAddressKeysForSigning(formerActiveKeys, true),
+                        userKeys,
+                    }),
+                    keyTransparencyCommit(user, userKeys),
+                ]);
+            })
+        );
+
+        await dispatch(addressesThunk({ cache: CacheType.None })); // Ensures address keys is up to date.
+    };
+};
+
+export const generatePqcUserKey = (): ThunkAction<
+    Promise<void>,
+    AddressKeysState & UserSettingsState & OrganizationKeyState & KtState & DelegatedAccessState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, _, extra) => {
+        const [user, userKeys, userSettings, addresses, organizationKey] = await Promise.all([
+            dispatch(userThunk()),
+            dispatch(userKeysThunk()),
+            dispatch(userSettingsThunk()),
+            dispatch(addressesThunk()),
+            dispatch(organizationKeyThunk()),
+        ]);
+
+        const isDeviceRecoveryAvailable = getIsRecoveryFileAvailable({
+            user,
+            addresses,
+            userKeys,
+        });
+        const isDeviceRecoveryEnabled = getIsDeviceRecoveryEnabled(userSettings, extra.authentication);
+        // `PostQuantumKeysOptInSection` does not allow opt-ins if any in-progress delegated access is detected,
+        // but the user can still reach this stage if they they were originally allowed to opt-in, but the account
+        // key generation failed, and in the meantime a delegated access state changed to a blocking one.
+        // We still need prevent account key generation in this case: the user can still manually generate PQC
+        // address keys instead (if they do not wish to manually cut-off the delegated access)
+        if (await dispatch(getHasAccountKeyChangeBlockingDelegatedAccess())) {
+            throw new Error(
+                c('Error')
+                    .t`A delegated access recovery or emergency-access process has been initiated: generating a new key is not allowed to avoid disrupting it`
+            );
+        }
+        const previouslyEnabledDelegatedAccesses = (await dispatch(listOutgoingDelegatedAccess())).filter(
+            (delegatedAccess) => delegatedAccess.State === DelegatedAccessStateEnum.Enabled
+        );
+
+        await addUserKeysProcess({
+            api: getSilentApi(extra.api),
+            user,
+            organizationKey,
+            isDeviceRecoveryAvailable,
+            isDeviceRecoveryEnabled,
+            keyGenConfig: KEYGEN_CONFIGS.PQC,
+            userKeys,
+            addresses,
+            passphrase: extra.authentication.getPassword(),
+        });
+        await dispatch(userThunk({ cache: CacheType.None })); // Ensures user keys is up to date.
+
+        // re-enable delegated access recovery
+        await Promise.all(
+            previouslyEnabledDelegatedAccesses.map((delegatedAccess) => {
+                return dispatch(
+                    updateDelegatedAccess({
+                        delegatedAccess,
+                        api: getSilentApi(extra.api),
+                    })
+                );
+            })
+        );
+    };
+};
+
+export const optInToPqc = (): ThunkAction<
+    Promise<void>,
+    AddressKeysState & OrganizationKeyState & KtState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, _, extra) => {
+        const updatedFlagSupportPgpV6Keys = { SupportPgpV6Keys: 1 } as const;
+        await getSilentApi(extra.api)(updateFlags(updatedFlagSupportPgpV6Keys));
+        // optimistically update user settings without waiting for event loop;
+        // this is done only after awaiting the API response since it will fail if the action is not authorized.
+        dispatch(userSettingsActions.update({ UserSettings: { Flags: updatedFlagSupportPgpV6Keys } }));
+    };
+};

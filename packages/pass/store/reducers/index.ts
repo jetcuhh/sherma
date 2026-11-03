@@ -1,0 +1,89 @@
+import { type Reducer, combineReducers } from 'redux';
+
+import { PassCrypto } from '../../lib/crypto';
+import type { Maybe } from '../../types/utils';
+import { zeroize } from '../../utils/object/zero';
+import { stateDestroy, stateHydrate } from '../actions/creators/client';
+import request from '../request/reducer';
+import type { State } from '../types';
+import { access } from './access';
+import accessTokens from './access-tokens';
+import alias from './alias';
+import assignedModelId from './assigned-model-id';
+import compromisedPasswords from './compromised-passwords';
+import files from './files';
+import filters from './filters';
+import folders from './folders';
+import groups from './groups';
+import importReducer from './import';
+import invites from './invites';
+import items from './items';
+import monitor from './monitor';
+import notification from './notification';
+import organization from './organization';
+import pwHistory from './pw-history';
+import settings from './settings';
+import { shares } from './shares';
+import { sharesDedupe } from './shares-dedupe';
+import ui from './ui';
+import user from './user';
+
+export * from './access';
+export * from './access-tokens';
+export * from './alias';
+export * from './filters';
+export * from './folders';
+export * from './import';
+export * from './invites';
+export * from './items';
+export * from './pw-history';
+export * from './shares';
+export * from './ui';
+export * from './user';
+
+export const reducerMap = {
+    access,
+    accessTokens,
+    alias,
+    assignedModelId,
+    compromisedPasswords,
+    files,
+    filters,
+    groups,
+    folders,
+    import: importReducer,
+    invites,
+    items,
+    monitor,
+    notification,
+    organization,
+    pwHistory,
+    request,
+    settings,
+    shares,
+    sharesDedupe,
+    ui,
+    user,
+};
+export const rootReducer = combineReducers(reducerMap);
+
+const wrappedRootReducer: Reducer<State> = (previousState, action) => {
+    /* Certain actions act as `state` overrides :
+     * - on `stateDestroy` : reset to initial state */
+    return rootReducer(
+        ((): Maybe<State> => {
+            if (stateDestroy.match(action)) {
+                PassCrypto?.clear();
+                zeroize(previousState);
+                return undefined;
+            }
+
+            if (stateHydrate.match(action)) return action.payload.state;
+
+            return previousState;
+        })(),
+        action
+    );
+};
+
+export default wrappedRootReducer;

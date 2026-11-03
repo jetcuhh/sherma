@@ -1,0 +1,15 @@
+@use 'sass:math';
+@use '~@proton/styles/scss/lib/config' as *;
+@use '~@proton/styles/scss/lib/rem' as *;
+
+$size-dot: rem(12) !default;
+
+.notification-dot {
+	inline-size: $size-dot;
+	block-size: $size-dot;
+
+	&--top-right {
+		margin-inline-end: -#{math.div($size-dot, 2)};
+		margin-block-start: -#{math.div($size-dot, 2)};
+	}
+}

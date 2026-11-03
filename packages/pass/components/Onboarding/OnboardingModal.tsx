@@ -1,0 +1,139 @@
+import { type FC, useEffect, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { Step } from '@proton/atoms/Stepper/Step';
+import { Stepper } from '@proton/atoms/Stepper/Stepper';
+import type { ModalProps } from '@proton/components/components/modalTwo/Modal';
+import ModalTwoContent from '@proton/components/components/modalTwo/ModalContent';
+import ModalTwoFooter from '@proton/components/components/modalTwo/ModalFooter';
+import ModalTwoHeader from '@proton/components/components/modalTwo/ModalHeader';
+import { IcArrowLeft } from '@proton/icons/icons/IcArrowLeft';
+import clsx from '@proton/utils/clsx';
+import noop from '@proton/utils/noop';
+
+import { PassIconLogo } from '../Layout/Logo/PassIconLogo';
+import { PassModal } from '../Layout/Modal/PassModal';
+import { useOnboarding } from './Provider/OnboardingContext';
+
+import './OnboardingModal.scss';
+
+export const OnboardingModal: FC<ModalProps> = ({ size = 'xlarge', ...props }) => {
+    const { acknowledge, steps, markCompleted, completed } = useOnboarding();
+    const [loading, setLoading] = useState(false);
+    const [step, setStep] = useState(Math.min(completed.length, steps.length - 1));
+
+    const { component: Component = noop, description: Description = noop, ...currentStep } = steps[step] ?? {};
+
+    const onComplete = () => {
+        setLoading(true);
+        acknowledge();
+    };
+
+    const onStep = (offset: 1 | -1) => {
+        if (offset === 1) markCompleted(steps[step].key);
+
+        const nextStep = step + offset;
+        if (nextStep < steps.length) setStep(Math.max(0, nextStep));
+        else onComplete();
+    };
+
+    const onContinue = () => {
+        currentStep.action?.();
+        onStep(1);
+    };
+
+    const backButton =
+        step > 0 ? (
+            <Button className="mr-auto z-1" icon pill shape="ghost" onClick={() => onStep(-1)}>
+                <IcArrowLeft />
+            </Button>
+        ) : undefined;
+
+    useEffect(() => {
+        setStep((curr) => (curr > steps.length - 1 ? steps.length - 1 : curr));
+    }, [steps]);
+
+    return (
+        <PassModal
+            {...props}
+            onClose={props.onClose}
+            size={size}
+            data-testid="modal:auto-open"
+            className={clsx(
+                'pass-onboarding-modal',
+                currentStep.withHeader && 'pass-onboarding-modal-header-background'
+            )}
+        >
+            <ModalTwoHeader
+                actions={backButton}
+                closeButtonProps={{ pill: true, icon: true }}
+                className="flex-column"
+                title={
+                    currentStep.withHeader && (
+                        <div
+                            className="hidden lg:block absolute top-0 left-custom"
+                            style={{ '--left-custom': '100px' }}
+                        >
+                            <PassIconLogo />
+                        </div>
+                    )
+                }
+            />
+
+            {steps.length > 1 && (
+                <Stepper activeStep={step} className="z-1 hidden md:block">
+                    {steps.map((step) => (
+                        <Step key={step.key} />
+                    ))}
+                </Stepper>
+            )}
+
+            <ModalTwoContent>
+                <div className="pass-onboarding-modal--content flex flex-nowrap items-start md:items-center text-left w-full flex-column md:flex-row gap-2 md:gap-6">
+                    <div className="md:flex-1 w-full md:w-auto">
+                        {currentStep.group && (
+                            <p className="text-uppercase text-sm text-bold m-0 mb-3 pass-onboarding-modal--group">
+                                {currentStep.group}
+                            </p>
+                        )}
+                        <p className="text-4xl text-bold m-0 mb-3">{currentStep.title}</p>
+                        <div className="color-weak text-pre-wrap m-0">
+                            <Description />
+                        </div>
+                    </div>
+
+                    <div className="md:flex-1 w-full md:w-auto">
+                        <Component />
+                    </div>
+                </div>
+            </ModalTwoContent>
+            <ModalTwoFooter className="mt-0">
+                <div className="flex justify-end w-full pt-2">
+                    {steps.length > 1 && (
+                        <Button
+                            className="mr-auto pass-onboarding-modal--skip"
+                            pill
+                            shape="ghost"
+                            onClick={() => onStep(1)}
+                            disabled={loading}
+                        >
+                            {c('Action').t`Skip`}
+                        </Button>
+                    )}
+
+                    <Button
+                        className={currentStep.actionClassName}
+                        pill
+                        shape="solid"
+                        onClick={onContinue}
+                        disabled={loading}
+                    >
+                        {currentStep.actionText ?? c('Action').t`Continue`}
+                    </Button>
+                </div>
+            </ModalTwoFooter>
+        </PassModal>
+    );
+};

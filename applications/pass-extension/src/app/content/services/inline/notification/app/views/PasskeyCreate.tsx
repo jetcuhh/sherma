@@ -1,0 +1,372 @@
+import { type FC, useEffect, useMemo, useRef } from 'react';
+
+import type { FormikContextType, FormikErrors } from 'formik';
+import { Form, FormikProvider, useFormik } from 'formik';
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { IcLockFilled } from '@proton/icons/icons/IcLockFilled';
+import { IcPassPasskey } from '@proton/icons/icons/IcPassPasskey';
+import { usePassCore } from '@proton/pass/components/Core/PassCoreProvider';
+import { ValueControl } from '@proton/pass/components/Form/Field/Control/ValueControl';
+import { Field } from '@proton/pass/components/Form/Field/Field';
+import { FieldsetCluster } from '@proton/pass/components/Form/Field/Layout/FieldsetCluster';
+import { TitleField } from '@proton/pass/components/Form/Field/TitleField';
+import { Card } from '@proton/pass/components/Layout/Card/Card';
+import { ItemIcon } from '@proton/pass/components/Layout/Icon/ItemIcon';
+import { MAX_ITEM_NAME_LENGTH } from '@proton/pass/constants';
+import { useMountedState } from '@proton/pass/hooks/useEnsureMounted';
+import type { SanitizedPublicKeyCreate } from '@proton/pass/lib/passkeys/types';
+import { intoPasskeyCreateBridgeResponse, sanitizePasskey } from '@proton/pass/lib/passkeys/utils';
+import { validateItemName } from '@proton/pass/lib/validation/item';
+import type { SelectedItem, UniqueItem } from '@proton/pass/types/data/items';
+import { TelemetryEventName } from '@proton/pass/types/data/telemetry';
+import type { MaybeNull } from '@proton/pass/types/utils';
+import { AutosaveMode } from '@proton/pass/types/worker/autosave';
+import type { LoginItemPreview } from '@proton/pass/types/worker/data';
+import { getErrorMessage } from '@proton/pass/utils/errors/get-error-message';
+import { throwError } from '@proton/pass/utils/fp/throw';
+import { uniqueId } from '@proton/pass/utils/string/unique-id';
+import { PASS_APP_NAME } from '@proton/shared/lib/constants';
+
+import { AutosaveVaultPicker } from '../../../../../../../lib/components/Inline/AutosaveVaultPicker';
+import { useIFrameAppController, useIFrameAppState } from '../../../../../../../lib/components/Inline/IFrameApp';
+import { ListItem } from '../../../../../../../lib/components/Inline/ListItem';
+import { ScrollableItemsList } from '../../../../../../../lib/components/Inline/ScrollableItemsList';
+import { WithUnlock } from '../../../../../../../lib/components/Inline/WithUnlock';
+import { contentScriptMessage, sendMessage } from '../../../../../../../lib/message/send-message';
+import { WorkerMessageType } from '../../../../../../../types/messages';
+import { createBridgeResponse } from '../../../../../bridge/message';
+import type { BridgeResponse } from '../../../../../bridge/types';
+import type { NotificationAction } from '../../../../../constants.runtime';
+import { InlinePortMessageType } from '../../../inline.messages';
+import type { NotificationRequest } from '../../notification.app';
+import { NotificationHeader } from '../components/NotificationHeader';
+
+type Step = 'select' | 'passkey';
+type FormValues = {
+    name: string;
+    step: Step;
+    selectedItem?: SelectedItem;
+    shareId?: string;
+    folderId?: MaybeNull<string>;
+};
+const formId = 'create-passkey';
+
+type PasskeyCreateViewProps = {
+    form: FormikContextType<FormValues>;
+    loading: boolean;
+    username: string;
+};
+
+const PasskeyCreateView: FC<PasskeyCreateViewProps> = ({ form, loading, username }) => {
+    const { onTelemetry } = usePassCore();
+    const { settings, domain } = useIFrameAppState();
+    const controller = useIFrameAppController();
+    const [items, setItems] = useMountedState<MaybeNull<LoginItemPreview[]>>(null);
+
+    useEffect(() => {
+        const run = async () => {
+            const response = await sendMessage(
+                contentScriptMessage({
+                    type: WorkerMessageType.AUTOFILL_LOGIN_QUERY,
+                    /** This view runs in an extension frame, so `sender.frameId` is not the
+                     * field's frame. Pin to the top frame (WebAuthn is top-frame only for now)
+                     * so candidate scope can never fallback to this extension frame. */
+                    payload: { domain, frameId: 0, writable: true },
+                })
+            );
+
+            const candidates = response.type === 'success' ? response.items : [];
+            await form.setFieldValue('step', candidates.length > 0 ? 'select' : 'passkey');
+            setItems(candidates);
+            onTelemetry(TelemetryEventName.PasskeyCreateDisplay, {}, {});
+        };
+
+        run().catch(controller.close);
+    }, []);
+
+    if (!items) return null;
+
+    const handleUpdate = async ({ itemId, shareId, name }: Pick<LoginItemPreview, 'itemId' | 'shareId' | 'name'>) => {
+        if (loading) return; // Disabled button should prevent that but to be sure
+        await form.setValues({ selectedItem: { itemId, shareId }, step: 'select', name });
+        form.handleSubmit();
+    };
+
+    const isSelected = ({ itemId, shareId }: UniqueItem) =>
+        itemId === form.values.selectedItem?.itemId && shareId === form.values.selectedItem?.shareId;
+
+    return (
+        <>
+            {form.values.step === 'select' && (
+                <>
+                    <ScrollableItemsList increaseSurface>
+                        {items.map(({ itemId, shareId, url, userIdentifier, name }) => (
+                            <ListItem
+                                key={`${shareId}-${itemId}`}
+                                className="rounded-none"
+                                title={name}
+                                subTitle={userIdentifier}
+                                icon={{ type: 'icon', url, icon: IcPassPasskey }}
+                                onClick={() => handleUpdate({ itemId, shareId, name })}
+                                disabled={loading}
+                                action={
+                                    items.length > 1 && (
+                                        <ButtonLike
+                                            as="div"
+                                            pill
+                                            color="norm"
+                                            size="small"
+                                            loading={loading && isSelected({ itemId, shareId })}
+                                            disabled={loading}
+                                            onClick={() => handleUpdate({ itemId, shareId, name })}
+                                        >
+                                            <span className="text-ellipsis">{c('Action').t`Update`}</span>
+                                        </ButtonLike>
+                                    )
+                                }
+                            />
+                        ))}
+                    </ScrollableItemsList>
+
+                    <div className="flex justify-space-between gap-4">
+                        <Button
+                            pill
+                            color="norm"
+                            type="submit"
+                            size="small"
+                            shape="ghost"
+                            form={formId}
+                            disabled={loading}
+                        >
+                            <span className="text-ellipsis">
+                                {loading ? c('Action').t`Saving passkey...` : c('Action').t`Create new login`}
+                            </span>
+                        </Button>
+
+                        {items.length === 1 && !loading && (
+                            <Button pill color="norm" type="button" size="small" onClick={() => handleUpdate(items[0])}>
+                                <span className="text-ellipsis">{c('Action').t`Update this login`}</span>
+                            </Button>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {form.values.step === 'passkey' && (
+                <>
+                    <FieldsetCluster className="mt-2">
+                        <Field
+                            lengthLimiters
+                            name="name"
+                            component={TitleField}
+                            spellCheck={false}
+                            autoComplete={'off'}
+                            placeholder={c('Placeholder').t`Untitled`}
+                            maxLength={MAX_ITEM_NAME_LENGTH}
+                            className="items-center"
+                            label={c('Label').t`Title`}
+                            dense
+                            icon={
+                                <ItemIcon
+                                    url={domain}
+                                    icon={IcPassPasskey}
+                                    size={5}
+                                    alt=""
+                                    className="shrink-0"
+                                    loadImage={settings.loadDomainImages}
+                                />
+                            }
+                        />
+                        <ValueControl label={c('Label').t`Username`} value={username} />
+                        <ValueControl label={c('Label').t`Website`} value={domain} />
+                    </FieldsetCluster>
+
+                    <div className="px-2 py-1 text-xs color-weak">{c('Info')
+                        .t`A passkey for "${username}" will be saved and available on devices where ${PASS_APP_NAME} is installed.`}</div>
+
+                    <div className="flex justify-space-between">
+                        <Button
+                            pill
+                            color="norm"
+                            type="submit"
+                            className="flex-auto"
+                            form={formId}
+                            loading={loading}
+                            disabled={loading}
+                        >
+                            <span className="text-ellipsis">
+                                {loading ? c('Action').t`Saving passkey...` : c('Action').t`Save passkey`}
+                            </span>
+                        </Button>
+                    </div>
+                </>
+            )}
+        </>
+    );
+};
+
+type Props = Extract<NotificationRequest, { action: NotificationAction.PASSKEY_CREATE }>;
+
+export const PasskeyCreate: FC<Props> = ({ request, token, domain: passkeyDomain }) => {
+    const [loading, setLoading] = useMountedState(false);
+    const { onTelemetry, config } = usePassCore();
+    const { domain } = useIFrameAppState();
+    const controller = useIFrameAppController();
+    const { createNotification } = useNotifications();
+    const optimisticId = useMemo(() => uniqueId(), [request]);
+
+    const publicKey = useMemo(() => JSON.parse(request) as SanitizedPublicKeyCreate, [request]);
+    /** "name" properties may be missing for some relying parties (see globals.d.ts) */
+    const username = publicKey.user?.name ?? publicKey.user?.displayName ?? '';
+
+    const form = useFormik<FormValues>({
+        initialValues: { name: domain, step: 'select', folderId: null },
+        validate: (values) => {
+            const errors: FormikErrors<FormValues> = { name: validateItemName(values.name) };
+            if (!errors.name) delete errors.name;
+            return errors;
+        },
+        onSubmit: async ({ name, step, selectedItem, shareId, folderId }, { setFieldValue }) => {
+            try {
+                if (step === 'select' && !selectedItem) return await setFieldValue('step', 'passkey');
+                else setLoading(true);
+
+                const result = await sendMessage(
+                    contentScriptMessage({
+                        type: WorkerMessageType.PASSKEY_CREATE,
+                        payload: { request, domain: passkeyDomain },
+                    })
+                );
+
+                if (result.type !== 'success') {
+                    const message = result.error;
+                    // translator: Shown with error message on passkey registration failure
+                    throw new Error(c('Error').t`Registration failure: ${message}`);
+                }
+
+                const payload = await (async (): Promise<BridgeResponse<WorkerMessageType.PASSKEY_CREATE>> => {
+                    if (!result.intercept) {
+                        return createBridgeResponse<WorkerMessageType.PASSKEY_CREATE>(
+                            { type: 'success', intercept: false },
+                            token
+                        );
+                    }
+
+                    const { response } = result;
+                    const passkey = sanitizePasskey(response, config);
+                    const base = {
+                        type: AutosaveMode.UPDATE,
+                        name,
+                        userIdentifier: username,
+                        password: '',
+                        passkey,
+                    };
+
+                    await sendMessage.on(
+                        contentScriptMessage({
+                            type: WorkerMessageType.AUTOSAVE_REQUEST,
+                            payload: selectedItem
+                                ? { ...base, ...selectedItem, type: AutosaveMode.UPDATE }
+                                : {
+                                      ...base,
+                                      shareId: shareId!,
+                                      folderId: folderId ?? null,
+                                      optimisticId,
+                                      type: AutosaveMode.NEW,
+                                  },
+                        }),
+                        (res) => res.type === 'error' && throwError({ message: c('Warning').t`Unable to save` })
+                    );
+
+                    return createBridgeResponse<WorkerMessageType.PASSKEY_CREATE>(
+                        {
+                            type: 'success',
+                            response: intoPasskeyCreateBridgeResponse(response),
+                            intercept: true,
+                        },
+                        token
+                    );
+                })();
+
+                controller.forwardMessage({ type: InlinePortMessageType.PASSKEY_RELAY, payload });
+                onTelemetry(TelemetryEventName.PasskeyCreated, {}, {});
+                controller.close();
+            } catch (err) {
+                createNotification({
+                    type: 'error',
+                    text: getErrorMessage(err),
+                });
+                setLoading(false);
+            }
+        },
+    });
+
+    const vaultPickerAnchor = useRef<HTMLDivElement>(null);
+
+    return (
+        <div className="ui-violet flex flex-column flex-nowrap justify-space-between h-full gap-2 anime-fade-in">
+            <FormikProvider value={form}>
+                <Form id={formId} className="max-w-full flex flex-auto flex-column flex-nowrap *:shrink-0 gap-2">
+                    <NotificationHeader
+                        ref={vaultPickerAnchor}
+                        title={(() => {
+                            switch (form.values.step) {
+                                case 'passkey':
+                                    return (
+                                        <Field
+                                            name="shareId"
+                                            component={AutosaveVaultPicker}
+                                            fallback={c('Info').t`Save passkey`}
+                                            anchorRef={vaultPickerAnchor}
+                                        />
+                                    );
+                                case 'select':
+                                    return c('Info').t`Save passkey`;
+                            }
+                        })()}
+                        onClose={() =>
+                            controller.forwardMessage({
+                                type: InlinePortMessageType.PASSKEY_RELAY,
+                                payload: createBridgeResponse<WorkerMessageType.PASSKEY_CREATE>(
+                                    { type: 'success', intercept: false },
+                                    token
+                                ),
+                            })
+                        }
+                    />
+
+                    <div className="max-w-full flex flex-auto flex-column flex-nowrap gap-2">
+                        <WithUnlock>
+                            {(locked, input) =>
+                                locked ? (
+                                    <div className="max-w-full overflow-hidden flex flex-auto flex-column flex-nowrap gap-2">
+                                        <div className="shrink-0 px-1">{`${c('Label').t`Passkey`} • ${domain}`}</div>
+
+                                        <Card className="flex flex-auto justify-center text-sm" type="primary">
+                                            <div className="flex flex-column justify-center items-center gap-2 mb-2">
+                                                <IcLockFilled size={6} />
+                                                <span className="text-center block">
+                                                    {c('Info').t`Unlock ${PASS_APP_NAME} to save this passkey`}
+                                                </span>
+                                            </div>
+                                            {input}
+                                        </Card>
+
+                                        <div className="shrink-0 px-1 text-xs color-weak">{c('Info')
+                                            .t`Close this window in order to use another passkey manager.`}</div>
+                                    </div>
+                                ) : (
+                                    <PasskeyCreateView form={form} loading={loading} username={username} />
+                                )
+                            }
+                        </WithUnlock>
+                    </div>
+                </Form>
+            </FormikProvider>
+        </div>
+    );
+};

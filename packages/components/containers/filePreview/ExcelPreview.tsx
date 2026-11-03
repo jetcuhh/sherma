@@ -1,0 +1,52 @@
+import { c } from 'ttag';
+
+import { MimeProtonSheet } from '@proton/file-icons/icons/MimeProtonSheet';
+import { MimeXls } from '@proton/file-icons/icons/MimeXls';
+import { IcArrowDownLine } from '@proton/icons/icons/IcArrowDownLine';
+import { SHEETS_APP_NAME } from '@proton/shared/lib/constants';
+import clsx from '@proton/utils/clsx';
+
+import { ButtonWithTextAndIcon } from '../../components/button/ButtonWithTextAndIcon';
+
+export function ExcelPreview({ onOpenInDocs, onDownload }: { onOpenInDocs?: () => void; onDownload?: () => void }) {
+    const hasActions = onOpenInDocs || onDownload;
+
+    return (
+        <div
+            className="m-auto flex flex-column items-center justify-space-between gap-8 w-custom"
+            style={{ '--w-custom': '24rem' }}
+        >
+            <MimeXls size={15} />
+            <span className="h3 text-center">
+                {onOpenInDocs
+                    ? c('Title').t`To preview this spreadsheet, open it in ${SHEETS_APP_NAME} or download it.`
+                    : c('Title').t`To preview this spreadsheet, download it.`}
+            </span>
+            {hasActions && (
+                <div
+                    className={clsx(
+                        'flex gap-2 w-full',
+                        onOpenInDocs && onDownload ? 'justify-space-between' : 'justify-center'
+                    )}
+                >
+                    {onOpenInDocs && (
+                        <ButtonWithTextAndIcon
+                            shape="solid"
+                            color="weak"
+                            icon={<MimeProtonSheet />}
+                            buttonText={c('Action: Sheets').t`Open in ${SHEETS_APP_NAME}`}
+                            onClick={onOpenInDocs}
+                        />
+                    )}
+                    {onDownload && (
+                        <ButtonWithTextAndIcon
+                            icon={<IcArrowDownLine />}
+                            buttonText={c('Action').t`Download`}
+                            onClick={onDownload}
+                        />
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}

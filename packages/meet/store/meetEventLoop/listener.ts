@@ -1,0 +1,33 @@
+import type { SharedStartListening } from '@proton/redux-shared-store-types/interface';
+import { getSilentApi } from '@proton/shared/lib/api/helpers/customConfig';
+
+import { meetingsLoop } from '../meetingsLoop';
+import { userSettingsLoop } from '../userSettingsLoop';
+import { meetEventLoop } from './index';
+import type { MeetEventLoopCallback, MeetEventLoopRequiredState } from './interface';
+
+const loops: MeetEventLoopCallback[] = [meetingsLoop, userSettingsLoop];
+Object.freeze(loops);
+
+export const meetEventLoopListener = (startListening: SharedStartListening<MeetEventLoopRequiredState>) => {
+    startListening({
+        actionCreator: meetEventLoop,
+        effect: async (action, { dispatch, getState, extra }) => {
+            const state = getState();
+            const promises = action.payload.promises;
+            const event = action.payload.event;
+            const api = getSilentApi(extra.api);
+
+            loops.forEach((callback) => {
+                const promise = callback({ event, state, dispatch, api });
+
+                if (promise) {
+                    const wrappedPromise = promise.catch((error: unknown) => {
+                        throw error;
+                    });
+                    promises.push(wrappedPromise);
+                }
+            });
+        },
+    });
+};

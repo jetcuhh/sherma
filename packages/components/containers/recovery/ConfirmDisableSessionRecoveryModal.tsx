@@ -1,0 +1,68 @@
+import { c } from 'ttag';
+
+import { toggleSignedInReset } from '@proton/account/recovery/userSettingsActions';
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import metrics from '@proton/metrics/metricsInstance';
+import observeApiError from '@proton/metrics/observeApiError';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import noop from '@proton/utils/noop';
+
+import Prompt from '../../components/prompt/Prompt';
+
+interface Props {
+    onClose: () => void;
+    open: boolean;
+}
+
+const ConfirmDisableSessionRecoveryModal = ({ open, onClose }: Props) => {
+    const dispatch = useDispatch();
+
+    const [submitting, withSubmitting] = useLoading();
+
+    const handleDisableSessionRecoveryToggle = async () => {
+        try {
+            await dispatch(toggleSignedInReset({ value: false }));
+            onClose();
+            metrics.core_session_recovery_settings_update_total.increment({
+                status: 'success',
+            });
+        } catch (error) {
+            observeApiError(error, (status) =>
+                metrics.core_session_recovery_settings_update_total.increment({
+                    status,
+                })
+            );
+        }
+    };
+
+    const handleClose = submitting ? noop : onClose;
+
+    return (
+        <Prompt
+            open={open}
+            onClose={handleClose}
+            title={c('session_recovery:disable:title').t`Disable password reset?`}
+            buttons={[
+                <Button
+                    color="danger"
+                    loading={submitting}
+                    onClick={() => {
+                        void withSubmitting(handleDisableSessionRecoveryToggle());
+                    }}
+                >
+                    {c('session_recovery:disable:action').t`Disable password reset`}
+                </Button>,
+                <Button onClick={onClose} disabled={submitting}>{c('Action').t`Cancel`}</Button>,
+            ]}
+        >
+            <p>
+                {c('session_recovery:disable:info')
+                    .t`You will no longer be able to request a password reset from your account settings.`}
+            </p>
+            <p>{c('session_recovery:disable:info').t`Make sure you have access to a recovery method.`}</p>
+        </Prompt>
+    );
+};
+
+export default ConfirmDisableSessionRecoveryModal;

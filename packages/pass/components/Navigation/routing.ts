@@ -1,0 +1,179 @@
+import { uint8ArrayToUtf8String, utf8StringToUint8Array } from '@protontech/crypto/utils';
+import { type Location, createBrowserHistory } from 'history';
+
+import { getLocalIDPath, stripLocalBasenameFromPathname } from '@proton/shared/lib/authentication/pathnameHelper';
+import { APPS } from '@proton/shared/lib/constants';
+import { getAppUrlFromApiUrl } from '@proton/shared/lib/helpers/url';
+
+import { authStore } from '../../lib/auth/store';
+import type { ItemFilters } from '../../types/data/items';
+import type { ItemType } from '../../types/protobuf';
+import type { MaybeNull, Unpack } from '../../types/utils';
+import { objectFilter } from '../../utils/object/filter';
+import { partialMerge } from '../../utils/object/merge';
+
+export type ItemNewRouteParams = { type: ItemType };
+export type ItemRouteOptions = { scope?: ItemScope };
+export type AuthRouteState = { error?: string; userInitiatedLock?: boolean };
+export type ItemScope = Unpack<typeof ItemScopes>;
+
+export enum PublicRoutes {
+    SecureLink = '/secure-link/:token',
+    ExternalLogin = '/auth/external',
+}
+
+/** URL prefixes that define different item scopes.
+ * These are prepended to base item routes to create
+ * full paths over `:shareId/item/:itemId` */
+export const ItemScopes = [
+    'share',
+    'trash',
+    'secure-links',
+    'monitor/weak',
+    'monitor/compromised',
+    'monitor/duplicates',
+    'monitor/2fa',
+    'monitor/excluded',
+    'shared-with-me',
+    'shared-by-me',
+] as const;
+
+/** Route segments that should only be accessible
+ * to paid users - they should redirect otherwise. */
+export const PremiumRoutes = [] as const;
+
+export const history = createBrowserHistory();
+
+/** Appends the localID path to the provided path. If `localID` is not
+ * defined returns the original path (this may be the case in the extension
+ * for user's using legacy AuthSessions which were not persisted with the
+ * session's LocalID */
+export const getLocalPath = (path: string = '') => {
+    const localID = authStore.getLocalID();
+    return localID !== undefined ? `/${getLocalIDPath(localID)}/${path}` : `/${path}`;
+};
+
+export const removeLocalPath = (path: string) => {
+    const re = /\/u\/\d+(?:\/(.+))?\/?$/;
+    if (!re.test(path)) return path;
+
+    const match = path.match(re);
+    return match?.[1] ?? '';
+};
+
+export const subPath = (path: string, sub: string) => `${path}/${sub}`;
+
+/** Resolves the item route given a shareId and an itemId. */
+export const getItemRoute = (shareId: string, itemId: string, options?: ItemRouteOptions) => {
+    const basePath = `${shareId}/item/${itemId}`;
+    const prefixed = subPath(options?.scope ?? 'share', basePath);
+    return getLocalPath(prefixed);
+};
+
+export const getItemRoutes = () => ItemScopes.map((scope) => getItemRoute(':shareId', ':itemId', { scope }));
+
+export const getItemHistoryRoute = (shareId: string, itemId: string, options?: ItemRouteOptions) =>
+    `${getItemRoute(shareId, itemId, options)}/history`;
+
+/** Resolves the new item route given an item type. */
+export const getNewItemRoute = (type?: ItemType, scope: ItemScope = 'share'): string => {
+    const basePath = `item/new/${type ?? ':type'}`;
+    const prefixed = subPath(scope, basePath);
+    return getLocalPath(prefixed);
+};
+
+export const getTrashRoute = () => getLocalPath('trash');
+
+export const getMonitorRoute = () => getLocalPath('monitor');
+
+export const getInitialFilters = (): ItemFilters => ({
+    search: '',
+    // TODO: replace to `sort: 'relevant'` before enabling PassFeature.PassWeb__V1_41__RelevantSort
+    sort: 'recent',
+    type: '*',
+    selectedShareId: null,
+    selectedFolderId: null,
+});
+
+export const decodeFilters = (encodedFilters: MaybeNull<string>): ItemFilters =>
+    partialMerge(
+        getInitialFilters(),
+        (() => {
+            try {
+                if (!encodedFilters) return {};
+                return JSON.parse(uint8ArrayToUtf8String(Uint8Array.fromBase64(encodedFilters)));
+            } catch {
+                return {};
+            }
+        })()
+    );
+
+export const decodeFiltersFromSearch = (search: string) => {
+    const params = new URLSearchParams(search);
+    return decodeFilters(params.get('filters'));
+};
+
+export const encodeFilters = (filters: ItemFilters): string =>
+    utf8StringToUint8Array(JSON.stringify(filters)).toBase64();
+
+/** Merges `update` into the `filters` search parameter in-place,
+ * leaving every other search parameter untouched. */
+export const setSearchFilters = (search: URLSearchParams, update: Partial<ItemFilters>): void => {
+    const filters = objectFilter(update, (_, value) => value !== undefined);
+    search.set('filters', encodeFilters({ ...decodeFilters(search.get('filters')), ...filters }));
+};
+
+export const getPassWebUrl = (apiUrl: string, subPath: string = '') => {
+    const appUrl = getAppUrlFromApiUrl(apiUrl, APPS.PROTONPASS);
+    return appUrl.toString() + subPath;
+};
+
+export const getRouteError = (search: string) => new URLSearchParams(search).get('error');
+
+export const getBootRedirection = (bootLocation: Location) => {
+    const searchParams = new URLSearchParams(bootLocation.search);
+    const { search, hash } = bootLocation;
+    const pathname = stripLocalBasenameFromPathname(bootLocation.pathname);
+
+    /** Initial filters could be passed on initial boot by
+     * a redirection from the proton mail security center */
+    if (searchParams.get('filters') !== null) return { pathname, search, hash };
+
+    /** The admin/b2b panels may redirect to a specific share or item */
+    const [, shareId, itemId] = bootLocation.pathname.match('share/([^/]+)(/item/([^/]+))?') || [];
+    if (shareId || itemId) {
+        const filters = partialMerge(getInitialFilters(), { selectedShareId: shareId });
+        searchParams.set('filters', encodeFilters(filters));
+        return { pathname, search: searchParams.toString(), hash };
+    }
+
+    return { pathname, search, hash };
+};
+
+const extractPathWithoutFragment = (path: string): string => {
+    const indexOfHash = path.indexOf('#');
+    return indexOfHash === -1 ? path : path.substring(0, indexOfHash);
+};
+
+const pathMatchesRoute = (path: string, routeTemplate: string): boolean => {
+    const cleanedPath = extractPathWithoutFragment(path);
+    const templateParts = routeTemplate.split('/');
+    const pathParts = cleanedPath.split('/');
+
+    return (
+        templateParts.length === pathParts.length &&
+        templateParts.every((part, i) => part.startsWith(':') || part === pathParts[i])
+    );
+};
+
+export const isUnauthorizedPath = ({ pathname }: Location): boolean =>
+    Object.values(PublicRoutes).some((route) => pathMatchesRoute(pathname, route));
+
+/** In Electron, direct `location.href` mutations don't work due
+ * to custom URL schemes. We use IPC via the `ContextBridgeApi` to
+ * properly reload the page in desktop builds. For non-desktop,
+ * standard `window.location.href` assignment is used. */
+export const reloadHref = (href: string) => {
+    if (DESKTOP_BUILD) void window?.ctxBridge?.navigate(href);
+    else window.location.href = href;
+};

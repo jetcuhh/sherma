@@ -1,0 +1,67 @@
+import { c } from 'ttag';
+
+import Checkbox from '@proton/components/components/input/Checkbox';
+import { InputField as InputFieldTwo } from '@proton/components/components/v2/field/InputField';
+import TextAreaTwo from '@proton/components/components/v2/input/TextArea';
+import { SHARE_INVITE_MESSAGE_MAX_LENGTH } from '@proton/shared/lib/drive/constants';
+import clsx from '@proton/utils/clsx';
+
+import { InfoIconTooltip, InfoIconTooltipRenderMode } from '../../../../components/InfoIconTooltip';
+
+interface Props {
+    isAdding: boolean;
+    inviteMessage: string;
+    includeInviteMessage: boolean;
+    onChangeInviteMessage: (inviteMessage: string) => void;
+    onToggleIncludeInviteMessage: () => void;
+}
+
+export const DirectSharingInviteMessage = ({
+    isAdding,
+    inviteMessage,
+    includeInviteMessage,
+    onChangeInviteMessage,
+    onToggleIncludeInviteMessage,
+}: Props) => (
+    <>
+        {includeInviteMessage && (
+            <div className="relative">
+                <InputFieldTwo
+                    as={TextAreaTwo}
+                    disabled={isAdding}
+                    id="direct-sharing-invite-message"
+                    placeholder={c('Placeholder').t`Message`}
+                    className={clsx(isAdding && 'opacity-40')}
+                    onValue={onChangeInviteMessage}
+                    rows={5}
+                    maxLength={500}
+                    value={inviteMessage}
+                />
+            </div>
+        )}
+
+        <div className="w-full flex justify-space-between items-center">
+            <div className="flex items-center">
+                <Checkbox
+                    disabled={isAdding}
+                    id="direct-sharing-toggle-invite-message"
+                    className="color-weak"
+                    checked={includeInviteMessage}
+                    onChange={onToggleIncludeInviteMessage}
+                >
+                    {c('Label').t`Include message and file name in invite email`}
+                </Checkbox>
+                <InfoIconTooltip
+                    title={c('Tooltip')
+                        .t`Message and file name are stored with zero access encryption when included in the email`}
+                    renderMode={InfoIconTooltipRenderMode.FILLED}
+                    className="ml-2"
+                />
+            </div>
+
+            <span className="text-sm color-weak">
+                {inviteMessage.length}/{SHARE_INVITE_MESSAGE_MAX_LENGTH}
+            </span>
+        </div>
+    </>
+);

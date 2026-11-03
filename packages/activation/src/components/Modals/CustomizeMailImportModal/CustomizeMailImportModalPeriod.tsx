@@ -1,0 +1,51 @@
+import { c } from 'ttag';
+
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import Field from '@proton/components/components/container/Field';
+import Row from '@proton/components/components/container/Row';
+import Label from '@proton/components/components/label/Label';
+import Option from '@proton/components/components/option/Option';
+import SelectTwo from '@proton/components/components/selectTwo/SelectTwo';
+import { IcInfoCircle } from '@proton/icons/icons/IcInfoCircle';
+
+import { getTimeUnitLabels } from '../../../constants';
+import { TIME_PERIOD } from '../../../interface';
+
+interface Props {
+    selectedPeriod: TIME_PERIOD;
+    onChange: (timePeriod: TIME_PERIOD) => void;
+}
+
+const CustomizeMailImportModalPeriod = ({ selectedPeriod, onChange }: Props) => {
+    const timeUnitLabels = getTimeUnitLabels();
+    const periodOptions = Object.values(TIME_PERIOD).map((item) => ({ value: item, text: timeUnitLabels[item] }));
+
+    return (
+        <div className="mb-4 border-bottom items-center">
+            <Row>
+                <Label className="flex items-center">
+                    {c('Label').t`Import interval`}
+                    <Tooltip title={c('Tooltip').t`The import will start with the most recent messages.`}>
+                        <IcInfoCircle className="ml-2" />
+                    </Tooltip>
+                </Label>
+                <Field>
+                    <SelectTwo
+                        value={selectedPeriod}
+                        onChange={({ value }) => {
+                            onChange(value);
+                        }}
+                    >
+                        {periodOptions.map((period) => (
+                            <Option key={period.value} value={period.value} title={period.text}>
+                                {period.text}
+                            </Option>
+                        ))}
+                    </SelectTwo>
+                </Field>
+            </Row>
+        </div>
+    );
+};
+
+export default CustomizeMailImportModalPeriod;

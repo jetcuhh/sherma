@@ -1,0 +1,204 @@
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
+
+import type { FormikErrors } from 'formik';
+import { Field, Form, FormikProvider, useFormik } from 'formik';
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+import usePrevious from '@proton/hooks/usePrevious';
+import { usePassCore } from '@proton/pass/components/Core/PassCoreProvider';
+import { useMountedState } from '@proton/pass/hooks/useEnsureMounted';
+import { useTelemetryEvent } from '@proton/pass/hooks/useTelemetryEvent';
+import { validateItemName } from '@proton/pass/lib/validation/item';
+import { TelemetryEventName } from '@proton/pass/types/data/telemetry';
+import type { AutosaveFormValues, AutosavePayload } from '@proton/pass/types/worker/autosave';
+import { AutosaveMode } from '@proton/pass/types/worker/autosave';
+import { withMerge } from '@proton/pass/utils/object/merge';
+import { uniqueId } from '@proton/pass/utils/string/unique-id';
+import noop from '@proton/utils/noop';
+
+import { AutosaveVaultPicker } from '../../../../../../../lib/components/Inline/AutosaveVaultPicker';
+import { useIFrameAppController, useIFrameAppState } from '../../../../../../../lib/components/Inline/IFrameApp';
+import { PauseListDropdown } from '../../../../../../../lib/components/Inline/PauseListDropdown';
+import { contentScriptMessage, sendMessage } from '../../../../../../../lib/message/send-message';
+import { WorkerMessageType } from '../../../../../../../types/messages';
+import type { NotificationAction } from '../../../../../constants.runtime';
+import type { NotificationRequest } from '../../notification.app';
+import { AutosaveForm } from '../components/AutosaveForm';
+import { AutosaveSelect } from '../components/AutosaveSelect';
+import { NotificationHeader } from '../components/NotificationHeader';
+
+type Props = Extract<NotificationRequest, { action: NotificationAction.AUTOSAVE }>;
+
+const getInitialValues = (
+    { userIdentifier, password, type, iframeUrl }: AutosavePayload,
+    { domain, optimisticId }: { domain: string; optimisticId: string }
+): AutosaveFormValues =>
+    type === AutosaveMode.UPDATE
+        ? { itemId: '', name: domain, password, shareId: '', step: 'select', type, userIdentifier, iframeUrl }
+        : {
+              name: domain,
+              optimisticId,
+              password,
+              shareId: '',
+              folderId: null,
+              step: 'edit',
+              type,
+              userIdentifier,
+              iframeUrl,
+          };
+
+export const Autosave: FC<Props> = ({ data }) => {
+    const { visible, domain } = useIFrameAppState();
+    const controller = useIFrameAppController();
+    const { onTelemetry } = usePassCore();
+    const { createNotification } = useNotifications();
+
+    const [busy, setBusy] = useMountedState(false);
+    const prev = usePrevious(data);
+
+    /** Track failed auto-save attempts */
+    const [attempts, setAttempt] = useState<number>(0);
+
+    /** Deterministic optimistic ID per autosave payload in case of
+     * creation failure (offline, network error etc..) - This avoids
+     * creating multiple drafts for the same data when this happens */
+    const optimisticId = useMemo(() => uniqueId(), [data]);
+
+    const shouldUpdate = useMemo(() => {
+        /** The autosave data may get revalidated in certain cases :
+         * - during password autosuggesting with auto-prompt on regenerate
+         * - if the autosave reconciliation re-triggers (can happen on resize) */
+        return Boolean(
+            prev &&
+            (data.password !== prev?.password ||
+                data.type !== prev?.type ||
+                data.userIdentifier !== prev?.userIdentifier)
+        );
+    }, [data]);
+
+    /** if the autosave prompt was shown before an actual form
+     * submission : do not discard the form data */
+    const shouldDiscard = data.submittedAt !== null;
+
+    const form = useFormik<AutosaveFormValues>({
+        initialValues: getInitialValues(data, { domain, optimisticId }),
+        validateOnChange: true,
+        validate: (values) => {
+            const errors: FormikErrors<AutosaveFormValues> = {};
+
+            if (values.step === 'select') return errors;
+
+            switch (values.type) {
+                case AutosaveMode.UPDATE: {
+                    const { itemId, shareId } = values;
+                    if (!(itemId && shareId)) errors.type = 'Invalid update request';
+                    break;
+                }
+                case AutosaveMode.NEW: {
+                    const { shareId } = values;
+                    if (!shareId) errors.type = 'Invalid create request';
+                }
+            }
+
+            const nameError = validateItemName(values.name);
+            if (nameError) errors.name = nameError;
+
+            return errors;
+        },
+
+        onSubmit: async (values, { setValues }) => {
+            /** submit event from `select` step means the
+             * user clicked the `create new login` button */
+            if (values.step === 'select') {
+                return setValues(
+                    withMerge<AutosaveFormValues>({
+                        step: 'edit',
+                        type: AutosaveMode.NEW,
+                        optimisticId,
+                    })
+                );
+            }
+
+            setBusy(true);
+
+            return sendMessage(
+                contentScriptMessage({
+                    type: WorkerMessageType.AUTOSAVE_REQUEST,
+                    payload: values,
+                })
+            )
+                .then((result) => {
+                    if (result.type === 'success') {
+                        onTelemetry(TelemetryEventName.AutosaveDone, {}, {});
+                        controller.close?.({ discard: true });
+                    } else {
+                        setAttempt((prev) => prev + 1);
+                        createNotification({ text: c('Warning').t`Unable to save`, type: 'error' });
+                    }
+                })
+                .catch(noop)
+                .finally(() => setBusy(false));
+        },
+    });
+
+    useTelemetryEvent(TelemetryEventName.AutosaveDisplay, {}, data.telemetry)([visible]);
+
+    useEffect(() => {
+        if (shouldUpdate) {
+            form.setValues({
+                ...getInitialValues(data, { domain, optimisticId }),
+                shareId: form.values.shareId,
+            }).catch(noop);
+        }
+    }, [shouldUpdate, data]);
+
+    const vaultPickerAnchor = useRef<HTMLDivElement>(null);
+
+    return (
+        <FormikProvider value={form}>
+            <Form className="ui-violet flex flex-column flex-nowrap *:shrink-0 justify-space-between h-full anime-fadein gap-2">
+                <NotificationHeader
+                    discardOnClose={shouldDiscard}
+                    ref={vaultPickerAnchor}
+                    onClose={() =>
+                        onTelemetry(
+                            TelemetryEventName.AutosaveDismissed,
+                            {},
+                            { dismissReason: 'close', ...data.telemetry }
+                        )
+                    }
+                    title={(() => {
+                        switch (form.values.type) {
+                            case AutosaveMode.NEW:
+                                return (
+                                    <Field
+                                        name="shareId"
+                                        component={AutosaveVaultPicker}
+                                        fallback={c('Info').t`Save login`}
+                                        anchorRef={vaultPickerAnchor}
+                                        attempt={attempts}
+                                    />
+                                );
+                            case AutosaveMode.UPDATE:
+                                return c('Info').t`Update login`;
+                        }
+                    })()}
+                    extra={
+                        <PauseListDropdown
+                            criteria="Autosave"
+                            hostname={domain}
+                            label={c('Action').t`Disable autosave on this website`}
+                            telemetry={data.telemetry}
+                        />
+                    }
+                />
+                {form.values.step === 'select' && data.type === AutosaveMode.UPDATE ? (
+                    <AutosaveSelect data={data} busy={busy} form={form} />
+                ) : (
+                    <AutosaveForm data={data} busy={busy} form={form} />
+                )}
+            </Form>
+        </FormikProvider>
+    );
+};

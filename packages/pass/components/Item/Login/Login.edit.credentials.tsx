@@ -1,0 +1,206 @@
+import type { FC, ReactElement } from 'react';
+
+import type { FormikContextType } from 'formik';
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { IcAlias } from '@proton/icons/icons/IcAlias';
+import { IcEnvelope } from '@proton/icons/icons/IcEnvelope';
+import { IcKey } from '@proton/icons/icons/IcKey';
+import { IcPlus } from '@proton/icons/icons/IcPlus';
+import { IcTrash } from '@proton/icons/icons/IcTrash';
+import { IcUser } from '@proton/icons/icons/IcUser';
+
+import type { AliasForLoginProps } from '../../../hooks/useAliasForLogin';
+import { deriveAliasPrefix } from '../../../lib/alias/alias.utils';
+import PassUI from '../../../lib/core/ui.proxy';
+import { intoCleanHostname } from '../../../lib/urls/utils/utils';
+import type { LoginItemFormValues } from '../../../types/forms/item';
+import { merge, withMerge } from '../../../utils/object/merge';
+import { isEmptyString } from '../../../utils/string/is-empty-string';
+import { Field } from '../../Form/Field/Field';
+import { PasswordField } from '../../Form/Field/PasswordField';
+import { TextField } from '../../Form/Field/TextField';
+import { DropdownMenuButton } from '../../Layout/Dropdown/DropdownMenuButton';
+import { QuickActionsDropdown } from '../../Layout/Dropdown/QuickActionsDropdown';
+import { usePasswordHistoryActions } from '../../Password/PasswordHistoryActions';
+import { AliasModal } from '../Alias/Alias.modal';
+
+import './Login.edit.credentials.scss';
+
+type Props = {
+    form: FormikContextType<LoginItemFormValues>;
+    alias: AliasForLoginProps;
+};
+
+export const LoginEditCredentials: FC<Props> = ({ form, alias }) => {
+    const { aliasOptions, ...aliasModal } = alias;
+    const passwordHistory = usePasswordHistoryActions();
+
+    const { itemEmail, withUsername } = form.values;
+    const itemEmailFieldIcon = withUsername ? (
+        <IcEnvelope size={4} className="mt-2" />
+    ) : (
+        <IcUser size={4} className="mt-2" />
+    );
+
+    /** When enabling the username field set the `itemEmail` as
+     * the `itemUsername` only if it's a non-valid email */
+    const handleAddUsernameClick = async () =>
+        form.setValues(
+            withMerge<LoginItemFormValues>({
+                withUsername: true,
+                ...(!(await PassUI.is_email_valid(itemEmail))
+                    ? {
+                          itemEmail: '',
+                          itemUsername: itemEmail,
+                      }
+                    : {}),
+            })
+        );
+
+    return (
+        <>
+            <Field
+                name="itemEmail"
+                label={(() => {
+                    if (aliasModal.willCreate) return c('Label').t`Email (new alias)`;
+                    if (aliasModal.relatedAlias) return c('Label').t`Email (alias)`;
+                    return withUsername ? c('Label').t`Email` : c('Label').t`Email or username`;
+                })()}
+                placeholder={withUsername ? c('Placeholder').t`Enter email` : c('Label').t`Enter email or username`}
+                component={TextField}
+                itemType="login"
+                icon={
+                    <>
+                        {aliasModal.usernameIsAlias ? <IcAlias size={4} className="mt-2" /> : itemEmailFieldIcon}
+                        {!withUsername && (
+                            <ButtonLike
+                                as="div"
+                                icon
+                                pill
+                                size="small"
+                                onClick={handleAddUsernameClick}
+                                shape="solid"
+                                title={c('Action').t`Add username field`}
+                                className="pass-username-add-button absolute top-custom left-custom flex items-center justify-center relative pr-4"
+                                style={{
+                                    '--top-custom': '8px',
+                                    '--left-custom': '16px',
+                                }}
+                            >
+                                <IcPlus size={4} className="shrink-0" />
+                            </ButtonLike>
+                        )}
+                    </>
+                }
+                actions={
+                    [
+                        aliasModal.willCreate && (
+                            <QuickActionsDropdown color="weak" shape="solid" key="edit-alias">
+                                <DropdownMenuButton
+                                    label={c('Action').t`Delete alias`}
+                                    icon={IcTrash}
+                                    onClick={() =>
+                                        form.setValues((values) =>
+                                            merge(values, {
+                                                withAlias: false,
+                                                aliasPrefix: '',
+                                                aliasSuffix: undefined,
+                                                mailboxes: [],
+                                                itemEmail: form.initialValues.itemEmail,
+                                            })
+                                        )
+                                    }
+                                />
+                            </QuickActionsDropdown>
+                        ),
+                        aliasModal.canCreate && (
+                            <Button
+                                icon
+                                pill
+                                color="weak"
+                                shape="solid"
+                                size="medium"
+                                className="pass-item-icon"
+                                title={c('Action').t`Generate alias`}
+                                key="generate-alias"
+                                tabIndex={-1}
+                                onClick={() =>
+                                    form
+                                        .setValues((values) =>
+                                            merge(values, {
+                                                withAlias: true,
+                                                aliasPrefix: deriveAliasPrefix(values.name),
+                                                aliasSuffix: undefined,
+                                                mailboxes: [],
+                                            })
+                                        )
+                                        .then<any>(() => form.setFieldTouched('aliasPrefix', false))
+                                        .finally(() => aliasModal.setOpen(true))
+                                }
+                            >
+                                <IcAlias size={5} />
+                            </Button>
+                        ),
+                    ].filter(Boolean) as ReactElement[]
+                }
+            />
+            {withUsername && (
+                <Field
+                    name="itemUsername"
+                    label={c('Label').t`Username`}
+                    placeholder={c('Placeholder').t`Enter username`}
+                    component={TextField}
+                    icon={IcUser}
+                />
+            )}
+            <Field
+                name="password"
+                label={c('Label').t`Password`}
+                placeholder={c('Placeholder').t`Enter password`}
+                component={PasswordField}
+                icon={IcKey}
+                showStrength
+                onPasswordGenerated={(value: string) => {
+                    const { urls, url } = form.values;
+                    const baseUrl = urls?.[0]?.url ?? url;
+                    const origin = intoCleanHostname(baseUrl);
+                    passwordHistory.add({ value, origin });
+                }}
+            />
+
+            <AliasModal
+                form={form}
+                aliasOptions={aliasOptions.value}
+                loading={aliasOptions.loading}
+                open={aliasModal.open}
+                onClose={() =>
+                    form
+                        .setValues((values) =>
+                            merge(values, {
+                                withAlias: false,
+                                aliasPrefix: '',
+                                aliasSuffix: undefined,
+                                mailboxes: [],
+                            })
+                        )
+                        .then<any>(() => form.setFieldTouched('aliasPrefix', undefined))
+                        .finally(() => aliasModal.setOpen(false))
+                }
+                handleSubmitClick={() =>
+                    form
+                        .setValues((values) => {
+                            const { aliasPrefix, aliasSuffix } = values;
+                            return !isEmptyString(aliasPrefix) && aliasSuffix
+                                ? merge(values, { itemEmail: aliasPrefix! + aliasSuffix!.value })
+                                : values;
+                        })
+                        .then<any>(() => form.setFieldTouched('aliasPrefix', true))
+                        .finally(() => aliasModal.setOpen(false))
+                }
+            />
+        </>
+    );
+};

@@ -1,0 +1,13 @@
+import type * as PassUIWorker from '@protontech/pass-rust-core/ui';
+
+import type { Callback, ExtractKeysOfType, Result } from '../../types/utils';
+
+type PassUIModule = typeof PassUIWorker;
+
+type PassUI = Pick<PassUIModule, ExtractKeysOfType<PassUIModule, Callback>>;
+export type PassUIMethod = keyof PassUI;
+export type PassUIParams<T extends PassUIMethod> = Parameters<PassUI[T]>;
+export type PassUIResult<T extends PassUIMethod> = ReturnType<PassUI[T]>;
+export type PassUIMessageEvent<T extends PassUIMethod> = Result<{ value: PassUIResult<T> }>;
+export type PassUIRPC<T extends PassUIMethod> = { method: T; args: PassUIParams<T> };
+export type PassUIProxy = { [K in PassUIMethod]: (...params: PassUIParams<K>) => Promise<PassUIResult<K>> };

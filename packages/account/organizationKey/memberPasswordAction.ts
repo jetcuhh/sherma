@@ -1,0 +1,99 @@
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { updatePrivateKeyRoute } from '@proton/shared/lib/api/keys';
+import { disable2FA } from '@proton/shared/lib/api/settings';
+import { withUIDHeaders } from '@proton/shared/lib/fetch/headers';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import type { Member } from '@proton/shared/lib/interfaces/Member';
+import { getUpdateKeysPayload } from '@proton/shared/lib/keys/changePassword';
+import { generateKeySaltAndPassphrase } from '@proton/shared/lib/keys/keys';
+import { getMemberKeys } from '@proton/shared/lib/keys/memberKeys';
+import { getIsPasswordless } from '@proton/shared/lib/keys/organizationKeys';
+import { getOrganizationKeyInfo, validateOrganizationKey } from '@proton/shared/lib/organization/helper';
+import { srpVerify } from '@proton/shared/lib/srp';
+
+import { addressesThunk } from '../addresses';
+import { type MembersState, getMemberAddresses, upsertMember } from '../members';
+import { getMember } from '../members/getMember';
+import { getIsMemberInManualApproveState } from '../members/memberUnprivatization';
+import { unprivatizeMembersManual } from '../members/unprivatizeMembers';
+import { type OrganizationState, organizationThunk } from '../organization';
+import { type OrganizationKeyState, organizationKeyThunk } from './index';
+
+export const changeMemberPassword = ({
+    member: initialMember,
+    memberUID,
+    password,
+    api,
+}: {
+    member: Member;
+    memberUID: string;
+    password: string;
+    api: Api;
+}): ThunkAction<
+    Promise<void>,
+    OrganizationState & OrganizationKeyState & MembersState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch) => {
+        let member = initialMember;
+
+        const [organizationKey, organization, addresses, memberAddresses] = await Promise.all([
+            dispatch(organizationKeyThunk()),
+            dispatch(organizationThunk()),
+            dispatch(addressesThunk()),
+            dispatch(getMemberAddresses({ member, retry: true })),
+        ]);
+
+        // If the member needs to get unprivatized, let's do it first
+        if (getIsMemberInManualApproveState(member)) {
+            const [updatedMember] = await dispatch(unprivatizeMembersManual({ membersToUnprivatize: [member] }));
+            if (updatedMember) {
+                member = updatedMember;
+            }
+        }
+
+        const organizationKeyInfo = getOrganizationKeyInfo(organization, organizationKey, addresses);
+        const error = validateOrganizationKey(organizationKeyInfo);
+
+        if (error) {
+            throw new Error(error);
+        }
+        if (!organizationKey?.privateKey) {
+            throw new Error('Missing private key');
+        }
+
+        const memberKeys = await getMemberKeys({ member, memberAddresses, organizationKey });
+
+        if (!memberKeys.memberUserKeyPrimary) {
+            throw new Error('Unable to decrypt primary member user key');
+        }
+
+        const { passphrase: newKeyPassword, salt: keySalt } = await generateKeySaltAndPassphrase(password);
+
+        const updateKeysPayload = await getUpdateKeysPayload({
+            addressesKeys: memberKeys.memberAddressesKeys,
+            userKeys: memberKeys.memberUserKeys,
+            organizationKey: getIsPasswordless(organizationKey.Key) ? undefined : organizationKey.privateKey,
+            keyPassword: newKeyPassword,
+            keySalt,
+        });
+
+        const memberApi = <T>(config: any) => api<T>(withUIDHeaders(memberUID, config));
+        if (member['2faStatus']) {
+            await memberApi(disable2FA({ PersistPasswordScope: true }));
+        }
+
+        await srpVerify({
+            api: memberApi,
+            credentials: {
+                password,
+            },
+            config: updatePrivateKeyRoute(updateKeysPayload),
+        });
+
+        dispatch(upsertMember({ member: await getMember(api, member.ID) }));
+    };
+};

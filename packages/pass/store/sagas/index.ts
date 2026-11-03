@@ -1,0 +1,201 @@
+import { all } from 'redux-saga/effects';
+
+import paymentNudgeSagas from '../payment-nudge/sagas';
+import type { PassSaga, RootSagaOptions } from '../types';
+import accessTokenSagas from './access-token/access-token.sagas';
+import accessEditRole from './access/access-edit-role.saga';
+import accessLeave from './access/access-leave.saga';
+import accessSagas from './access/access-options.saga';
+import accessRemoveMember from './access/access-remove-member.saga';
+import aliasContactSagas from './alias/alias-contact.sagas';
+import aliasDetailsRequest from './alias/alias-details-request.saga';
+import aliasManagementSagas from './alias/alias-management.sagas';
+import aliasOptionsRequest from './alias/alias-options-request.saga';
+import aliasSyncSagas from './alias/alias-sync.sagas';
+import customDomainsSagas from './alias/custom-domains.sagas';
+import lockCreate from './auth/lock-create.saga';
+import lock from './auth/lock.saga';
+import passwordConfirm from './auth/password-confirm.saga';
+import passwordExtra from './auth/password-extra.saga';
+import ssoSagas from './auth/sso.sagas';
+import unlock from './auth/unlock.saga';
+import boot from './client/boot.saga';
+import cache from './client/cache.saga';
+import forceSync from './client/force-sync.saga';
+import notification from './client/notification.saga';
+import offlineResume from './client/offline-resume.saga';
+import offlineSetup from './client/offline-setup.saga';
+import qa from './client/qa.saga';
+import reportProblem from './client/report-problem.saga';
+import settings from './client/settings.saga';
+import sync from './client/sync.saga';
+import events from './events/events.saga';
+import { exportUserData } from './export/export.saga';
+import fileAttachmentsSagas from './file-attachments/file-attachments.sagas';
+import foldersSagas from './folders/folders.saga';
+import groupsGetAll from './groups/groups.get-all.saga';
+import groupsGet from './groups/groups.get.saga';
+import groupsMembers from './groups/groups.members.saga';
+import itemsImport from './import/import.saga';
+import groupInviteAccept from './invites/group-invite-accept.saga';
+import groupInviteReject from './invites/group-invite-reject.saga';
+import inviteAccept from './invites/invite-accept.saga';
+import inviteAddressesValidate from './invites/invite-addresses-validate.saga';
+import inviteCreate from './invites/invite-create.saga';
+import inviteRecommendations from './invites/invite-recommendations.saga';
+import inviteReject from './invites/invite-reject.saga';
+import inviteRemove from './invites/invite-remove.saga';
+import inviteResend from './invites/invite-resend.saga';
+import newUserInvitePromote from './invites/new-user-invite-promote.saga';
+import newUserInviteRemove from './invites/new-user-invite-remove.saga';
+import itemBulkDelete from './items/item-bulk-delete.saga';
+import itemBulkMove from './items/item-bulk-move.saga';
+import itemBulkRestore from './items/item-bulk-restore.saga';
+import itemBulkTrash from './items/item-bulk-trash.saga';
+import itemCreation from './items/item-creation.saga';
+import itemDelete from './items/item-delete.saga';
+import itemEdit from './items/item-edit.saga';
+import itemHistory from './items/item-history.saga';
+import itemMove from './items/item-move.saga';
+import itemPin from './items/item-pin.saga';
+import itemRestore from './items/item-restore.saga';
+import itemSetFlags from './items/item-set-flags.saga';
+import itemTrash from './items/item-trash.saga';
+import itemUnpin from './items/item-unpin.saga';
+import itemsUpdated from './items/items-updated.saga';
+import breachesAlias from './monitor/breaches.alias.saga';
+import breachesCustom from './monitor/breaches.custom.saga';
+import breachesProton from './monitor/breaches.proton.saga';
+import breaches from './monitor/breaches.saga';
+import compromisedPasswordCheck from './monitor/compromised-password-check.saga';
+import compromisedPasswordsFullCheck from './monitor/compromised-passwords-full-check.saga';
+import customAddressAdd from './monitor/custom-address.add.saga';
+import customAddressDelete from './monitor/custom-address.delete';
+import customAddressResend from './monitor/custom-address.resend';
+import customAddressVerify from './monitor/custom-address.verify';
+import monitorAddressResolve from './monitor/monitor-address.resolve.saga';
+import monitorAddressToggle from './monitor/monitor-address.toggle.saga';
+import monitorToggle from './monitor/monitor-toggle.saga';
+import sentinelToggle from './monitor/sentinel-toggle.saga';
+import notificationSagas from './notifications/notifications.sagas';
+import organizationPauseList from './organization/organization.pause-list.saga';
+import organizationSettings from './organization/organization.settings.saga';
+import secureLinkSagas from './secure-links/secure-links.sagas';
+import shareAccessRefresh from './shares/share-access-refresh.saga';
+import sharesDedupe from './shares/shares-dedupe.saga';
+import sharesNotification from './shares/shares-notification.saga';
+import coupon from './user/coupon.saga';
+import featureFlags from './user/feature-flags.saga';
+import userAccess from './user/user-access.saga';
+import userSettings from './user/user-settings.saga';
+import trashDelete from './vaults/trash-empty.saga';
+import trashRestore from './vaults/trash-restore.saga';
+import vaultCreation from './vaults/vault-creation.saga';
+import vaultDelete from './vaults/vault-delete.saga';
+import vaultEdit from './vaults/vault-edit.saga';
+import vaultMoveAllItems from './vaults/vault-move-all-items.saga';
+import vaultTransferOwner from './vaults/vault-transfer-owner.saga';
+import vaultVisibility from './vaults/vault-visibility.saga';
+
+const COMMON_SAGAS = [
+    ...accessSagas,
+    ...accessTokenSagas,
+    ...aliasContactSagas,
+    ...aliasManagementSagas,
+    ...aliasSyncSagas,
+    ...customDomainsSagas,
+    ...fileAttachmentsSagas,
+    ...foldersSagas,
+    ...itemDelete,
+    ...notificationSagas,
+    ...paymentNudgeSagas,
+    ...secureLinkSagas,
+    ...ssoSagas,
+    ...vaultVisibility,
+    accessEditRole,
+    accessLeave,
+    accessRemoveMember,
+    aliasDetailsRequest,
+    aliasOptionsRequest,
+    boot,
+    breaches,
+    breachesAlias,
+    breachesCustom,
+    breachesProton,
+    cache,
+    compromisedPasswordCheck,
+    compromisedPasswordsFullCheck,
+    coupon,
+    customAddressAdd,
+    customAddressDelete,
+    customAddressResend,
+    customAddressVerify,
+    events,
+    exportUserData,
+    featureFlags,
+    forceSync,
+    groupsGetAll,
+    groupsGet,
+    groupsMembers,
+    organizationPauseList,
+    organizationSettings,
+    groupInviteAccept,
+    groupInviteReject,
+    inviteAccept,
+    inviteAddressesValidate,
+    inviteCreate,
+    inviteRecommendations,
+    inviteReject,
+    inviteRemove,
+    inviteResend,
+    itemBulkDelete,
+    itemBulkMove,
+    itemBulkRestore,
+    itemBulkTrash,
+    itemCreation,
+    itemEdit,
+    itemHistory,
+    itemMove,
+    itemPin,
+    itemRestore,
+    itemSetFlags,
+    itemsImport,
+    itemsUpdated,
+    itemTrash,
+    itemUnpin,
+    lock,
+    lockCreate,
+    monitorAddressResolve,
+    monitorAddressToggle,
+    monitorToggle,
+    newUserInvitePromote,
+    newUserInviteRemove,
+    notification,
+    offlineResume,
+    offlineSetup,
+    passwordConfirm,
+    passwordExtra,
+    reportProblem,
+    sentinelToggle,
+    settings,
+    sync,
+    trashDelete,
+    trashRestore,
+    unlock,
+    userAccess,
+    userSettings,
+    vaultCreation,
+    vaultDelete,
+    vaultEdit,
+    vaultMoveAllItems,
+    vaultTransferOwner,
+    shareAccessRefresh,
+    sharesDedupe,
+    sharesNotification,
+    qa,
+];
+
+export const rootSagaFactory = (platformSagas: PassSaga[]) =>
+    function* workerRootSaga(options: RootSagaOptions) {
+        yield all(COMMON_SAGAS.concat(platformSagas).map((saga) => saga(options)));
+    };

@@ -1,0 +1,107 @@
+import { type FC, useMemo, useState } from 'react';
+
+import { c } from 'ttag';
+
+import Alert from '@proton/components/components/alert/Alert';
+import DropdownMenuButton from '@proton/components/components/dropdown/DropdownMenuButton';
+import { IcCrossCircle } from '@proton/icons/icons/IcCrossCircle';
+import { IcLink } from '@proton/icons/icons/IcLink';
+import clsx from '@proton/utils/clsx';
+
+import { useRequest } from '../../hooks/useRequest';
+import { getViewCountString } from '../../lib/i18n/helpers';
+import { secureLinkRemove } from '../../store/actions/creators/item';
+import type { SecureLink } from '../../types/data/items.dto';
+import { epochToRemainingDuration } from '../../utils/time/format';
+import { ConfirmationModal } from '../Confirmation/ConfirmationModal';
+import { Copy } from '../Copy/Copy';
+import { Card } from '../Layout/Card/Card';
+import { DropdownMenuButtonLabel } from '../Layout/Dropdown/DropdownMenuButton';
+import { QuickActionsDropdown } from '../Layout/Dropdown/QuickActionsDropdown';
+import { IconBox } from '../Layout/Icon/IconBox';
+
+type Props = SecureLink & { onClick: () => void };
+
+export const SecureLinkCard: FC<Props> = ({
+    expirationDate,
+    itemId,
+    linkId,
+    readCount,
+    maxReadCount,
+    secureLink,
+    shareId,
+    onClick,
+}) => {
+    const [openRemoveModal, setOpenRemoveModal] = useState(false);
+
+    const { dispatch } = useRequest(secureLinkRemove, { initial: { shareId, itemId } });
+    const onRemove = () => dispatch({ itemId, shareId, linkId });
+
+    const remaining = useMemo(
+        () =>
+            epochToRemainingDuration(expirationDate, {
+                format: (remainingTime) => c('Info').t`Expires in ${remainingTime}`,
+            }),
+        [expirationDate]
+    );
+
+    const views = useMemo(
+        () =>
+            `${getViewCountString(readCount, maxReadCount)} ${readCount === maxReadCount ? `(${c('Label').t`max views reached`})` : ''}`,
+        [maxReadCount, readCount]
+    );
+
+    return (
+        <>
+            <Card
+                type="primary"
+                className={clsx('mb-2 cursor-pointer rounded-xl ui-violet')}
+                onClick={onClick}
+                style={{ backgroundColor: 'var(--primary-minor-1)' }}
+            >
+                <div className="flex flex-nowrap items-center justify-space-between">
+                    <IconBox mode="icon" size={3} pill={false} style={{ backgroundColor: 'var(--interaction-weak)' }}>
+                        <IcLink size={3} className="absolute inset-center" />
+                    </IconBox>
+
+                    <div className="flex-1 px-4">
+                        <b>{c('Label').t`Shared link`}</b>
+                        <div className="color-weak text-sm">
+                            {remaining}
+                            {' · '}
+                            {views}
+                        </div>
+                    </div>
+                    <div className="flex">
+                        <Copy value={secureLink} shape="ghost" className="color-weak" pill />
+                        <QuickActionsDropdown color="weak" shape="ghost" className="color-weak">
+                            <DropdownMenuButton
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenRemoveModal(true);
+                                }}
+                                className="flex items-center gap-1 color-danger hover:color-danger"
+                            >
+                                <DropdownMenuButtonLabel
+                                    label={c('Label').t`Remove link`}
+                                    icon={IcCrossCircle}
+                                    danger
+                                />
+                            </DropdownMenuButton>
+                        </QuickActionsDropdown>
+                    </div>
+                </div>
+            </Card>
+
+            <ConfirmationModal
+                open={openRemoveModal}
+                onClose={() => setOpenRemoveModal(false)}
+                onSubmit={onRemove}
+                submitText={c('Action').t`Remove link`}
+                title={c('Title').t`Remove secure link?`}
+            >
+                <Alert type="error">{c('Info').t`Are you sure you want to remove the link?`}</Alert>
+            </ConfirmationModal>
+        </>
+    );
+};

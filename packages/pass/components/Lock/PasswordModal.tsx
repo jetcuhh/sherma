@@ -1,0 +1,112 @@
+import type { FC } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import Form from '@proton/components/components/form/Form';
+import ModalTwo from '@proton/components/components/modalTwo/Modal';
+import ModalTwoContent from '@proton/components/components/modalTwo/ModalContent';
+import ModalTwoFooter from '@proton/components/components/modalTwo/ModalFooter';
+import ModalTwoHeader from '@proton/components/components/modalTwo/ModalHeader';
+import { InputField as InputFieldTwo } from '@proton/components/components/v2/field/InputField';
+import PasswordInputTwo from '@proton/components/components/v2/input/PasswordInput';
+
+import { usePasswordForm } from '../../hooks/auth/usePasswordForm';
+import type { AsyncModalState } from '../../hooks/useAsyncModalHandles';
+import type { RequestForkOptions } from '../../lib/auth/fork';
+import type { ReauthActionPayload } from '../../lib/auth/reauth';
+import type { Maybe, MaybePromise } from '../../types/utils';
+import type { XorObfuscation } from '../../utils/obfuscate/xor';
+import { Card } from '../Layout/Card/Card';
+import type { OnReauthFn } from './PasswordUnlockProvider';
+
+type PasswordReauthOptions = ReauthActionPayload & {
+    /** Fork request options for re-authentication */
+    fork: Partial<RequestForkOptions>;
+    /** If `true`, allows two-password users to verify using their primary
+     * Proton password via SRP instead of triggering a full re-auth flow */
+    srpDowngrade?: boolean;
+};
+
+export type PasswordModalState = {
+    autofillable?: boolean;
+    label?: string;
+    message?: string;
+    placeholder?: string;
+    reauth?: PasswordReauthOptions;
+    submitLabel?: string;
+    title: string;
+    type: 'new-password' | 'current-password';
+    warning?: string;
+    onValidate?: (password: string) => Maybe<string>;
+};
+
+export type PasswordModalProps = AsyncModalState<PasswordModalState> & {
+    onClose?: () => void;
+    onReauth?: OnReauthFn;
+    onSubmit: (password: XorObfuscation) => MaybePromise<void>;
+};
+
+export const PasswordModal: FC<PasswordModalProps> = ({
+    autofillable = true,
+    label,
+    loading,
+    message,
+    open,
+    placeholder,
+    submitLabel,
+    title,
+    type,
+    warning,
+    onClose,
+    onSubmit,
+    onValidate,
+}) => {
+    const { state, onValue, onFormSubmit } = usePasswordForm({ onSubmit, onValidate });
+    const disabled = Boolean(loading || !state.touched || state.error);
+
+    return (
+        <ModalTwo
+            as={Form}
+            onClose={onClose}
+            onSubmit={onFormSubmit}
+            open={open}
+            size="small"
+            data-protonpass-autosave-ignore="true"
+        >
+            <ModalTwoHeader title={title} closeButtonProps={{ pill: true, disabled: loading }} />
+            <ModalTwoContent>
+                {message && (
+                    <Card className="mb-4 text-sm" type="primary">
+                        {message}
+                    </Card>
+                )}
+                <InputFieldTwo
+                    as={PasswordInputTwo}
+                    autoComplete={type}
+                    autoFocus
+                    dense
+                    disabled={loading}
+                    error={state.touched ? state.error : undefined}
+                    id="password"
+                    name="password"
+                    label={label ?? c('Label').t`Password`}
+                    onValue={onValue}
+                    placeholder={placeholder ?? c('Placeholder').t`Password`}
+                    required
+                    {...(!autofillable ? { 'data-protonpass-ignore': true } : {})}
+                />
+
+                {warning && <div className="mt-4 mb-4 text-sm color-danger">{warning}</div>}
+            </ModalTwoContent>
+            <ModalTwoFooter>
+                <Button color="danger" shape="outline" onClick={onClose} disabled={loading}>
+                    {c('Action').t`Cancel`}
+                </Button>
+                <Button type="submit" color="norm" loading={loading} disabled={disabled}>
+                    {submitLabel ?? c('Action').t`Authenticate`}
+                </Button>
+            </ModalTwoFooter>
+        </ModalTwo>
+    );
+};

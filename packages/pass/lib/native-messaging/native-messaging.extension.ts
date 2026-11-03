@@ -1,0 +1,160 @@
+import type { Runtime } from 'webextension-polyfill';
+
+import { PASS_DESKTOP_NATIVE_MESSAGE_KEY, PASS_DESKTOP_NATIVE_MESSAGE_TIMEOUT } from '../../constants';
+import { NativeMessageErrorType } from '../../types/desktop/extension-unlock-with-desktop';
+import type {
+    NativeMessage,
+    NativeMessagePayload,
+    NativeMessageRequest,
+    NativeMessageResponseForRequest,
+    SendNativeMessageRequest,
+} from '../../types/desktop/extension-unlock-with-desktop';
+import type { MaybeNull } from '../../types/utils';
+import { logger } from '../../utils/logger';
+import { uniqueId } from '../../utils/string/unique-id';
+import browser from '../globals/browser';
+import { messageToPayload, payloadToMessage } from './crypto';
+import { NativeMessageError, getForNativeMessageErrorFromConnectionError } from './errors';
+
+const log = (...content: any[]) => logger.debug('[NativeMessaging]', ...content);
+const info = (...content: any[]) => logger.info('[NativeMessaging]', ...content);
+
+export type NativeMessagingService = {
+    sendNativeMessageRequest: SendNativeMessageRequest;
+    disconnect: () => void;
+};
+
+type PendingRequests = Map<
+    string,
+    {
+        resolve: <Req extends NativeMessageRequest>(value: NativeMessageResponseForRequest<Req>) => void;
+        reject: (error: NativeMessageError) => void;
+    }
+>;
+
+export const createNativeMessagingService = (): NativeMessagingService => {
+    let port: MaybeNull<Runtime.Port> = null;
+    const pendingRequests: PendingRequests = new Map();
+
+    const onDisconnect = (disconnectedPort: Runtime.Port) => {
+        port = null;
+        const reason = disconnectedPort.error?.message ?? browser.runtime.lastError?.message ?? '(no reason)';
+        const error = new NativeMessageError(
+            getForNativeMessageErrorFromConnectionError(disconnectedPort.error, browser.runtime.lastError)
+        );
+        pendingRequests.forEach((req) => req.reject(error));
+        pendingRequests.clear();
+        info('Disconnected', error.name, reason);
+    };
+
+    const onMessage = async (rawResponse: unknown) => {
+        try {
+            const responsePayload = (
+                typeof rawResponse === 'string' ? JSON.parse(rawResponse) : rawResponse
+            ) as NativeMessagePayload<NativeMessage>;
+
+            const pending = pendingRequests.get(responsePayload.messageId);
+            if (pending === undefined) {
+                log('Unknown response messageId', responsePayload.messageId);
+                return;
+            }
+
+            try {
+                if ('error' in responsePayload) {
+                    throw new NativeMessageError(responsePayload.error as NativeMessageErrorType);
+                }
+
+                const response = await payloadToMessage(responsePayload, 'desktop');
+
+                log('Received response');
+                pending.resolve(response as NativeMessageResponseForRequest<NativeMessageRequest>);
+            } catch (error) {
+                info('Received response error', (error as NativeMessageError).name);
+                pending.reject(error as NativeMessageError);
+            }
+        } catch (error) {
+            log('onMessage unknown error', error);
+        }
+    };
+
+    const connect = () => {
+        info('Connecting', port !== null ? '(reusing port)' : '(new connection)');
+
+        if (port !== null) {
+            return port;
+        }
+
+        try {
+            if (!browser.runtime.connectNative) {
+                throw new Error('Missing Native messaging permission');
+            }
+
+            port = browser.runtime.connectNative(PASS_DESKTOP_NATIVE_MESSAGE_KEY);
+            port.onDisconnect.addListener(onDisconnect);
+            port.onMessage.addListener(onMessage);
+
+            return port;
+        } catch (error) {
+            info('Connect error', error instanceof Error ? error.message : error);
+            throw error;
+        }
+    };
+
+    const sendRequest = async <Req extends NativeMessageRequest>(
+        port: Runtime.Port,
+        request: Req,
+        messageId: string
+    ) => {
+        const requestPayload = await messageToPayload(request, messageId, 'extension');
+
+        info('Sending request', request.type);
+
+        try {
+            port.postMessage(requestPayload);
+        } catch {
+            throw new NativeMessageError(NativeMessageErrorType.HOST_NOT_RESPONDING);
+        }
+    };
+
+    const disconnect = () => {
+        port?.disconnect();
+        port = null;
+    };
+
+    const sendNativeMessageRequest: SendNativeMessageRequest = <Req extends NativeMessageRequest>(request: Req) =>
+        new Promise<NativeMessageResponseForRequest<Req>>((resolve, reject) => {
+            const messageId = uniqueId();
+            const timeoutId = setTimeout(() => {
+                pendingRequests.delete(messageId);
+                info('Request timed out');
+                disconnect();
+                reject(new NativeMessageError(NativeMessageErrorType.TIMEOUT));
+            }, PASS_DESKTOP_NATIVE_MESSAGE_TIMEOUT);
+
+            const settle = (fn: () => void) => {
+                clearTimeout(timeoutId);
+                pendingRequests.delete(messageId);
+                fn();
+            };
+
+            pendingRequests.set(messageId, {
+                resolve: (value) => settle(() => resolve(value)),
+                reject: (err) => settle(() => reject(err)),
+            });
+
+            const onError = (err: unknown) =>
+                settle(() =>
+                    reject(
+                        err instanceof NativeMessageError ? err : new NativeMessageError(NativeMessageErrorType.UNKNOWN)
+                    )
+                );
+
+            try {
+                sendRequest(connect(), request, messageId).catch(onError);
+            } catch (err) {
+                onError(err);
+            }
+        });
+
+    return { sendNativeMessageRequest, disconnect };
+};

@@ -1,0 +1,37 @@
+import type { FC } from 'react';
+import { useMemo } from 'react';
+
+import clsx from '@proton/utils/clsx';
+
+import { useMemoSelector } from '../../../hooks/useMemoSelector';
+import { selectItem } from '../../../store/selectors/items';
+import type { SelectedItem } from '../../../types/data/items';
+import { presentListItem } from '../../Item/List/utils';
+import { SafeItemIcon } from '../../Layout/Icon/ItemIcon';
+import { itemTypeToSubThemeClassName } from '../../Layout/Theme/types';
+
+export const ItemInviteHeader: FC<SelectedItem> = ({ shareId, itemId }) => {
+    const item = useMemoSelector(selectItem, [shareId, itemId])!;
+    const { heading, subheading } = useMemo(() => presentListItem(item), [item]);
+
+    return (
+        <div className="flex gap-3 flex-nowrap items-center py-3 w-full">
+            <SafeItemIcon
+                item={item}
+                size={5}
+                className={clsx('shrink-0 relative', itemTypeToSubThemeClassName[item.data.type])}
+            />
+            <div className="text-left flex-1">
+                <div className="text-ellipsis">{heading}</div>
+                <div
+                    className={clsx([
+                        'pass-item-list--subtitle block color-weak text-sm text-ellipsis',
+                        item.data.type === 'note' && item.data.metadata.note.v.length === 0 && 'text-italic',
+                    ])}
+                >
+                    {subheading}
+                </div>
+            </div>
+        </div>
+    );
+};

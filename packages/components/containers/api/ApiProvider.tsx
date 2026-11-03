@@ -1,0 +1,97 @@
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+
+import isDeepEqual from 'lodash/isEqual';
+
+import { type ApiStatusState, apiStatusActions, defaultApiStatus } from '@proton/account/apiStatus';
+import { selectUser } from '@proton/account/user';
+import { ApiContext } from '@proton/app-context/apiContext';
+import { useConfig } from '@proton/app-context/useConfig';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { useDispatch, useStore } from '@proton/redux-shared-store/sharedProvider';
+import type { ApiListenerCallback, ApiWithListener } from '@proton/shared/lib/api/createApi';
+import { handleInvalidSession } from '@proton/shared/lib/authentication/logout';
+import { APPS } from '@proton/shared/lib/constants';
+import { captureMessage } from '@proton/shared/lib/helpers/sentry';
+
+import useAuthentication from '../../hooks/useAuthentication';
+import ApiModals from './ApiModals';
+import ApiServerTimeContext, { type ApiServerTimeWithTimestamp } from './apiServerTimeContext';
+
+const hasApiStatusChanged = (old: Partial<ApiStatusState>, next: Partial<ApiStatusState>) => !isDeepEqual(next, old);
+
+const ApiProvider = ({ api, children }: { api: ApiWithListener; children: ReactNode }) => {
+    const { APP_NAME } = useConfig();
+    const dispatch = useDispatch();
+    const store = useStore();
+    const { createNotification } = useNotifications();
+    const authentication = useAuthentication();
+    const [apiServerTime, setApiServerTime] = useState<ApiServerTimeWithTimestamp | undefined>(undefined);
+    const apiStatusRef = useRef<Partial<ApiStatusState>>(defaultApiStatus);
+
+    useEffect(() => {
+        let handledLogout = false;
+        let reportedMismatchingDateHeader = false;
+
+        const handleEvent: ApiListenerCallback = (event) => {
+            if (event.type === 'notification') {
+                createNotification(event.payload);
+                return true;
+            }
+
+            if (event.type === 'server-time') {
+                setApiServerTime(event.payload.value);
+                // temporary log to understand if disruption of the standard date header is common
+                const { customDateHeader, standardDateHeader } = event.payload.extra;
+                const mismatchingDateHeader =
+                    !!customDateHeader &&
+                    !!standardDateHeader &&
+                    customDateHeader !== standardDateHeader &&
+                    // ignore mismatches below 1 second (unclear why these happen)
+                    Math.abs(+new Date(customDateHeader) - +new Date(standardDateHeader)) > 1000;
+                if (APP_NAME === APPS.PROTONMAIL && !reportedMismatchingDateHeader && mismatchingDateHeader) {
+                    captureMessage('Mismatching standard and custom Date header', {
+                        level: 'info',
+                        extra: {
+                            customDateHeader,
+                            standardDateHeader,
+                        },
+                    });
+                    reportedMismatchingDateHeader = true;
+                }
+                return true;
+            }
+
+            if (event.type === 'status' && hasApiStatusChanged(apiStatusRef.current, event.payload)) {
+                dispatch(apiStatusActions.update(event.payload));
+                apiStatusRef.current = event.payload;
+                return true;
+            }
+
+            if (event.type === 'logout') {
+                if (!handledLogout) {
+                    handledLogout = true;
+                    const email = selectUser(store.getState())?.value?.Email;
+                    handleInvalidSession({ appName: APP_NAME, authentication, extra: { email } });
+                }
+                return true;
+            }
+
+            return false;
+        };
+        api.addEventListener(handleEvent);
+        return () => {
+            api.removeEventListener(handleEvent);
+        };
+    }, [api]);
+
+    return (
+        <ApiContext.Provider value={api}>
+            <ApiServerTimeContext.Provider value={apiServerTime}>
+                {children}
+                <ApiModals api={api} />
+            </ApiServerTimeContext.Provider>
+        </ApiContext.Provider>
+    );
+};
+
+export default ApiProvider;

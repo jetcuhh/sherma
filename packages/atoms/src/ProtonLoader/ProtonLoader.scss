@@ -1,0 +1,20 @@
+@keyframes anime-move-light {
+	0% {
+		opacity: 0;
+		transform: translate(0, -60px);
+	}
+
+	50% {
+		opacity: 1;
+		transform: translate(20px, 0);
+	}
+
+	100% {
+		opacity: 0;
+		transform: translate(0, 112px);
+	}
+}
+
+.proton-loader-light {
+	animation: 2s ease-in-out infinite anime-move-light;
+}

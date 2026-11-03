@@ -1,0 +1,35 @@
+import { select } from 'redux-saga/effects';
+
+import { WEBSITE_RULES_URL } from '../../../constants';
+import { fetchIfModified } from '../../../lib/api/utils';
+import { validateRules } from '../../../lib/extension/rules/rules';
+import type { DetectionRules } from '../../../lib/extension/rules/types';
+import type { Maybe } from '../../../types/utils';
+import { resolveWebsiteRules } from '../../actions/creators/rules';
+import { createRequestSaga } from '../../request/sagas';
+import { selectRequest } from '../../request/selectors';
+import type { RequestEntry, RequestStatus } from '../../request/types';
+
+declare module '../../events' {
+    interface SagaEvents {
+        'website-rules::resolved': DetectionRules;
+    }
+}
+
+export default createRequestSaga({
+    actions: resolveWebsiteRules,
+    call: function* (_, options) {
+        const requestId = resolveWebsiteRules.requestID();
+        const lastRequest: Maybe<RequestEntry<RequestStatus>> = yield select(selectRequest(requestId));
+        const lastRequestedAt = lastRequest?.status === 'success' ? lastRequest.requestedAt : 0;
+
+        yield fetchIfModified(WEBSITE_RULES_URL, lastRequestedAt).then(async (response) => {
+            if (response) {
+                const rules = await response.json();
+                if (validateRules(rules)) options.publish?.({ type: 'website-rules::resolved', data: rules });
+            }
+        });
+
+        return true;
+    },
+});

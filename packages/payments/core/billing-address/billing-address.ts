@@ -1,0 +1,206 @@
+import { c } from 'ttag';
+
+import type { BillingAddress } from '@proton/shared/lib/payments/billing-address';
+
+import { normalizePostalCode } from '../../postal-codes/format';
+import { isPostalCodeValid } from '../../postal-codes/postal-codes-validation';
+import { isCountryWithRequiredPostalCode, isCountryWithStates } from '../countries';
+
+export type { BillingAddress };
+
+export type BillingAddressProperty = {
+    BillingAddress: BillingAddress;
+};
+
+const DEFAULT_TAX_COUNTRY_CODE = 'CH';
+export const DEFAULT_TAX_BILLING_ADDRESS: BillingAddress = {
+    CountryCode: DEFAULT_TAX_COUNTRY_CODE,
+    State: null,
+    ZipCode: null,
+};
+
+export type BillingAddressStatus =
+    | {
+          valid: true;
+          reason: undefined;
+      }
+    | {
+          valid: false;
+          reason: 'missingCountry' | 'missingState' | 'missingZipCode' | 'invalidZipCode';
+      };
+
+export const BILLING_ADDRESS_VALID = Object.freeze({ valid: true, reason: undefined }) satisfies BillingAddressStatus;
+
+export function getBillingAddressStatus(billingAddress: BillingAddress, zipCodeValid = true): BillingAddressStatus {
+    if (!zipCodeValid) {
+        return { valid: false, reason: 'invalidZipCode' };
+    }
+
+    if (!billingAddress.CountryCode) {
+        return { valid: false, reason: 'missingCountry' };
+    }
+
+    const isCountryWithState = isCountryWithStates(billingAddress.CountryCode);
+    if (!isCountryWithState) {
+        return BILLING_ADDRESS_VALID;
+    }
+
+    if (!billingAddress.State) {
+        return { valid: false, reason: 'missingState' };
+    }
+
+    if (isCountryWithRequiredPostalCode(billingAddress.CountryCode)) {
+        if (!billingAddress.ZipCode) {
+            return { valid: false, reason: 'missingZipCode' };
+        }
+
+        if (!isPostalCodeValid(billingAddress.CountryCode, billingAddress.State, billingAddress.ZipCode)) {
+            return { valid: false, reason: 'invalidZipCode' };
+        }
+    }
+
+    return BILLING_ADDRESS_VALID;
+}
+
+export function zipCodeValidator(billingAddress: BillingAddress) {
+    const billingAddressStatus = getBillingAddressStatus(billingAddress);
+    if (!billingAddressStatus.valid && billingAddressStatus.reason === 'invalidZipCode') {
+        if (billingAddress.CountryCode === 'US') {
+            return c('Error').t`Please enter a valid ZIP code`;
+        }
+        return c('Error').t`Please enter a valid postal code`;
+    }
+
+    if (!billingAddressStatus.valid && billingAddressStatus.reason === 'missingZipCode') {
+        if (billingAddress.CountryCode === 'US') {
+            return c('Error').t`Please enter ZIP code`;
+        }
+        return c('Error').t`Please enter postal code`;
+    }
+
+    return '';
+}
+
+export function billingCountryValidator(billingAddress: BillingAddress) {
+    const billingAddressStatus = getBillingAddressStatus(billingAddress);
+    if (!billingAddressStatus.valid && billingAddressStatus.reason === 'missingCountry') {
+        return c('Error').t`Please select a country`;
+    }
+
+    return '';
+}
+
+export function billingStateValidator(billingAddress: BillingAddress) {
+    const billingAddressStatus = getBillingAddressStatus(billingAddress);
+    if (!billingAddressStatus.valid && billingAddressStatus.reason === 'missingState') {
+        return c('Error').t`Please select a state`;
+    }
+
+    return '';
+}
+
+export type BillingAddressExtraProperties = {
+    Company?: string | null;
+    Address?: string | null;
+    City?: string | null;
+    FirstName?: string | null;
+    LastName?: string | null;
+};
+
+export type BillingAddressExtended = BillingAddress & BillingAddressExtraProperties;
+
+export type FullBillingAddress = {
+    BillingAddress: BillingAddressExtended;
+    VatId?: string | null;
+};
+
+export type FullBillingAddressFlat = BillingAddressExtended & {
+    VatId?: string | null;
+};
+
+type PayloadBillingAddress = BillingAddressExtended & {
+    VatId?: string | null;
+};
+
+function normalizeZipCodeInBillingAddress({
+    billingAddress,
+    keepPostalCode,
+}: {
+    billingAddress: BillingAddress;
+    keepPostalCode?: boolean;
+}): BillingAddress {
+    if (billingAddress.ZipCode === '') {
+        return { ...billingAddress, ZipCode: null };
+    }
+
+    if (!billingAddress.ZipCode) {
+        return billingAddress;
+    }
+
+    return {
+        ...billingAddress,
+        ZipCode: normalizePostalCode(billingAddress.ZipCode, billingAddress.CountryCode, keepPostalCode),
+    };
+}
+
+function normalizeVatIdInBillingAddress({
+    billingAddress,
+    vatId,
+}: {
+    billingAddress: BillingAddress;
+    vatId: string | undefined;
+}): PayloadBillingAddress {
+    const VatId = vatId ? vatId : undefined;
+
+    return {
+        ...billingAddress,
+        VatId,
+    };
+}
+
+/**
+ * Use it before sending the billing address to the backend. Either /check endpoint or /subscription endpoint.
+ *
+ * `keepPostalCode` keeps the postal code of countries where it isn't required, which are otherwise dropped. A
+ * sales-provisioned address comes from the stored record, not from a form default, and the backend only redeems the
+ * link when it matches. Postal codes of countries that require one are still normalized.
+ */
+export function getBillingAddressPayload({
+    billingAddress,
+    vatId,
+    keepPostalCode,
+}: {
+    billingAddress: BillingAddressExtended;
+    vatId: string | undefined;
+    keepPostalCode?: boolean;
+}): PayloadBillingAddress {
+    const withNormalizedZipCode = normalizeZipCodeInBillingAddress({
+        billingAddress,
+        keepPostalCode,
+    });
+
+    const withNormalizedVatId = normalizeVatIdInBillingAddress({
+        billingAddress: withNormalizedZipCode,
+        vatId,
+    });
+
+    const allowedProps: (keyof PayloadBillingAddress)[] = [
+        'CountryCode',
+        'State',
+        'ZipCode',
+        'VatId',
+        'Company',
+        'Address',
+        'City',
+        'FirstName',
+        'LastName',
+    ];
+    const payload: any = {};
+    Object.keys(withNormalizedVatId).forEach((key: any) => {
+        if (allowedProps.includes(key)) {
+            payload[key] = (withNormalizedVatId as any)[key];
+        }
+    });
+
+    return payload as PayloadBillingAddress;
+}

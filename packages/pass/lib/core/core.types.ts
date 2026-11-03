@@ -1,0 +1,26 @@
+import type * as PassCoreWorker from '@protontech/pass-rust-core/worker';
+
+import type { Callback, ExtractKeysOfType, Result } from '../../types/utils';
+import type { WasmWorkerService } from './wasm.worker.service';
+
+type PassCoreModule = typeof PassCoreWorker;
+
+export type PassCore = Pick<PassCoreModule, ExtractKeysOfType<PassCoreModule, Callback>>;
+export type PassCoreMethod = keyof PassCore;
+export type PassCoreParams<T extends PassCoreMethod> = Parameters<PassCore[T]>;
+export type PassCoreResult<T extends PassCoreMethod> = ReturnType<PassCore[T]>;
+export type PassCoreMessageEvent<T extends PassCoreMethod> = Result<{ value: PassCoreResult<T> }>;
+export type PassCoreRPC<T extends PassCoreMethod> = { method: T; args: PassCoreParams<T> };
+export type PassCoreProxy = {
+    [K in PassCoreMethod]: (...params: PassCoreParams<K>) => Promise<Awaited<PassCoreResult<K>>>;
+};
+
+export type PassCoreMethodMap = {
+    [K in PassCoreMethod]: {
+        args: PassCoreParams<K>;
+        return: PassCoreResult<K>;
+    };
+};
+
+type PassCoreWorkerService = WasmWorkerService<PassCoreMethodMap>;
+export type PassCoreService = Pick<PassCoreWorkerService, 'exec'>;

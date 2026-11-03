@@ -1,0 +1,66 @@
+import type { IconSize } from '@proton/icons/types';
+import type { Plan } from '@proton/shared/lib/payments/plan/interface';
+import { MailFeatureFlag } from '@proton/unleash/Flags';
+import { useFlag } from '@proton/unleash/useFlag';
+import clsx from '@proton/utils/clsx';
+import isFunction from '@proton/utils/isFunction';
+
+import Info from '../link/Info';
+import type { UpsellFeatureName } from './constants';
+import { upsellFeatures } from './constants';
+
+interface UpsellFeatureListProps {
+    className?: string;
+    features: UpsellFeatureName[];
+    hideInfo?: boolean;
+    iconSize?: IconSize;
+    odd?: boolean;
+    plan?: Plan;
+}
+
+const UpsellFeatureList = ({
+    className,
+    features,
+    hideInfo,
+    iconSize = 5,
+    odd = false,
+    plan,
+}: UpsellFeatureListProps) => {
+    const scribeToLumo = useFlag(MailFeatureFlag.ScribeToLumo);
+
+    if (features.length === 0) {
+        return null;
+    }
+
+    return (
+        <ul className={clsx('m-0 unstyled', odd && 'odd:bg-weak', className)}>
+            {features.map((featureName) => {
+                const feature = isFunction(upsellFeatures[featureName])
+                    ? upsellFeatures[featureName](plan)
+                    : upsellFeatures[featureName];
+                if (!feature) {
+                    return null;
+                }
+                const FeatureIcon = feature.icon;
+
+                return (
+                    <li className={clsx('py-2 rounded', odd && 'pl-2')} key={featureName}>
+                        <div className="flex flex-nowrap items-center">
+                            <div className="mr-3 shrink-0 flex">
+                                <FeatureIcon className="color-primary m-auto" size={iconSize} />
+                            </div>
+                            <div className="flex-1">
+                                <span className="align-middle">{feature.getText(scribeToLumo)}</span>
+                                {feature.getTooltip && !hideInfo ? (
+                                    <Info buttonClass="ml-2" title={feature.getTooltip()} />
+                                ) : null}
+                            </div>
+                        </div>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+};
+
+export default UpsellFeatureList;

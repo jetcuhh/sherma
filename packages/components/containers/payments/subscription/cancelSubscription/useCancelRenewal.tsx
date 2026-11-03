@@ -1,0 +1,70 @@
+import { c } from 'ttag';
+
+import { useEntitlementCatalog } from '@proton/account/entitlementCatalog/hooks';
+import { useSubscription } from '@proton/account/subscription/hooks';
+import { useApi } from '@proton/app-context/useApi';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { changeRenewState } from '@proton/payments/core/api/api';
+import { getTrialInfoForSingleSubscription } from '@proton/payments/core/trials';
+import { Renew } from '@proton/shared/lib/payments/subscription/constants';
+
+import useEventManager from '../../../../hooks/useEventManager';
+import { OPEN_TRIAL_CANCELED_MODAL } from '../../../topBanners/constants';
+import type { FeedbackDowngradeFormData } from '../content/interface';
+import type { CancelSubscriptionResult } from './types';
+
+const SUBSCRIPTION_CANCELLED: CancelSubscriptionResult = {
+    status: 'cancelled',
+};
+
+export const useCancelRenewal = () => {
+    const api = useApi();
+    const eventManager = useEventManager();
+    const { createNotification, hideNotification } = useNotifications();
+    const [subscription] = useSubscription();
+    const [entitlementCatalog] = useEntitlementCatalog();
+    const { isB2BTrial } = getTrialInfoForSingleSubscription(entitlementCatalog, subscription);
+
+    const cancelSubscriptionRenewal = async (feedback: FeedbackDowngradeFormData, refreshState = true) => {
+        let cancelNotificationId;
+
+        try {
+            cancelNotificationId = createNotification({
+                type: 'info',
+                text: c('State').t`Canceling your subscription, please wait`,
+                expiration: 99999,
+            });
+
+            await api(
+                changeRenewState({
+                    RenewalState: Renew.Disabled,
+                    CancellationFeedback: {
+                        Reason: feedback.Reason || null,
+                        Feedback: feedback.Feedback || null,
+                        ReasonDetails: feedback.ReasonDetails || null,
+                        Context: feedback.Context,
+                    },
+                })
+            );
+            if (refreshState) {
+                await eventManager.call();
+            }
+
+            if (!isB2BTrial) {
+                createNotification({ text: c('Success').t`You have successfully canceled your subscription.` });
+            }
+        } finally {
+            if (cancelNotificationId) {
+                hideNotification(cancelNotificationId);
+            }
+        }
+
+        if (isB2BTrial) {
+            document.dispatchEvent(new CustomEvent(OPEN_TRIAL_CANCELED_MODAL));
+        }
+
+        return SUBSCRIPTION_CANCELLED;
+    };
+
+    return { cancelSubscriptionRenewal };
+};

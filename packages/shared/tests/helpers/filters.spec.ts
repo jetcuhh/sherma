@@ -1,0 +1,43 @@
+import type { Filter } from '@proton/sieve/filterModel';
+
+import { FILTER_STATUS } from '../../lib/constants';
+import { hasReachedFiltersLimit } from '../../lib/helpers/filters';
+import type { UserModel } from '../../lib/interfaces/User';
+
+describe('filters helpers', () => {
+    it('should have reached filters limit on free user', () => {
+        const user = { hasPaidMail: false } as UserModel;
+        const filters: Filter[] = [{ Status: FILTER_STATUS.ENABLED } as Filter];
+
+        expect(hasReachedFiltersLimit(user, filters)).toBeTruthy();
+    });
+
+    it('should not have reached filters limit on free user when no filters', () => {
+        const user = { hasPaidMail: false } as UserModel;
+        const filters: Filter[] = [];
+
+        expect(hasReachedFiltersLimit(user, filters)).toBeFalsy();
+    });
+
+    it('should not have reached filters limit on free user when filters are disabled', () => {
+        const user = { hasPaidMail: false } as UserModel;
+        const filters: Filter[] = [
+            { Status: FILTER_STATUS.DISABLED } as Filter,
+            { Status: FILTER_STATUS.DISABLED } as Filter,
+        ];
+
+        expect(hasReachedFiltersLimit(user, filters)).toBeFalsy();
+    });
+
+    it('should not have reached filters limit on paid user', () => {
+        const user = { hasPaidMail: true } as UserModel;
+        const filters: Filter[] = [
+            { Status: FILTER_STATUS.ENABLED } as Filter,
+            { Status: FILTER_STATUS.ENABLED } as Filter,
+            { Status: FILTER_STATUS.ENABLED } as Filter,
+            { Status: FILTER_STATUS.DISABLED } as Filter,
+        ];
+
+        expect(hasReachedFiltersLimit(user, filters)).toBeFalsy();
+    });
+});

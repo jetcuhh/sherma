@@ -1,0 +1,132 @@
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { DashboardGrid, DashboardGridSectionHeader } from '@proton/atoms/DashboardGrid/DashboardGrid';
+import { IcChevronRight } from '@proton/icons/icons/IcChevronRight';
+import { CYCLE, PLANS, PLAN_NAMES } from '@proton/payments/core/constants';
+import { getAddonsFromIDs } from '@proton/payments/core/planIDs';
+import { getPlanIDs } from '@proton/payments/core/subscription/helpers';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import { DASHBOARD_UPSELL_PATHS } from '@proton/shared/lib/constants';
+import isTruthy from '@proton/utils/isTruthy';
+
+import { getSimplePriceString } from '../../../../../../components/price/helper';
+import getBoldFormattedText from '../../../../../../helpers/getBoldFormattedText';
+import useDashboardPaymentFlow from '../../../../../../hooks/useDashboardPaymentFlow';
+import { useSubscriptionModalRaw } from '../../../SubscriptionModalProvider';
+import type { GetPlanUpsellArgs } from '../../../helpers/dashboard-upsells';
+import UpsellPanelV2 from '../../../panels/UpsellPanelV2';
+import UpsellPanelsV2 from '../../../panels/UpsellPanelsV2';
+import { PlanIcon } from '../../PlanIcon';
+import PlanIconName from '../../PlanIconName';
+import PlanPriceElement from '../../PlanPriceElement';
+import type { UpsellSectionProps, UpsellsHook } from '../../YourPlanUpsellsSectionV2';
+import { getDashboardUpsellTitle } from '../../helpers';
+import { getDashboardUpsellV2, useSubscriptionPriceComparison } from '../helper';
+import UpsellMultiBox from './../UpsellMultiBox';
+
+export const usePassPlusExtendSubscription = ({
+    subscription,
+    app,
+    plansMap,
+    freePlan,
+    user,
+}: UpsellSectionProps): UpsellsHook => {
+    const openSubscriptionModal = useSubscriptionModalRaw();
+    const telemetryFlow = useDashboardPaymentFlow(app);
+
+    const handleExplorePlans = () => {
+        void openSubscriptionModal({
+            step: SUBSCRIPTION_STEPS.PLAN_SELECTION,
+            telemetryFlow,
+        });
+    };
+
+    const upsellsPayload: GetPlanUpsellArgs = {
+        app,
+        plansMap,
+        freePlan,
+        openSubscriptionModal,
+        telemetryFlow,
+    };
+
+    const upsells = [
+        getDashboardUpsellV2({
+            ...upsellsPayload,
+            upsellPath: DASHBOARD_UPSELL_PATHS.PASS,
+            plan: PLANS.PASS,
+            customCycle: CYCLE.YEARLY,
+            highlightPrice: true,
+            title: getDashboardUpsellTitle(CYCLE.YEARLY),
+            isRecommended: true,
+            defaultCtaOverrides: { label: c('Action').t`Get the deal` },
+            addons: getAddonsFromIDs(getPlanIDs(subscription)),
+        }),
+    ].filter(isTruthy);
+
+    return { upsells, handleExplorePlans, telemetryFlow, plansMap, freePlan, user };
+};
+
+interface Props extends UpsellsHook {
+    subscription: Subscription;
+    app: APP_NAMES;
+}
+
+const PassPlusExtendSubscription = ({ app, subscription, user, handleExplorePlans, upsells }: Props) => {
+    const { totalSavings, showSavings } = useSubscriptionPriceComparison(app, subscription);
+
+    const plan = PLANS.PASS;
+    const planName = PLAN_NAMES[plan];
+
+    const priceString = getSimplePriceString(subscription.Currency, totalSavings);
+
+    return (
+        <DashboardGrid>
+            <DashboardGridSectionHeader
+                title={c('Headline').t`Compare plans`}
+                cta={
+                    <Button color="norm" shape="ghost" onClick={handleExplorePlans}>
+                        {c('Action').t`Compare all plans`}
+                        <IcChevronRight className="shrink-0 ml-1 rtl:mirror" />
+                    </Button>
+                }
+            />
+
+            <UpsellMultiBox
+                style="card"
+                header={
+                    <PlanIconName
+                        logo={<PlanIcon planName={plan} />}
+                        topLine={c('Headline').t`Enjoying ${planName}?`}
+                        bottomLine={
+                            showSavings
+                                ? getBoldFormattedText(
+                                      c('Upsell')
+                                          .t`**Save up to ${priceString}** with a longer subscription. Same premium features, lower price.`,
+                                      'color-primary'
+                                  )
+                                : undefined
+                        }
+                    />
+                }
+                upsellPanels={
+                    subscription && (
+                        <>
+                            <div className="flex flex-column lg:flex-row gap-4 flex-nowrap mb-4">
+                                <UpsellPanelV2 title={c('Headline').t`You currently pay`} features={[]}>
+                                    <PlanPriceElement user={user} subscription={subscription} />
+                                </UpsellPanelV2>
+                                <UpsellPanelsV2 upsells={upsells} subscription={subscription} />
+                            </div>
+                        </>
+                    )
+                }
+                upsellGradient="unlimited"
+            ></UpsellMultiBox>
+        </DashboardGrid>
+    );
+};
+
+export default PassPlusExtendSubscription;

@@ -1,0 +1,232 @@
+import noop from '@proton/utils/noop';
+
+import type { AsyncCallback, MaybeNull, MaybePromise } from '../../types/utils';
+
+export type UnwrapPromise<T> = T extends any[]
+    ? { [K in keyof T]: UnwrapPromise<T[K]> }
+    : T extends Promise<infer U>
+      ? U
+      : T;
+
+export type Awaiter<T> = Promise<T> & { resolve: (value: T | PromiseLike<T>) => void; reject: (err: unknown) => void };
+export type AsyncResult<F extends (...args: any[]) => Promise<any>> = Promise<Awaited<ReturnType<F>>>;
+
+export const awaiter = <T>(options?: {
+    onResolve?: (value: T | PromiseLike<T>) => void;
+    onReject?: (err: unknown) => void;
+}): Awaiter<T> => {
+    let resolver: (value: T | PromiseLike<T>) => void = noop;
+    let rejector: (err: unknown) => void = noop;
+
+    const promise = new Promise<T>((resolve, reject) => {
+        resolver = (value) => {
+            resolve(value);
+            options?.onResolve?.(value);
+        };
+        rejector = (err) => {
+            reject(err);
+            options?.onReject?.(err);
+        };
+    }) as Awaiter<T>;
+
+    promise.resolve = resolver;
+    promise.reject = rejector;
+
+    return promise;
+};
+
+/**
+ * this util will recursively unwrap promises in any
+ * list like structure - it is useful in when working
+ * with asynchronous & deeply nested data-structures.
+ *
+ * await unwrap([1,2,Promise.resolve(3)]) // [1,2,3]
+ * await unwrap([1,2,[Promise.resolve(3)]) // [1,2,[3]]
+ * await unwrap([[Promise.resolve(1)],[Promise.resolve(2)]]) // [[1],[2]]
+ */
+export const unwrap = async <T extends any[]>(arr: [...T]): Promise<UnwrapPromise<T>> =>
+    Promise.all(arr.map((value) => (Array.isArray(value) ? unwrap(value) : value))) as Promise<UnwrapPromise<T>>;
+
+/** Defines options for asynchronous function locking to manage concurrent executions */
+type AsyncLockOptions<F extends (...args: any[]) => Promise<any>> = {
+    /** Optionally defines a key generator function to determine the lock key based on
+     * function parameters. This allows locking multiple function calls depending on
+     * parameters. If omitted, all function calls will be locked uniformly. */
+    key?: (...args: Parameters<F>) => string;
+};
+
+/** Creates a function that locks the execution of an asynchronous function to manage concurrency */
+export const asyncLock = <F extends (...args: any[]) => Promise<any>>(fn: F, options?: AsyncLockOptions<F>) => {
+    const handlers = new Map<string, AsyncResult<F>>();
+
+    return (...args: Parameters<F>): AsyncResult<F> => {
+        const key = options?.key?.(...args) ?? '';
+        const pending = handlers.get(key) ?? fn(...args).finally(() => handlers.delete(key));
+        handlers.set(key, pending);
+
+        return pending;
+    };
+};
+
+/** Wraps an async function so that calling it again cancels any in-flight invocation.
+ * The wrapped function receives an AbortSignal as its first argument: check it between
+ * awaits to short-circuit early. Returns { run, cancel } so callers can also abort. */
+export const asyncLatest = <A extends any[], T = void>(fn: (signal: AbortSignal, ...args: A) => Promise<T>) => {
+    let ctrl: MaybeNull<AbortController> = null;
+
+    const run = (...args: A): Promise<T> => {
+        ctrl?.abort();
+        ctrl = new AbortController();
+        return fn(ctrl.signal, ...args);
+    };
+
+    const cancel = () => {
+        ctrl?.abort();
+        ctrl = null;
+    };
+
+    return { run, cancel };
+};
+
+type AsyncQueueOptions<F extends (...args: any[]) => Promise<any>> = AsyncLockOptions<F>;
+
+export const asyncQueue = <F extends (...args: any[]) => Promise<any>>(fn: F, options?: AsyncQueueOptions<F>) => {
+    const handlers = new Map<string, Promise<void>>();
+
+    return (async (...args: Parameters<F>) => {
+        const key = options?.key?.(...args) ?? '';
+        const queue = handlers.get(key) ?? Promise.resolve();
+        const job = awaiter<ReturnType<F>>();
+
+        handlers.set(
+            key,
+            queue.then(async () => {
+                try {
+                    const result = await fn(...args);
+                    job.resolve(result);
+                } catch (err) {
+                    job.reject(err);
+                }
+            })
+        );
+
+        return job;
+    }) as F;
+};
+
+export const cancelable = <T>(
+    job: (signal: AbortSignal) => Promise<T>,
+    ctrl: AbortController = new AbortController()
+) => ({
+    run: () =>
+        ctrl.signal.aborted
+            ? Promise.reject()
+            : new Promise<T>(async (resolve, reject) => {
+                  const result = await job(ctrl.signal);
+                  return ctrl.signal.aborted ? reject() : resolve(result);
+              }),
+    cancel: () => {
+        ctrl.abort();
+    },
+});
+
+/** Processes array items sequentially through an async function */
+export const seq = async <T, R>(items: T[], job: (item: T, acc: R[]) => MaybePromise<R>): Promise<R[]> => {
+    const results: R[] = [];
+
+    for (const item of items) {
+        const result = await job(item, results);
+        results.push(result);
+    }
+
+    return results;
+};
+
+/** Like `seq`, but runs up to `concurrency` jobs at once. Result order matches
+ * `items`, regardless of completion order. If a job throws, no worker starts
+ * a new item afterwards — jobs already in flight still run to completion,
+ * but nothing new is dispatched — and the first error rejects the result. */
+export const pool = async <T, R>(
+    items: T[],
+    concurrency: number,
+    job: (item: T, index: number) => MaybePromise<R>,
+    onProgress?: (completed: number, total: number) => void
+): Promise<R[]> => {
+    if (items.length === 0) return [];
+
+    const results: R[] = new Array(items.length);
+    let cursor = 0;
+    let completed = 0;
+    let failed = false;
+
+    const worker = async () => {
+        while (cursor < items.length && !failed) {
+            const index = cursor++;
+            try {
+                results[index] = await job(items[index], index);
+            } catch (error) {
+                failed = true;
+                throw error;
+            }
+            completed++;
+            onProgress?.(completed, items.length);
+        }
+    };
+
+    const safeConcurrency = Number.isFinite(concurrency) ? Math.trunc(concurrency) : 1;
+    const workerCount = Math.max(1, Math.min(safeConcurrency, items.length));
+    await Promise.all(Array.from({ length: workerCount }, worker));
+
+    return results;
+};
+
+export const abortable =
+    (signal: AbortSignal) =>
+    <T>(job: () => Promise<T>, onAbort?: () => void) => {
+        if (signal.aborted) {
+            onAbort?.();
+            throw new DOMException('Aborted', 'AbortError');
+        }
+
+        return Promise.race([
+            job(),
+            new Promise((_, reject) =>
+                signal.addEventListener(
+                    'abort',
+                    () => {
+                        reject(new DOMException('Aborted', 'AbortError'));
+                        onAbort?.();
+                    },
+                    { once: true }
+                )
+            ),
+        ]) as Promise<T>;
+    };
+
+export const abortableSequence = async (operations: AsyncCallback[], signal: AbortSignal) => {
+    async function* sequence() {
+        for (const operation of operations) yield await abortable(signal)(operation);
+    }
+
+    const generator = sequence();
+    while (!(await generator.next()).done) {}
+};
+
+export const createAsyncQueue = () => {
+    let chain = Promise.resolve() as Promise<unknown>;
+    let active = true;
+
+    return {
+        push: <T extends any>(job: () => MaybePromise<T>) => {
+            active = true;
+            return (chain = chain.then(() => (active ? Promise.resolve(job()) : undefined)).catch(noop));
+        },
+
+        cancel: () => {
+            active = false;
+            chain = Promise.resolve();
+        },
+
+        settled: () => chain.then(() => true).catch(() => true),
+    };
+};

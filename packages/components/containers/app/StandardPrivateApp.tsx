@@ -1,0 +1,47 @@
+import { type ReactNode, useCallback, useRef } from 'react';
+
+import useIsInboxElectronApp from '../../hooks/useIsInboxElectronApp';
+import LocaleInjector from '../app/LocaleInjector';
+import ForceRefreshProvider from '../forceRefresh/Provider';
+import type { RefreshFn } from '../forceRefresh/context';
+import DensityInjector from '../layouts/DensityInjector';
+import ModalsChildren from '../modals/Children';
+import NotificationsChildren from '../notifications/Children';
+import { ThemeInjector } from '../themes/ThemeInjector';
+import ElectronBlockedContainer from './ElectronBlockedContainer';
+import ForceReload from './ForceReload';
+import StorageListener from './StorageListener';
+
+interface Props {
+    children: ReactNode;
+    noModals?: boolean;
+    noNotifications?: boolean;
+    noThemeInjector?: boolean;
+}
+
+const StandardPrivateApp = ({ children, noModals, noNotifications, noThemeInjector }: Props) => {
+    const { isElectronDisabled } = useIsInboxElectronApp();
+    const refreshRef = useRef<RefreshFn>(() => {});
+    const refresh = useCallback(() => {
+        return refreshRef.current();
+    }, []);
+
+    if (isElectronDisabled) {
+        return <ElectronBlockedContainer />;
+    }
+
+    return (
+        <>
+            <ForceReload />
+            {!noThemeInjector && <ThemeInjector />}
+            <DensityInjector />
+            {!noNotifications && <NotificationsChildren />}
+            <LocaleInjector onRerender={refresh} />
+            {!noModals && <ModalsChildren />}
+            <StorageListener />
+            <ForceRefreshProvider ref={refreshRef}>{children}</ForceRefreshProvider>
+        </>
+    );
+};
+
+export default StandardPrivateApp;

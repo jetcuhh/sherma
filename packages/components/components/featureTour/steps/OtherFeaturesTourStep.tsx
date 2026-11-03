@@ -1,0 +1,74 @@
+import type { ReactNode } from 'react';
+
+import { c } from 'ttag';
+
+import { entitlementChecksForOrgAndUserThunk } from '@proton/account/entitlementCatalog/actions';
+import { IcClock } from '@proton/icons/icons/IcClock';
+import { IcEarth } from '@proton/icons/icons/IcEarth';
+import { IcPaperPlaneClock } from '@proton/icons/icons/IcPaperPlaneClock';
+import { IcSpeechBubble } from '@proton/icons/icons/IcSpeechBubble';
+import { BRAND_NAME, MAIL_APP_NAME } from '@proton/shared/lib/constants';
+import clsx from '@proton/utils/clsx';
+
+import type { FeatureTourStepProps, ShouldDisplayTourStep } from '../interface';
+import FeatureTourStepCTA from './components/FeatureTourStepCTA';
+import FeatureTourStepsContent from './components/FeatureTourStepsContent';
+
+export const shouldDisplayOtherFeaturesTourStep: ShouldDisplayTourStep = async (dispatch) => {
+    const entitlements = await dispatch(entitlementChecksForOrgAndUserThunk());
+    return {
+        canDisplay: entitlements.isMailB2C,
+    };
+};
+
+const OtherFeaturesTourStep = (props: FeatureTourStepProps) => {
+    const features: { icon: ReactNode; title: string; content: string }[] = [
+        {
+            icon: <IcClock />,
+            title: c('Title').t`Snooze:`,
+            content: c('Info').t`Snooze messages for later so they are top of your inbox when you want`,
+        },
+        {
+            icon: <IcPaperPlaneClock />,
+            title: c('Title').t`Schedule send:`,
+            content: c('Info').t`Send messages at just the right now`,
+        },
+        {
+            icon: <IcEarth />,
+            title: c('Title').t`Custom domains:`,
+            content: c('Info').t`You can add your own custom domain to ${MAIL_APP_NAME}`,
+        },
+        {
+            icon: <IcSpeechBubble />,
+            title: c('Title').t`Priority support:`,
+            content: c('Info').t`Reach out to us for help on anything ${BRAND_NAME}.`,
+        },
+    ];
+
+    return (
+        <FeatureTourStepsContent
+            bullets={props.bullets}
+            title={c('Title').t`Other features included in your plan`}
+            mainCTA={
+                <FeatureTourStepCTA type="primary" onClick={props.onNext}>
+                    {c('Button').t`Got it`}
+                </FeatureTourStepCTA>
+            }
+        >
+            <div className="mt-4">
+                {features.map(({ icon, title, content }, index) => (
+                    <div key={title} className="text-left flex flex-nowrap items-start justify-left">
+                        <div className="rounded-full bg-weak shrink-0 flex items-center justify-center p-2 mr-3">
+                            {icon}
+                        </div>
+                        <p className={clsx(index === features.length - 1 ? 'm-0' : 'mt-0 mb-4')}>
+                            {title} {content}
+                        </p>
+                    </div>
+                ))}
+            </div>
+        </FeatureTourStepsContent>
+    );
+};
+
+export default OtherFeaturesTourStep;

@@ -1,0 +1,40 @@
+import { useEffect, useMemo, useRef } from 'react';
+import { useDispatch } from 'react-redux';
+
+import { usePassCore } from '@proton/pass/components/Core/PassCoreProvider';
+import { useNavigationFilters } from '@proton/pass/components/Navigation/NavigationFilters';
+import { useSelectedItem } from '@proton/pass/components/Navigation/NavigationItem';
+import { intoDomainWithPort } from '@proton/pass/lib/urls/utils/utils';
+import { saveTabState } from '@proton/pass/store/actions/creators/filters';
+
+import { useExtensionContext } from '../components/Extension/ExtensionSetup';
+
+export const useSaveTabState = () => {
+    const { getExtensionClientState } = usePassCore();
+    const { tabId } = useExtensionContext();
+    const { filters } = useNavigationFilters();
+    const selectedItem = useSelectedItem();
+
+    const dispatch = useDispatch();
+
+    const { itemId, shareId } = selectedItem ?? {};
+    const { search, sort, type, selectedShareId, selectedFolderId } = filters;
+
+    const savePopupState = useRef(false);
+
+    const popupTabState = useMemo(() => {
+        const url = getExtensionClientState?.()?.url;
+        return {
+            domain: url ? intoDomainWithPort({ ...url, as: 'host' }) : null,
+            filters: { search, sort, type, selectedShareId, selectedFolderId },
+            search,
+            selectedItem: selectedItem ? { shareId: selectedItem.shareId, itemId: selectedItem.itemId } : null,
+            tabId,
+        };
+    }, [itemId, shareId, search, sort, type, selectedShareId, selectedFolderId]);
+
+    useEffect(() => {
+        if (!savePopupState.current) savePopupState.current = true;
+        else dispatch(saveTabState(popupTabState));
+    }, [popupTabState]);
+};

@@ -1,0 +1,27 @@
+import type { PassBridge, PassBridgeAliasItem } from '../../../lib/bridge/types';
+import { isTrashed } from '../../../lib/items/item.predicates';
+import type { PassAliasesVault } from './interface';
+
+const filterPassAliases = (aliases: PassBridgeAliasItem[]) => {
+    const filterNonTrashedItems = ({ item }: PassBridgeAliasItem) => !isTrashed(item);
+    const sortDesc = (a: PassBridgeAliasItem, b: PassBridgeAliasItem) => {
+        const aTime = a.item.lastUseTime ?? a.item.revisionTime;
+        const bTime = b.item.lastUseTime ?? b.item.revisionTime;
+
+        return bTime - aTime;
+    };
+
+    return aliases.filter(filterNonTrashedItems).sort(sortDesc);
+};
+
+export const fetchPassAliases = async (PassBridge: PassBridge, defaultVault: PassAliasesVault) => {
+    const aliases = await PassBridge.alias.getAllByShareId(defaultVault.shareId);
+    const userAccess = await PassBridge.user.getUserAccess();
+    const filteredAliases = filterPassAliases(aliases);
+
+    return {
+        aliasesCountLimit: userAccess.plan.AliasLimit ?? Number.MAX_SAFE_INTEGER,
+        filteredAliases,
+        aliases,
+    };
+};

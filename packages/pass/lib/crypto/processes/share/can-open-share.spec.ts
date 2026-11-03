@@ -1,0 +1,72 @@
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { AddressKey, DecryptedKey } from '@proton/shared/lib/interfaces/Key';
+
+import { exposePassCrypto } from '../..';
+import type { ShareGetResponse, ShareKeyResponse } from '../../../../types/api/pass';
+import type { PassCryptoManagerContext, PassCryptoWorker, ShareManager } from '../../../../types/crypto/pass-crypto';
+import { releaseCryptoProxy, setupCryptoProxyForTesting } from '../../../../utils/tests/fixtures/crypto';
+import { PassCryptoShareError } from '../../utils/errors';
+import { canOpenShare } from './can-open-share';
+
+describe('canOpenShare', () => {
+    const passCrypto = {} as PassCryptoWorker;
+
+    const userKeyId = 'userKeyId';
+    const addressId = 'addressId';
+    const groupId = 'groupId';
+
+    const mockKey = {} as AddressKey;
+    const mockGroupPublicKey = '';
+    const encryptedShare = { AddressID: addressId } as ShareGetResponse;
+    const encryptedGroupShare = { AddressID: addressId, GroupID: groupId } as ShareGetResponse;
+    const shareKey: ShareKeyResponse = { KeyRotation: 0, Key: 'key', UserKeyID: userKeyId, CreateTime: 0 };
+
+    beforeAll(async () => {
+        await setupCryptoProxyForTesting();
+        exposePassCrypto(passCrypto);
+    });
+    afterAll(async () => releaseCryptoProxy());
+
+    const mockCryptContext = (partial: Partial<PassCryptoManagerContext>) => {
+        passCrypto.getContext = () => partial as PassCryptoManagerContext;
+    };
+
+    test('no keys and no manager should throw', async () => {
+        expect(() => canOpenShare(encryptedGroupShare, undefined, undefined, undefined)).toThrow(PassCryptoShareError);
+    });
+
+    test('no keys should rely on manager', async () => {
+        const manager = { isActive: jest.fn(() => true) } as unknown as ShareManager;
+        expect(canOpenShare(encryptedGroupShare, undefined, manager, undefined)).toBe(true);
+        expect(manager.isActive).toHaveBeenCalled();
+    });
+
+    test('empty keys should throw', async () => {
+        expect(() => canOpenShare(encryptedGroupShare, [], undefined, undefined)).toThrow(PassCryptoShareError);
+    });
+
+    test('group share with no address keys should be false', async () => {
+        mockCryptContext({ addresses: [] });
+        expect(canOpenShare(encryptedGroupShare, [shareKey], undefined, undefined)).toBe(false);
+    });
+
+    test('group share with no group keys should be false', async () => {
+        mockCryptContext({ addresses: [{ ID: addressId, Keys: [mockKey] } as Address] });
+        expect(canOpenShare(encryptedGroupShare, [shareKey], undefined, undefined)).toBe(false);
+    });
+
+    test('group share with address and group keys should be true', async () => {
+        mockCryptContext({ addresses: [{ ID: addressId, Keys: [mockKey] } as Address] });
+        expect(canOpenShare(encryptedGroupShare, [shareKey], undefined, [mockGroupPublicKey])).toBe(true);
+    });
+
+    test('share with no matching user keys should be false', async () => {
+        mockCryptContext({ userKeys: [] });
+        expect(canOpenShare(encryptedShare, [shareKey], undefined, undefined)).toBe(false);
+    });
+
+    test('share with matching user keys should be true', async () => {
+        mockCryptContext({ userKeys: [{ ID: userKeyId } as DecryptedKey] });
+        expect(canOpenShare(encryptedShare, [shareKey], undefined, undefined)).toBe(true);
+    });
+});

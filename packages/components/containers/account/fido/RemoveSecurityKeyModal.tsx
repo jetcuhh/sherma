@@ -1,0 +1,96 @@
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import { unlockPasswordChanges } from '@proton/shared/lib/api/user';
+
+import type { ModalProps } from '../../../components/modalTwo/Modal';
+import useModalState from '../../../components/modalTwo/useModalState';
+import Prompt from '../../../components/prompt/Prompt';
+import useErrorHandler from '../../../hooks/useErrorHandler';
+import AuthModal from '../../password/AuthModal';
+import { removeAllSecurityKeysThunk } from './removeAllSecurityKeysThunk';
+
+interface Key {
+    id: string;
+    name: string;
+}
+
+interface Props extends ModalProps {
+    type: 'single' | 'all';
+    keys: Key[];
+}
+
+const RemoveSecurityKeyModal = ({ onClose, type, keys, ...rest }: Props) => {
+    const [loading, withLoading] = useLoading();
+    const dispatch = useDispatch();
+    const [authModalProps, setAuthModalOpen, renderAuthModal] = useModalState();
+    const { createNotification } = useNotifications();
+    const handleError = useErrorHandler();
+
+    const name = (
+        <span className="text-bold text-break" key="name">
+            {keys[0].name}
+        </span>
+    );
+
+    return (
+        <>
+            {renderAuthModal && (
+                <AuthModal
+                    scope="password"
+                    config={unlockPasswordChanges()}
+                    {...authModalProps}
+                    onCancel={onClose}
+                    onSuccess={async () => {
+                        const run = async () => {
+                            try {
+                                await dispatch(removeAllSecurityKeysThunk(keys));
+                                if (type === 'single') {
+                                    createNotification({ text: c('fido2: Info').t`Security key removed` });
+                                } else if (type === 'all') {
+                                    createNotification({ text: c('fido2: Info').t`2FA via security key disabled` });
+                                }
+                                onClose?.();
+                            } catch (e) {
+                                handleError(e);
+                            }
+                        };
+                        void withLoading(run());
+                    }}
+                />
+            )}
+            <Prompt
+                {...rest}
+                title={
+                    type === 'all'
+                        ? c('fido2: Title').t`Disable 2FA via security key?`
+                        : c('fido2: Title').t`Delete security key?`
+                }
+                onClose={onClose}
+                buttons={[
+                    <Button
+                        loading={loading}
+                        color="danger"
+                        onClick={() => {
+                            setAuthModalOpen(true);
+                        }}
+                    >
+                        {type === 'all' && c('Action').t`Disable`}
+                        {type === 'single' && c('fido2: Action').t`Delete key`}
+                    </Button>,
+                    <Button disabled={loading} onClick={onClose}>
+                        {c('Action').t`Cancel`}
+                    </Button>,
+                ]}
+            >
+                {type === 'all' && c('fido2: Info').t`This will delete all security keys linked to your account.`}
+                {type === 'single' && c('fido2: Info').jt`Are you sure you want to delete security key ${name}?`}
+            </Prompt>
+        </>
+    );
+};
+
+export default RemoveSecurityKeyModal;

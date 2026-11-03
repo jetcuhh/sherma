@@ -1,0 +1,7 @@
+export const DEFAULT_DEVICE_ID = 'default';
+export const COMMUNICATIONS_DEVICE_ID = 'communications';
+export const URL_PASSWORD_PREFIX = '#pwd-';
+export const URL_ID_PREFIX = 'id-';
+export const PAGE_SIZE = 15;
+export const PARTICIPANTS_SIDE_BAR_PAGE_SIZE = 6;
+export const SMALL_SCREEN_PAGE_SIZE = 4;

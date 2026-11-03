@@ -1,0 +1,823 @@
+import { CryptoProxy } from '@protontech/crypto';
+
+import { ADDRESS_RECEIVE, ADDRESS_SEND, ADDRESS_STATUS } from '@proton/shared/lib/constants';
+import type { DecryptedKey, Key } from '@proton/shared/lib/interfaces/Key';
+import type { User } from '@proton/shared/lib/interfaces/User';
+
+import type { ItemRevisionContentsResponse, ShareGetResponse, ShareKeyResponse } from '../../types/api/pass';
+import { ContentFormatVersion, PassEncryptionTag } from '../../types/crypto/pass-types';
+import { ItemState } from '../../types/data/items';
+import { ShareRole, ShareType } from '../../types/data/shares';
+import { createMemoryStore } from '../../utils/store';
+import { uniqueId } from '../../utils/string/unique-id';
+import {
+    TEST_KEY_PASSWORD,
+    TEST_USER_KEY_ID,
+    createRandomGroupKey,
+    createRandomKey,
+    createRandomShareResponses,
+    randomAddress,
+    randomContents,
+    releaseCryptoProxy,
+    setupCryptoProxyForTesting,
+} from '../../utils/tests/fixtures/crypto';
+import { createAuthStore, exposeAuthStore } from '../auth/store';
+import { parseGroup } from '../groups/groups.parsers';
+import { PassCrypto, exposePassCrypto } from './index';
+import { createPassCrypto } from './pass-crypto';
+import * as processes from './processes';
+import { decryptData, generateKey, importSymmetricKey } from './utils/crypto-helpers';
+import { PassCryptoHydrationError, PassCryptoNotHydratedError, PassCryptoShareError } from './utils/errors';
+
+describe('PassCrypto', () => {
+    let user: User;
+    let userKey: DecryptedKey;
+    let addressKey: DecryptedKey;
+    const address = {
+        ...randomAddress(),
+        ID: `addressId-${uniqueId()}`,
+        Status: ADDRESS_STATUS.STATUS_ENABLED,
+        Receive: ADDRESS_RECEIVE.RECEIVE_YES,
+        Send: ADDRESS_SEND.SEND_YES,
+    };
+
+    const setupHydratedPassCrypto = async () => {
+        await PassCrypto.hydrate({ user, addresses: [address], keyPassword: TEST_KEY_PASSWORD });
+    };
+
+    beforeAll(async () => {
+        await setupCryptoProxyForTesting();
+
+        userKey = await createRandomKey();
+        const PrivateKey = await CryptoProxy.exportPrivateKey({
+            privateKey: userKey.privateKey,
+            passphrase: TEST_KEY_PASSWORD,
+        });
+
+        user = {
+            Keys: [
+                {
+                    ID: TEST_USER_KEY_ID,
+                    PrivateKey,
+                    Version: 3,
+                    Active: 1,
+                } as Key,
+            ],
+        } as User;
+
+        addressKey = await createRandomKey();
+        const addressArmoredKey = await CryptoProxy.exportPrivateKey({
+            format: 'armored',
+            privateKey: addressKey.privateKey,
+            passphrase: TEST_KEY_PASSWORD,
+        });
+        address.Keys = [
+            {
+                ID: `addressId-key-${uniqueId()}`,
+                PrivateKey: addressArmoredKey,
+                Primary: 1,
+                Active: 1,
+                Fingerprint: '',
+                Fingerprints: [],
+                Version: 1,
+                Flags: 0,
+                Signature: '',
+                AddressForwardingID: '',
+            },
+        ];
+
+        exposePassCrypto(createPassCrypto());
+
+        const authStore = createAuthStore(createMemoryStore());
+        authStore.setPassword(TEST_KEY_PASSWORD);
+        exposeAuthStore(authStore);
+    });
+
+    afterAll(async () => releaseCryptoProxy());
+
+    describe('PassCrypto::hydrate', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if no user keys', async () => {
+            await expect(
+                PassCrypto.hydrate({
+                    user: { Keys: [] } as unknown as User,
+                    addresses: [address],
+                    keyPassword: TEST_KEY_PASSWORD,
+                })
+            ).rejects.toThrow(PassCryptoHydrationError);
+        });
+
+        test('should throw if no active address keys', async () => {
+            await expect(
+                PassCrypto.hydrate({
+                    user,
+                    addresses: [{ ...address, Status: ADDRESS_STATUS.STATUS_DISABLED }],
+                    keyPassword: TEST_KEY_PASSWORD,
+                })
+            ).rejects.toThrow(PassCryptoHydrationError);
+        });
+
+        test('should hydrate correctly', async () => {
+            await expect(setupHydratedPassCrypto()).resolves.not.toThrow();
+        });
+
+        test('should throw if no active user keys', async () => {
+            const userKey = user.Keys[0];
+            const inactiveKey = await createRandomKey();
+            const inactiveUserKey = await CryptoProxy.exportPrivateKey({
+                privateKey: inactiveKey.privateKey,
+                passphrase: `${TEST_KEY_PASSWORD}-inactive`,
+            });
+
+            const userReset = {
+                ...user,
+                Keys: [
+                    {
+                        ...userKey,
+                        ID: `${TEST_USER_KEY_ID}-inactive-1`,
+                        Active: 0,
+                        PrivateKey: inactiveUserKey,
+                    },
+                ],
+            } as User;
+
+            await expect(
+                PassCrypto.hydrate({ user: userReset, addresses: [address], keyPassword: TEST_KEY_PASSWORD })
+            ).rejects.toThrow(PassCryptoHydrationError);
+        });
+
+        test('should only track  active user keys', async () => {
+            const userKey = user.Keys[0];
+            const inactiveKey = await createRandomKey();
+            const inactiveUserKey = await CryptoProxy.exportPrivateKey({
+                privateKey: inactiveKey.privateKey,
+                passphrase: `${TEST_KEY_PASSWORD}-inactive`,
+            });
+
+            const userReset = {
+                ...user,
+                Keys: [
+                    userKey,
+                    {
+                        ...userKey,
+                        ID: `${TEST_USER_KEY_ID}-inactive-1`,
+                        Active: 0,
+                        PrivateKey: inactiveUserKey,
+                    },
+                ],
+            } as User;
+
+            await PassCrypto.hydrate({ user: userReset, addresses: [address], keyPassword: TEST_KEY_PASSWORD });
+            expect(PassCrypto.getContext().userKeys!.length).toEqual(1);
+            expect(PassCrypto.getContext().userKeys?.[0].ID).toEqual(TEST_USER_KEY_ID);
+        });
+    });
+
+    describe('PassCrypto::createVault', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.createVault(randomContents())).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should call createVault with primary user key and primary addressId', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+            const vault = await PassCrypto.createVault(content);
+            const vaultKey = await processes.openShareKey({
+                userKeys: [userKey],
+                shareKey: {
+                    Key: vault.EncryptedVaultKey,
+                    KeyRotation: 1,
+                    CreateTime: 0,
+                    UserKeyID: TEST_USER_KEY_ID,
+                },
+            });
+
+            const decryptedContent = await decryptData(
+                vaultKey.key,
+                Uint8Array.fromBase64(vault.Content),
+                PassEncryptionTag.VaultContent
+            );
+
+            expect(decryptedContent).toStrictEqual(content);
+            expect(vault.AddressID).toEqual(address.ID);
+            expect(vault.ContentFormatVersion).toEqual(ContentFormatVersion.Share);
+        });
+    });
+
+    describe('PassCrypto::updateVault', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.updateVault({} as any)).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should call updateVault with latest vaultKey', async () => {
+            await setupHydratedPassCrypto();
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+
+            /* register the share */
+            const share = await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const contentUpdate = randomContents();
+            const vaultUpdate = await PassCrypto.updateVault({ shareId: share!.shareId, content: contentUpdate });
+            const vaultKey = PassCrypto.getShareManager(share!.shareId).getVaultShareKey(1);
+
+            const decryptedContent = await decryptData(
+                vaultKey.key,
+                Uint8Array.fromBase64(vaultUpdate.Content),
+                PassEncryptionTag.VaultContent
+            );
+
+            expect(decryptedContent).toStrictEqual(contentUpdate);
+            expect(vaultUpdate.ContentFormatVersion).toEqual(ContentFormatVersion.Share);
+            expect(vaultUpdate.KeyRotation).toEqual(1);
+        });
+    });
+
+    describe('PassCrypto::openShare', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.openShare({} as any)).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should create a new share manager and add new vault keys on manager', async () => {
+            await setupHydratedPassCrypto();
+
+            /* create a vault */
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            const share = await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const shareManager = PassCrypto.getShareManager(encryptedShare.ShareID);
+
+            expect(PassCrypto.getShareManager(encryptedShare.ShareID)).toBeDefined();
+            expect(shareManager.getShare()).toStrictEqual(share);
+            expect(shareManager.hasVaultShareKey(1)).toBe(true);
+
+            /* simulate new vault keys being added */
+            const encryptedShareUpdate: ShareGetResponse = { ...encryptedShare, ContentKeyRotation: 2 };
+            const newShareKey: ShareKeyResponse = { ...shareKey, KeyRotation: 2 };
+
+            jest.spyOn(shareManager, 'addVaultShareKey');
+
+            const shareUpdate = await PassCrypto.openShare({
+                encryptedShare: encryptedShareUpdate,
+                encryptedShareKeys: [shareKey, newShareKey],
+            });
+
+            expect(shareManager.getShare()).toStrictEqual(shareUpdate);
+            expect(shareManager.hasVaultShareKey(1)).toBe(true);
+            expect(shareManager.hasVaultShareKey(2)).toBe(true);
+        });
+
+        test('should throw if share keys list is empty', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+            const vault = await PassCrypto.createVault(content);
+
+            const encryptedShare: ShareGetResponse = {
+                AddressID: vault.AddressID,
+                Content: vault.Content,
+                ContentFormatVersion: ContentFormatVersion.Share,
+                ContentKeyRotation: 2,
+                CreateTime: 0,
+                ExpireTime: 0,
+                NewUserInvitesReady: 0,
+                Owner: true,
+                PendingInvites: 0,
+                Permission: 1,
+                Primary: false,
+                Shared: false,
+                ShareID: `shareId-${uniqueId()}`,
+                ShareRoleID: ShareRole.MANAGER,
+                TargetID: `targetId-${uniqueId()}`,
+                TargetMaxMembers: 2,
+                TargetMembers: 0,
+                TargetType: ShareType.Vault,
+                VaultID: `vaultId-${uniqueId()}`,
+                CanAutoFill: true,
+                Flags: 0,
+            };
+
+            await expect(PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [] })).rejects.toThrow(
+                new PassCryptoShareError(`Empty share keys`)
+            );
+        });
+
+        test('should throw if there are no share keys for current share rotation', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+            const vault = await PassCrypto.createVault(content);
+
+            const shareKey: ShareKeyResponse = {
+                Key: vault.EncryptedVaultKey,
+                KeyRotation: 1,
+                CreateTime: 0,
+                UserKeyID: TEST_USER_KEY_ID,
+            };
+
+            const encryptedShare: ShareGetResponse = {
+                AddressID: vault.AddressID,
+                Content: vault.Content,
+                ContentFormatVersion: ContentFormatVersion.Share,
+                ContentKeyRotation: 2,
+                CreateTime: 0,
+                ExpireTime: 0,
+                NewUserInvitesReady: 0,
+                Owner: true,
+                PendingInvites: 0,
+                Permission: 1,
+                Primary: false,
+                Shared: false,
+                ShareID: `shareId-${uniqueId()}`,
+                ShareRoleID: ShareRole.MANAGER,
+                TargetID: `targetId-${uniqueId()}`,
+                TargetMaxMembers: 2,
+                TargetMembers: 0,
+                TargetType: ShareType.Vault,
+                VaultID: `vaultId-${uniqueId()}`,
+                CanAutoFill: true,
+                Flags: 0,
+            };
+
+            await expect(PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] })).rejects.toThrow(
+                new PassCryptoShareError(`Missing vault key for rotation 2`)
+            );
+        });
+
+        test('should return null if no user key can decrypt current share', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+            const vault = await PassCrypto.createVault(content);
+            const shareKey: ShareKeyResponse = {
+                Key: vault.EncryptedVaultKey,
+                KeyRotation: 1,
+                CreateTime: 0,
+                UserKeyID: `${TEST_USER_KEY_ID}-inactive`,
+            };
+
+            const encryptedShare: ShareGetResponse = {
+                AddressID: vault.AddressID,
+                Content: vault.Content,
+                ContentFormatVersion: ContentFormatVersion.Share,
+                ContentKeyRotation: 1,
+                CreateTime: 0,
+                ExpireTime: 0,
+                NewUserInvitesReady: 0,
+                Owner: true,
+                PendingInvites: 0,
+                Permission: 1,
+                Primary: false,
+                Shared: false,
+                ShareID: `shareId-${uniqueId()}`,
+                ShareRoleID: ShareRole.MANAGER,
+                TargetID: `targetId-${uniqueId()}`,
+                TargetMaxMembers: 2,
+                TargetMembers: 0,
+                TargetType: ShareType.Vault,
+                VaultID: `vaultId-${uniqueId()}`,
+                CanAutoFill: true,
+                Flags: 0,
+            };
+
+            expect(await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] })).toEqual(null);
+        });
+
+        test('should throw if no share manager exists and no encryptedShareKeys provided', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+            const vault = await PassCrypto.createVault(content);
+
+            const encryptedShare: ShareGetResponse = {
+                AddressID: vault.AddressID,
+                Content: vault.Content,
+                ContentFormatVersion: ContentFormatVersion.Share,
+                ContentKeyRotation: 1,
+                CreateTime: 0,
+                ExpireTime: 0,
+                NewUserInvitesReady: 0,
+                Owner: true,
+                PendingInvites: 0,
+                Permission: 1,
+                Primary: false,
+                Shared: false,
+                ShareID: `shareId-${uniqueId()}`,
+                ShareRoleID: ShareRole.MANAGER,
+                TargetID: `targetId-${uniqueId()}`,
+                TargetMaxMembers: 2,
+                TargetMembers: 0,
+                TargetType: ShareType.Vault,
+                VaultID: `vaultId-${uniqueId()}`,
+                CanAutoFill: true,
+                Flags: 0,
+            };
+
+            await expect(PassCrypto.openShare({ encryptedShare })).rejects.toThrow(
+                new PassCryptoShareError('Missing share manager')
+            );
+        });
+
+        test('should throw if share manager exists but is missing required vault key', async () => {
+            await setupHydratedPassCrypto();
+
+            /** Register a share with rotation 1 and then try to open the same
+             * share for rotation 2 without passing `encryptedShareKeys` */
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const encryptedShareUpdate: ShareGetResponse = { ...encryptedShare, ContentKeyRotation: 2 };
+
+            await expect(PassCrypto.openShare({ encryptedShare: encryptedShareUpdate })).rejects.toThrow(
+                new PassCryptoShareError(`Missing vault key for rotation 2`)
+            );
+        });
+
+        test('should successfully open share using existing share manager', async () => {
+            await setupHydratedPassCrypto();
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            const shareId = encryptedShare.ShareID;
+
+            const share = await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const reopened = await PassCrypto.openShare({ encryptedShare });
+
+            expect(reopened).not.toBeNull();
+            expect(reopened?.shareId).toEqual(shareId);
+            expect(reopened?.content).toEqual(share?.content);
+        });
+
+        test('should successfully open group share', async () => {
+            await setupHydratedPassCrypto();
+
+            const content = randomContents();
+
+            const groupId = 'groupId';
+            const { group, groupKey } = await createRandomGroupKey(groupId);
+            PassCrypto.setGroup(parseGroup(group));
+            // Artificially add matching key in context, using private keys as a fallback here
+            PassCrypto.getContext().groups.get(groupId)!.publicKeys = group.Address.Keys.map((key) => key.PrivateKey);
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(
+                addressKey,
+                groupKey,
+                address.ID,
+                content
+            );
+            encryptedShare.GroupID = groupId;
+            const shareId = encryptedShare.ShareID;
+
+            const share = await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+
+            expect(share).not.toBeNull();
+            expect(share?.shareId).toEqual(shareId);
+            expect(share?.groupId).toEqual(groupId);
+            expect(share?.content).toEqual(content);
+        });
+    });
+
+    describe('PassCrypto::updateShare', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.openShare({} as any)).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should register only new vaults keys on shareManager', async () => {
+            await setupHydratedPassCrypto();
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            const shareId = encryptedShare.ShareID;
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+
+            const shareManager = PassCrypto.getShareManager(encryptedShare.ShareID);
+
+            jest.spyOn(shareManager, 'addVaultShareKey');
+
+            const content = randomContents();
+            const vault = await processes.createVault({
+                content,
+                encryptionKey: userKey,
+                signingKey: userKey,
+                addressId: address.ID,
+            });
+            const newShareKey: ShareKeyResponse = {
+                Key: vault.EncryptedVaultKey,
+                KeyRotation: 2,
+                CreateTime: 0,
+                UserKeyID: TEST_USER_KEY_ID,
+            };
+
+            await PassCrypto.updateShareKeys({ shareId, encryptedShareKeys: [shareKey] });
+            expect(shareManager.addVaultShareKey).toHaveBeenCalledTimes(0);
+
+            await PassCrypto.updateShareKeys({ shareId, encryptedShareKeys: [shareKey, newShareKey] });
+            expect(shareManager.addVaultShareKey).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe('PassCrypto::openItem', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.openItem({} as any)).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should throw if vault share has not been registered yet', async () => {
+            await PassCrypto.hydrate({ user, addresses: [address], keyPassword: TEST_KEY_PASSWORD });
+
+            const encryptedItem: ItemRevisionContentsResponse = {
+                AliasOwner: false,
+                Content: 'base64encoded',
+                ContentFormatVersion: ContentFormatVersion.Item,
+                CreateTime: 0,
+                Flags: 0,
+                ItemID: `itemId-${uniqueId()}`,
+                ItemKey: 'base64encoded',
+                KeyRotation: 1,
+                LastUseTime: 0,
+                ModifyTime: 0,
+                Pinned: false,
+                Revision: 1,
+                RevisionTime: 0,
+                ShareCount: 0,
+                State: ItemState.Active,
+            };
+
+            await expect(
+                PassCrypto.openItem({
+                    shareId: 'somerandom',
+                    encryptedItem,
+                })
+            ).rejects.toThrow(PassCryptoShareError);
+        });
+
+        test('should decrypt item with shareManager vault key', async () => {
+            await setupHydratedPassCrypto();
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const vaultKey = await processes.openShareKey({ shareKey, userKeys: [userKey] });
+
+            /* create item */
+            const itemContent = randomContents();
+            const item = await processes.createItem({ content: itemContent, encryptionKey: vaultKey });
+            const encryptedItem: ItemRevisionContentsResponse = {
+                AliasOwner: false,
+                Content: item.Content,
+                ContentFormatVersion: ContentFormatVersion.Item,
+                CreateTime: 0,
+                Flags: 0,
+                ItemID: `itemId-${uniqueId()}`,
+                ItemKey: item.ItemKey,
+                KeyRotation: 1,
+                LastUseTime: 0,
+                ModifyTime: 0,
+                Pinned: false,
+                Revision: 1,
+                RevisionTime: 0,
+                ShareCount: 0,
+                State: ItemState.Active,
+            };
+
+            const openedItem = await PassCrypto.openItem({ shareId: encryptedShare.ShareID, encryptedItem });
+
+            expect(openedItem.itemId).toEqual(encryptedItem.ItemID);
+            expect(openedItem.content).toEqual(itemContent);
+            expect(openedItem.revision).toEqual(encryptedItem.Revision);
+            expect(openedItem.state).toEqual(encryptedItem.State);
+        });
+
+        test('should encrypt & decrypt an item created inside a folder with the folder key', async () => {
+            await setupHydratedPassCrypto();
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+            const shareId = encryptedShare.ShareID;
+
+            /* register a folder key for this share */
+            const rawFolderKey = generateKey();
+            const folderKey = {
+                key: await importSymmetricKey(rawFolderKey),
+                raw: rawFolderKey,
+                rotation: 1,
+                parentFolderId: null,
+            };
+            const folderId = 'folder-1';
+            PassCrypto.registerFolderKey({ shareId, folderId, folderKey });
+
+            const itemContent = randomContents();
+            const item = await PassCrypto.createItem({ shareId, content: itemContent, folderId });
+
+            const encryptedItem: ItemRevisionContentsResponse = {
+                Content: item.Content,
+                ContentFormatVersion: ContentFormatVersion.Item,
+                CreateTime: 0,
+                Flags: 0,
+                FolderID: item.FolderID,
+                ItemID: `itemId-${crypto.randomUUID()}`,
+                ItemKey: item.ItemKey,
+                KeyRotation: item.KeyRotation,
+                LastUseTime: 0,
+                ModifyTime: 0,
+                Pinned: false,
+                Revision: 1,
+                RevisionTime: 0,
+                ShareCount: 0,
+                State: ItemState.Active,
+            };
+
+            const openedItem = await PassCrypto.openItem({ shareId, encryptedItem });
+            expect(openedItem.content).toEqual(itemContent);
+            expect(openedItem.folderId).toEqual(folderId);
+
+            const encryptedItemKey = { Key: item.ItemKey, KeyRotation: item.KeyRotation };
+            const itemKey = await PassCrypto.openItemKey({ encryptedItemKey, shareId, folderId });
+            const decryptedContent = await decryptData(
+                itemKey.key,
+                Uint8Array.fromBase64(item.Content),
+                PassEncryptionTag.ItemContent
+            );
+            expect(decryptedContent).toEqual(itemContent);
+            await expect(PassCrypto.openItemKey({ encryptedItemKey, shareId, folderId: null })).rejects.toThrow();
+        });
+    });
+
+    describe('PassCrypto::moveItem', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.moveItem({} as any)).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+    });
+
+    describe('PassCrypto::createAccessTokenKey', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw if PassCrypto not hydrated', async () => {
+            await expect(PassCrypto.createAccessTokenKey()).rejects.toThrow(PassCryptoNotHydratedError);
+        });
+
+        test('should create and round-trip the access token key', async () => {
+            await setupHydratedPassCrypto();
+            const { raw, encrypted } = await PassCrypto.createAccessTokenKey();
+
+            expect(raw).toBeInstanceOf(Uint8Array);
+            expect(raw.byteLength).toBe(32);
+
+            const result = await PassCrypto.openAccessTokenKey(encrypted);
+            expect(result).toStrictEqual(raw);
+        });
+    });
+
+    describe('PassCrypto::createAccessTokenShareKeys', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should throw when `shareId` is unknown', async () => {
+            const rawPatKey = generateKey();
+            await expect(PassCrypto.createAccessTokenShareKeys({ rawPatKey, shareId: 'unknown' })).rejects.toThrow(
+                PassCryptoShareError
+            );
+        });
+
+        test('should encrypt each vault share key with the PAT key', async () => {
+            await setupHydratedPassCrypto();
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            const share = await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+
+            const rawPatKey = generateKey();
+            const patKey = await importSymmetricKey(rawPatKey);
+            const result = await PassCrypto.createAccessTokenShareKeys({ rawPatKey, shareId: share!.shareId });
+            const vaultKeys = PassCrypto.getShareManager(share!.shareId).getVaultShareKeys();
+
+            expect(result).toHaveLength(vaultKeys.length);
+
+            for (let i = 0; i < result.length; i++) {
+                expect(result[i].KeyRotation).toBe(vaultKeys[i].rotation);
+                const b64Key = Uint8Array.fromBase64(result[i].Key);
+                const decrypted = await decryptData(patKey, b64Key, PassEncryptionTag.ShareKey);
+                expect(decrypted).toStrictEqual(vaultKeys[i].raw);
+            }
+        });
+    });
+
+    describe('PassCrypto::serialize and hydrate folders', () => {
+        afterEach(() => PassCrypto.clear());
+
+        test('should serialize and restore folder keys from snapshot', async () => {
+            await setupHydratedPassCrypto();
+
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+
+            const raw1 = generateKey();
+            const raw2 = generateKey();
+
+            const folderKey1 = {
+                key: await importSymmetricKey(raw1),
+                raw: raw1,
+                rotation: 1,
+                parentFolderId: null,
+            };
+
+            const folderKey2 = {
+                key: await importSymmetricKey(raw2),
+                raw: raw2,
+                rotation: 1,
+                parentFolderId: 'folder1',
+            };
+
+            PassCrypto.registerFolderKey({
+                shareId: encryptedShare.ShareID,
+                folderId: 'folder1',
+                folderKey: folderKey1,
+            });
+
+            PassCrypto.registerFolderKey({
+                shareId: encryptedShare.ShareID,
+                folderId: 'folder2',
+                folderKey: folderKey2,
+            });
+
+            const snapshot = PassCrypto.serialize();
+            expect(snapshot.folderKeys.length).toBe(1);
+            expect(snapshot.folderKeys[0][0]).toBe(encryptedShare.ShareID);
+            expect(snapshot.folderKeys[0][1].length).toBe(2);
+
+            PassCrypto.clear();
+            await PassCrypto.hydrate({ user, addresses: [address], keyPassword: TEST_KEY_PASSWORD, snapshot });
+
+            const restoredKey1 = PassCrypto.getFolderKey({
+                shareId: encryptedShare.ShareID,
+                folderId: 'folder1',
+            });
+
+            const restoredKey2 = PassCrypto.getFolderKey({
+                shareId: encryptedShare.ShareID,
+                folderId: 'folder2',
+            });
+
+            expect(restoredKey1.rotation).toBe(folderKey1.rotation);
+            expect(restoredKey1.parentFolderId).toBe(folderKey1.parentFolderId);
+            expect(restoredKey1.raw).toEqual(folderKey1.raw);
+
+            expect(restoredKey2.rotation).toBe(folderKey2.rotation);
+            expect(restoredKey2.parentFolderId).toBe(folderKey2.parentFolderId);
+            expect(restoredKey2.raw).toEqual(folderKey2.raw);
+        });
+    });
+
+    describe('PassCrypto::removeFolderKeys', () => {
+        afterEach(() => PassCrypto.clear());
+
+        const registerFolders = async (folderIds: string[]) => {
+            const [encryptedShare, shareKey] = await createRandomShareResponses(userKey, userKey, address.ID);
+            await PassCrypto.openShare({ encryptedShare, encryptedShareKeys: [shareKey] });
+
+            for (const folderId of folderIds) {
+                const raw = generateKey();
+                PassCrypto.registerFolderKey({
+                    shareId: encryptedShare.ShareID,
+                    folderId,
+                    folderKey: { key: await importSymmetricKey(raw), raw, rotation: 1, parentFolderId: null },
+                });
+            }
+
+            return encryptedShare.ShareID;
+        };
+
+        test('should remove only the requested folder keys', async () => {
+            await setupHydratedPassCrypto();
+            const shareId = await registerFolders(['folder1', 'folder2']);
+
+            PassCrypto.removeFolderKeys(shareId, ['folder1']);
+
+            expect(() => PassCrypto.getFolderKey({ shareId, folderId: 'folder1' })).toThrow();
+            expect(PassCrypto.getFolderKey({ shareId, folderId: 'folder2' })).toBeDefined();
+        });
+
+        test('should remove every folder key of the share when no folderIds are given', async () => {
+            await setupHydratedPassCrypto();
+            const shareId = await registerFolders(['folder1', 'folder2']);
+
+            PassCrypto.removeFolderKeys(shareId);
+
+            expect(PassCrypto.serialize().folderKeys.length).toBe(0);
+            expect(() => PassCrypto.getFolderKey({ shareId, folderId: 'folder1' })).toThrow();
+            expect(() => PassCrypto.getFolderKey({ shareId, folderId: 'folder2' })).toThrow();
+        });
+
+        test('should drop the share folder keys when the share is removed', async () => {
+            await setupHydratedPassCrypto();
+            const shareId = await registerFolders(['folder1']);
+
+            PassCrypto.removeShare(shareId);
+
+            expect(() => PassCrypto.getFolderKey({ shareId, folderId: 'folder1' })).toThrow();
+        });
+    });
+});

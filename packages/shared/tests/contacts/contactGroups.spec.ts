@@ -1,0 +1,68 @@
+import { getContactGroupsDelayedSaveChanges } from '../../lib/contacts/helpers/contactGroup';
+import type { MailSettings } from '../../lib/interfaces/MailSettings';
+import type { ContactEmail } from '../../lib/interfaces/contacts/Contact';
+import { MAX_RECIPIENTS } from '../../lib/mail/mailSettings';
+
+const group1 = 'group1';
+
+const getUserContactEmails = (numberOfContacts: number) => {
+    const contactEmails: ContactEmail[] = [];
+
+    for (let i = 0; i < numberOfContacts; i++) {
+        const contact = { ID: `contact${i}`, Email: `email${i}@pm.me`, LabelIDs: [group1] } as ContactEmail;
+        contactEmails.push(contact);
+    }
+
+    return contactEmails;
+};
+
+const initialModel = {
+    group1: 0,
+};
+
+const model = {
+    group1: 1,
+};
+
+const changes = {
+    group1: true,
+};
+
+const onLimitReached = vi.fn();
+
+describe('contactGroups', () => {
+    describe('getContactGroupsDelayedSaveChanges', () => {
+        it('should be possible to add the contact to the contact group', () => {
+            const userContactEmails = getUserContactEmails(99);
+
+            const updatedChanges = getContactGroupsDelayedSaveChanges({
+                userContactEmails,
+                changes,
+                initialModel,
+                model,
+                onLimitReached,
+                mailSettings: { RecipientLimit: MAX_RECIPIENTS } as MailSettings,
+            });
+
+            expect(updatedChanges).toEqual(changes);
+        });
+    });
+
+    describe('getContactGroupsDelayedSaveChanges', () => {
+        it('should not be possible to add the contact to the contact group', () => {
+            const userContactEmails = getUserContactEmails(100);
+
+            const updatedChanges = getContactGroupsDelayedSaveChanges({
+                userContactEmails,
+                changes,
+                initialModel,
+                model,
+                onLimitReached,
+                mailSettings: {} as MailSettings,
+            });
+
+            expect(updatedChanges).toEqual({});
+            expect(onLimitReached).toHaveBeenCalled();
+        });
+    });
+});

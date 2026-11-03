@@ -1,0 +1,151 @@
+import type { ElementType, ForwardedRef, ReactNode } from 'react';
+import { forwardRef } from 'react';
+
+import type { ButtonLikeProps } from '@proton/atoms/Button/ButtonLike';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { CircleLoader } from '@proton/atoms/CircleLoader/CircleLoader';
+import type { IconComponent } from '@proton/icons/component';
+import type { IconSize } from '@proton/icons/types';
+import type { PolymorphicForwardRefExoticComponent, PolymorphicPropsWithRef } from '@proton/react-polymorphic-types';
+import clsx from '@proton/utils/clsx';
+
+import type { Breakpoints } from '../../../hooks/useActiveBreakpoint';
+import useActiveBreakpoint from '../../../hooks/useActiveBreakpoint';
+import useUid from '../../../hooks/useUid';
+
+import './PromotionButton.scss';
+
+type ButtonButtonLikeProps = ButtonLikeProps<'button'>;
+
+interface OwnProps extends Omit<ButtonLikeProps<'button'>, 'as' | 'ref'> {
+    /**
+     * The gradient fill has to land as an inline style on the `svg` itself — a
+     * wrapper cannot win against the `fill: currentcolor` the size class sets — so
+     * the button takes the icon component rather than an element.
+     */
+    iconComponent?: IconComponent;
+    iconContent?: ReactNode;
+    icon?: boolean;
+    iconSize?: IconSize;
+    iconGradient?: boolean;
+    upsell?: boolean;
+    shape?: ButtonButtonLikeProps['shape'];
+    size?: ButtonButtonLikeProps['size'];
+    className?: string;
+    loading?: boolean;
+    responsive?: boolean;
+    buttonGradient?: boolean;
+    fullGradient?: boolean;
+    purpleBlueGradient?: boolean;
+    breakpoint?: keyof Breakpoints['viewportWidth'];
+}
+
+export type PromotionButtonProps<E extends ElementType> = PolymorphicPropsWithRef<OwnProps, E>;
+
+const defaultElement = ButtonLike;
+
+const PromotionButtonBase = <E extends ElementType = typeof defaultElement>(
+    {
+        children,
+        iconComponent: IconComponent,
+        iconContent,
+        icon,
+        iconGradient = true,
+        iconSize,
+        shape = 'outline',
+        size = 'medium',
+        upsell,
+        as,
+        className,
+        loading,
+        responsive = false,
+        buttonGradient = true,
+        fullGradient = false,
+        purpleBlueGradient = false,
+        breakpoint = '>=large',
+        ...rest
+    }: PromotionButtonProps<E>,
+    ref: ForwardedRef<Element>
+) => {
+    const { viewportWidth } = useActiveBreakpoint();
+
+    if (iconSize === undefined) {
+        switch (true) {
+            case (icon && upsell) || size === 'small':
+                iconSize = 4;
+                break;
+            default:
+                iconSize = 5;
+                break;
+        }
+    }
+
+    if (responsive && !viewportWidth[breakpoint]) {
+        shape = 'ghost';
+        icon = true;
+        iconSize = 5;
+    }
+
+    const Element: ElementType = as || defaultElement;
+
+    const uid = useUid('linear-gradient');
+
+    return (
+        <ButtonLike
+            as={Element}
+            ref={ref}
+            type="button"
+            icon={icon}
+            color="weak"
+            shape={shape}
+            size={size}
+            className={clsx(
+                'max-w-full flex items-center',
+                buttonGradient && 'button-promotion',
+                iconGradient && 'button-promotion--icon-gradient',
+                fullGradient && 'button-promotion--full-gradient',
+                purpleBlueGradient && 'button-promotion--purple-blue-gradient',
+                upsell && 'button-promotion--upgrade',
+                size === 'small' && 'text-sm',
+                className
+            )}
+            {...rest}
+        >
+            <span
+                className={clsx(
+                    'relative flex flex-nowrap items-center',
+                    size === 'small' ? 'gap-1' : 'gap-2',
+                    responsive && viewportWidth['>=large'] ? 'w-full' : undefined
+                )}
+            >
+                {IconComponent && (
+                    <IconComponent
+                        className="shrink-0"
+                        size={iconSize}
+                        style={
+                            buttonGradient && !fullGradient && !purpleBlueGradient
+                                ? { fill: `url(#${uid}) var(--text-norm)` }
+                                : { color: 'inherit' }
+                        }
+                    />
+                )}
+                {iconContent && <span className="shrink-0 flex">{iconContent}</span>}
+                <span className={clsx(icon ? 'sr-only' : 'block text-ellipsis')}>{children}</span>
+                {loading && <CircleLoader />}
+            </span>
+            {IconComponent && iconGradient ? (
+                <svg aria-hidden="true" focusable="false" className="sr-only">
+                    <linearGradient id={uid}>
+                        <stop offset="0%" stopColor="var(--color-stop-1)" />
+                        <stop offset="100%" stopColor="var(--color-stop-2)" />
+                    </linearGradient>
+                </svg>
+            ) : undefined}
+        </ButtonLike>
+    );
+};
+
+const PromotionButton: PolymorphicForwardRefExoticComponent<OwnProps, typeof defaultElement> =
+    forwardRef(PromotionButtonBase);
+
+export default PromotionButton;

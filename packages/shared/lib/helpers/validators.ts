@@ -1,0 +1,18 @@
+const REGEX_URL =
+    /((([A-Za-z]{3,9}:(?:\/\/)?)(?:[\-;:&=\+\$,\w]+@)?[A-Za-z0-9\.\-]+|(?:www\.|[\-;:&=\+\$,\w]+@)[A-Za-z0-9\.\-]+)((?:\/[\+~%\/\.\w\-_]*)?\??(?:[\-\+=&;%@\.\w_]*)#?(?:[\.\!\/\\\w]*))?)/;
+const REGEX_NUMBER = /^\d+$/;
+export const REGEX_USERNAME = /^[A-Za-z0-9]+(?:[_.-][A-Za-z0-9]+)*$/;
+export const REGEX_USERNAME_START = /^[A-Za-z0-9]/;
+export const REGEX_USERNAME_END = /[A-Za-z0-9]$/;
+
+export const isURL = (value = '') => {
+    if (/\s/.test(value)) {
+        // A URL should contain no spaces
+        // (doing this check separately as URL_REGEX is not checking it)
+        return false;
+    }
+    return REGEX_URL.test(value);
+};
+export const isNumber = (value = '') => REGEX_NUMBER.test(value);
+export const isBase64Image = (value: unknown = '') =>
+    typeof value === 'string' && value.startsWith('data:image') && value.includes(';base64');

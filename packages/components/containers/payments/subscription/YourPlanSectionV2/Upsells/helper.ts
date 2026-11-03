@@ -1,0 +1,134 @@
+import { useMemo } from 'react';
+
+import { usePreferredPlansMap } from '@proton/payments-ui/ui/hooks/usePreferredPlansMap';
+import type { PLANS } from '@proton/payments/core/constants';
+import type { FreeSubscription, PlanIDs } from '@proton/payments/core/interface';
+import { getPrice } from '@proton/payments/core/price-helpers';
+import { getMaximumCycleForApp, getPlan, getPlanIDs } from '@proton/payments/core/subscription/helpers';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { isFreeSubscription } from '@proton/payments/core/type-guards';
+import type { APP_NAMES, DASHBOARD_UPSELL_PATHS } from '@proton/shared/lib/constants';
+
+import {
+    type GetPlanUpsellArgs,
+    type MaybeUpsell,
+    defaultUpsellCycleB2C,
+    getUpsell,
+} from '../../helpers/dashboard-upsells';
+import { getAllowedCycles } from '../../helpers/getAllowedCycles';
+
+export const useSubscriptionPriceComparison = (
+    app: APP_NAMES,
+    subscription: Subscription | FreeSubscription | undefined,
+    compareWithPlan?: PLANS
+) => {
+    // We forbid currencyFallback because we want to compare against the same currency
+    const { plansMap, plansMapLoading } = usePreferredPlansMap(false);
+
+    const returnFalse = {
+        priceDifference: 0,
+        priceDifferenceCheapestCycle: 0,
+        cheapestMonthlyPrice: 0,
+        priceFallbackPerMonth: 0,
+        totalSavings: 0,
+        showPriceDifference: false,
+        showPriceDifferenceCheapest: false,
+        showSavings: false,
+    };
+
+    return useMemo(() => {
+        const currentPlan = getPlan(subscription);
+
+        if (!subscription || isFreeSubscription(subscription) || plansMapLoading || !currentPlan) {
+            return returnFalse;
+        }
+
+        if (compareWithPlan && !plansMap[compareWithPlan]) {
+            return returnFalse;
+        }
+
+        const planIDs: PlanIDs = compareWithPlan ? { [compareWithPlan]: 1 } : getPlanIDs(subscription);
+
+        const allowedCycles = getAllowedCycles({
+            plansMap,
+            subscription,
+            currency: subscription.Currency,
+            planIDs,
+            maximumCycle: getMaximumCycleForApp(app),
+        });
+
+        const pricingOptions: Record<number, number> = Object.fromEntries(
+            allowedCycles.map((cycle) => [cycle, getPrice(planIDs, cycle, plansMap)]).filter(([, price]) => price > 0)
+        );
+
+        const cycleLength = subscription.Cycle;
+        const amount = subscription.IsTrial ? currentPlan.Amount : subscription.Amount;
+
+        // Compare against the same cycle price
+        const price = pricingOptions[cycleLength];
+        const normalizedPricePrice = price ? price / cycleLength : undefined;
+        const normalizedSubscriptionPrice = amount / cycleLength;
+        const priceDifference =
+            normalizedPricePrice !== undefined ? Math.max(0, normalizedPricePrice - normalizedSubscriptionPrice) : 0;
+        const showPriceDifference = priceDifference > 0;
+
+        // Compare against the cheapest cycle price
+        let cheapestCycleLength = cycleLength; // Default to current cycle length
+        const cheapestMonthlyPriceObject = Object.entries(pricingOptions)
+            .map(([cycle, price]) => ({
+                cycle: Number(cycle),
+                monthlyPrice: price / Number(cycle),
+            }))
+            .reduce((best, current) => (current.monthlyPrice < best.monthlyPrice ? current : best), {
+                cycle: cycleLength,
+                monthlyPrice: Infinity,
+            });
+
+        const priceDifferenceCheapestCycle = Math.max(
+            0,
+            normalizedSubscriptionPrice - cheapestMonthlyPriceObject.monthlyPrice
+        );
+        const showPriceDifferenceCheapest = priceDifferenceCheapestCycle > 0;
+        cheapestCycleLength = cheapestMonthlyPriceObject.cycle; // Update to actual cheapest cycle
+
+        // Calculate total savings over full cycle
+        const totalSavings = priceDifferenceCheapestCycle * cheapestCycleLength;
+        const showSavings = totalSavings > 0;
+
+        return {
+            priceDifference,
+            priceDifferenceCheapestCycle,
+            priceFallbackPerMonth: cheapestMonthlyPriceObject.monthlyPrice,
+            cheapestMonthlyPrice: cheapestMonthlyPriceObject.monthlyPrice,
+            totalSavings,
+            showPriceDifference,
+            showPriceDifferenceCheapest,
+            showSavings,
+        };
+    }, [subscription, plansMapLoading]);
+};
+
+type GetPlanUpsellV2Args = GetPlanUpsellArgs & {
+    plan: PLANS;
+    upsellPath: DASHBOARD_UPSELL_PATHS;
+};
+
+export const getDashboardUpsellV2 = ({ plan, openSubscriptionModal, ...rest }: GetPlanUpsellV2Args): MaybeUpsell => {
+    return getUpsell({
+        plan,
+        features: [],
+        title: rest.title,
+        customCycle: rest.customCycle || defaultUpsellCycleB2C,
+        description: '',
+        onUpgrade: () =>
+            openSubscriptionModal({
+                cycle: rest.customCycle || defaultUpsellCycleB2C,
+                plan,
+                step: SUBSCRIPTION_STEPS.CHECKOUT,
+                disablePlanSelection: true,
+                telemetryFlow: rest.telemetryFlow,
+            }),
+        ...rest,
+    });
+};

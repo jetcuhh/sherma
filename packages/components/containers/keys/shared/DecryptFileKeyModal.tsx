@@ -1,0 +1,111 @@
+import { type FormEvent, useState } from 'react';
+
+import type { PrivateKeyReference } from '@protontech/crypto';
+import { CryptoProxy, KeyCompatibilityLevel } from '@protontech/crypto';
+import { c } from 'ttag';
+
+import { useUserSettings } from '@proton/account/userSettings/hooks';
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import { requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import type { ArmoredKeyWithInfo } from '@proton/shared/lib/keys/keyImport';
+import generateUID from '@proton/utils/generateUID';
+import noop from '@proton/utils/noop';
+
+import type { ModalProps } from '../../../components/modalTwo/Modal';
+import Modal from '../../../components/modalTwo/Modal';
+import ModalContent from '../../../components/modalTwo/ModalContent';
+import ModalFooter from '../../../components/modalTwo/ModalFooter';
+import ModalHeader from '../../../components/modalTwo/ModalHeader';
+import { InputField as InputFieldTwo } from '../../../components/v2/field/InputField';
+import PasswordInputTwo from '../../../components/v2/input/PasswordInput';
+import useFormErrors from '../../../components/v2/useFormErrors';
+
+interface Props extends ModalProps {
+    privateKeyInfo: ArmoredKeyWithInfo;
+    onSuccess: (privateKey: PrivateKeyReference) => void;
+}
+
+const DecryptFileKeyModal = ({ privateKeyInfo, onSuccess, onClose, ...rest }: Props) => {
+    const id = generateUID('decryptKey');
+    const { fingerprint, armoredKey } = privateKeyInfo;
+    const fingerprintCode = <code key="0">{fingerprint}</code>;
+
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+
+    const [loading, withLoading] = useLoading();
+    const { validator, onFormSubmit } = useFormErrors();
+    const [
+        {
+            Flags: { SupportPgpV6Keys },
+        },
+    ] = useUserSettings();
+
+    const handleSubmit = async () => {
+        try {
+            const decryptedPrivateKey = await CryptoProxy.importPrivateKey({
+                armoredKey,
+                passphrase: password,
+                // the BE will enforce this as well, but the returned error messages might be less user friendly
+                checkCompatibility: SupportPgpV6Keys
+                    ? KeyCompatibilityLevel.V6_COMPATIBLE
+                    : KeyCompatibilityLevel.BACKWARDS_COMPATIBLE,
+            });
+            onSuccess(decryptedPrivateKey);
+            onClose?.();
+        } catch (e: any) {
+            setError(e.message);
+        }
+    };
+
+    const handleClose = loading ? noop : onClose;
+
+    return (
+        <Modal
+            as="form"
+            onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.stopPropagation();
+                event.preventDefault();
+                if (!onFormSubmit()) {
+                    return;
+                }
+                void withLoading(handleSubmit());
+            }}
+            onClose={handleClose}
+            {...rest}
+        >
+            <ModalHeader title={c('Title').t`Decrypt key`} />
+            <ModalContent>
+                <div className="mb-4 text-break">
+                    {c('Label').jt`Enter the password for key with fingerprint: ${fingerprintCode}`}
+                </div>
+
+                <InputFieldTwo
+                    id={id}
+                    as={PasswordInputTwo}
+                    label={c('Label').t`Enter password`}
+                    placeholder={c('Placeholder').t`Password`}
+                    value={password}
+                    onValue={(value: string) => {
+                        setError('');
+                        setPassword(value);
+                    }}
+                    error={validator([requiredValidator(password), error])}
+                    autoFocus
+                />
+            </ModalContent>
+            <ModalFooter>
+                <Button onClick={handleClose} disabled={loading}>
+                    {c('Action').t`Close`}
+                </Button>
+
+                <Button loading={loading} type="submit" color="norm">
+                    {c('Action').t`Decrypt`}
+                </Button>
+            </ModalFooter>
+        </Modal>
+    );
+};
+
+export default DecryptFileKeyModal;

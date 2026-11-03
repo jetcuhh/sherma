@@ -1,0 +1,66 @@
+{
+    "name": "root",
+    "private": true,
+    "license": "GPL-3.0",
+    "scripts": {
+        "app-versions": "bash utilities/app-versions/app-versions.sh",
+        "check:branch": "node utilities/repo-rules/src/branch-check/run.ts",
+        "check:constraints": "node utilities/repo-rules/src/workspace-constraints/run.ts",
+        "config-app": "(packages/config/install 2>/dev/null) || true",
+        "create-atom": "pnpm --filter @proton/atoms run create-atom",
+        "drive:test-index:staged": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/drive/tools/tests-mapping/test-index.ts --staged",
+        "postinstall": "is-ci || (husky; pnpm run config-app)",
+        "knip": "knip",
+        "knip:staged": "node utilities/repo-rules/src/knip-staged/run.ts",
+        "nyc": "npx nyc",
+        "start-all": "cd utilities/local-sso && bash ./run.sh",
+        "version": "pnpm --filter @proton/version run version"
+    },
+    "dependencies": {
+        "@proton/eslint-config-proton": "workspace:^",
+        "@proton/prettier-config-proton": "workspace:^",
+        "@proton/stylelint-config-proton": "workspace:^",
+        "is-ci": "^4.1.0",
+        "stylelint-config-standard-scss": "^10.0.0",
+        "stylelint-use-logical-spec": "^5.0.1",
+        "typescript": "^6.0.3"
+    },
+    "devDependencies": {
+        "@prettier/plugin-xml": "^3.4.2",
+        "@proton/account": "workspace:^",
+        "@proton/activation": "workspace:^",
+        "@proton/calendar": "workspace:^",
+        "@proton/components": "workspace:^",
+        "@proton/nav": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@proton/payments": "workspace:^",
+        "@proton/payments-ui": "workspace:^",
+        "@proton/redux-shared-store": "workspace:^",
+        "@proton/shared": "workspace:^",
+        "@proton/types": "workspace:^",
+        "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+        "@types/global-types-monorepo": "workspace:^",
+        "@types/node": "catalog:",
+        "@typescript/native": "catalog:",
+        "eslint": "catalog:",
+        "husky": "^9.1.7",
+        "knip": "^6.41.0",
+        "lint-staged": "^17.6.0",
+        "nyc": "^17.1.0",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "prettier": "catalog:",
+        "prettier-plugin-tailwindcss": "catalog:",
+        "sort-package-json": "^4.0.0",
+        "stylelint": "catalog:",
+        "turbo": "2.11.8"
+    },
+    "packageManager": "pnpm@12.13.0",
+    "engines": {
+        "node": "^24.22.1",
+        "pnpm": "^12.8.1"
+    },
+    "publishConfig": {
+        "registry": "https://nexus.protontech.ch/repository/web-npm/"
+    }
+}

@@ -1,0 +1,304 @@
+import type { SignedKeyList } from '@proton/shared/lib/interfaces/SignedKeyList';
+
+import type {
+    CreateImportPayload,
+    EASY_SWITCH_FEATURES,
+    EASY_SWITCH_SOURCES,
+    LaunchImportPayload,
+    OAUTH_PROVIDER,
+    OAuthProps,
+} from '../interface';
+import { ImportType } from '../interface';
+import type {
+    ApiCreateImporterOrganization,
+    ApiCreateImporterOrganizationMigration,
+    ApiCreateJoiningLink,
+    ApiImportProvider,
+    ApiImporterOrganizationState,
+} from './api.interface';
+
+export const getTokens = () => ({
+    url: 'oauth-token/v1/tokens',
+    method: 'GET',
+});
+
+export const getTokensByFeature = (params: {
+    Account: string;
+    Features: EASY_SWITCH_FEATURES[];
+    Provider: OAUTH_PROVIDER;
+}) => ({
+    url: 'oauth-token/v1/tokens/features',
+    method: 'GET',
+    params,
+});
+
+export const createToken = (
+    data: OAuthProps & {
+        Features: EASY_SWITCH_FEATURES[];
+        Source: EASY_SWITCH_SOURCES;
+        Account?: string;
+    }
+) => ({
+    url: 'oauth-token/v1/tokens',
+    method: 'POST',
+    data,
+});
+
+export const deleteToken = (tokenId: string) => ({
+    url: `oauth-token/v1/tokens/${tokenId}`,
+    method: 'DELETE',
+});
+
+export const createSync = (importerID: string, source: EASY_SWITCH_SOURCES) => ({
+    url: 'importer/v1/sync',
+    method: 'POST',
+    data: { ImporterID: importerID, Product: 'Mail', Source: source },
+});
+
+export const getSyncList = () => ({
+    url: 'importer/v1/sync',
+    method: 'GET',
+});
+
+export const resumeSync = (syncId: string) => ({
+    url: `importer/v1/sync/${syncId}/resume`,
+    method: 'PUT',
+});
+
+export const deleteSync = (syncId: String) => ({
+    url: `importer/v1/sync/${syncId}`,
+    method: 'DELETE',
+});
+
+export const disconnectBYOEAddress = (addressID: string, SignedKeyList: SignedKeyList) => ({
+    url: `mail/v4/byoe-addresses/${addressID}/disconnection`,
+    method: 'PUT',
+    data: {
+        SignedKeyList,
+    },
+});
+
+export const reconnectBYOEAddress = (addressID: string, SignedKeyList: SignedKeyList) => ({
+    url: `mail/v4/byoe-addresses/${addressID}/reconnection`,
+    method: 'PUT',
+    data: {
+        SignedKeyList,
+    },
+});
+
+export const createImport = (data: CreateImportPayload) => ({
+    url: 'importer/v1/importers',
+    method: 'POST',
+    data,
+});
+
+export const getImport = (importerID: string) => ({
+    url: `importer/v1/importers/${importerID}`,
+    method: 'GET',
+});
+
+export const updateImport = (importerID: string, data: CreateImportPayload) => ({
+    url: `importer/v1/importers/${importerID}`,
+    method: 'PUT',
+    data,
+});
+
+export const startImportTask = (data: LaunchImportPayload) => ({
+    url: 'importer/v1/importers/start',
+    method: 'POST',
+    data,
+});
+
+export const startEasySwitchSignupImportTask = ({
+    Source,
+    Account,
+    Provider,
+    AutomaticImport,
+    QuotaThresholdRatio,
+    StartTime,
+    ClaimAddress,
+}: {
+    Source: string;
+    Account: string;
+    Provider: OAUTH_PROVIDER;
+    AutomaticImport: boolean;
+    QuotaThresholdRatio?: number;
+    StartTime?: number;
+    ClaimAddress?: boolean;
+}) => ({
+    url: 'importer/v1/mail/importers/start/all',
+    method: 'POST',
+    data: {
+        Source,
+        Account,
+        Provider,
+        AutomaticImport: AutomaticImport ? 1 : 0,
+        QuotaThresholdRatio: QuotaThresholdRatio ?? null,
+        StartTime,
+        ClaimAddress: ClaimAddress ? 1 : 0,
+    },
+});
+
+export const checkExternalAddressClaimable = (Email: string) => ({
+    method: 'POST' as const,
+    url: 'mail/v4/byoe-address/claimable',
+    data: { Email },
+});
+
+export const getImportsList = () => ({
+    url: 'importer/v1/importers',
+    method: 'GET',
+});
+
+export const getImportReportsList = () => ({
+    url: 'importer/v1/reports',
+    method: 'GET',
+});
+
+export const getMailImportData = (
+    importerID: string,
+    params?: {
+        Code: string;
+    }
+) => ({
+    url: `importer/v1/mail/importers/${importerID}`,
+    method: 'GET',
+    params,
+});
+
+export const getAuthenticationMethod = (params: { Email: string }) => ({
+    url: 'importer/v1/mail/importers/authinfo',
+    method: 'GET',
+    params,
+});
+
+export const getCalendarImportData = (importerID: string) => ({
+    url: `importer/v1/calendar/importers/${importerID}`,
+    method: 'GET',
+});
+
+export const getContactsImportData = (importerID: string) => ({
+    url: `importer/v1/contacts/importers/${importerID}`,
+    method: 'GET',
+});
+
+export const getDriveImportData = (importerID: string) => ({
+    url: `importer/v1/drive/importers/${importerID}`,
+    method: 'GET',
+});
+
+export const deleteImportReport = (reportID: string, importType: ImportType) => {
+    const method = 'delete';
+
+    switch (importType) {
+        case ImportType.MAIL:
+            return { url: `importer/v1/mail/importers/reports/${reportID}`, method };
+        case ImportType.CALENDAR:
+            return { url: `importer/v1/calendar/importers/reports/${reportID}`, method };
+        case ImportType.CONTACTS:
+            return { url: `importer/v1/contacts/importers/reports/${reportID}`, method };
+        case ImportType.DRIVE:
+            // TODO(DRVBE-1686): Implement delete drive report route.
+            return { url: `importer/v1/drive/importers/reports/${reportID}`, method };
+    }
+};
+
+export const cancelImport = (data: { ImporterID: string; Features: EASY_SWITCH_FEATURES[] }) => ({
+    url: 'importer/v1/importers/cancel',
+    method: 'PUT',
+    data,
+});
+
+export const resumeImport = (data: { ImporterID: string; Features: EASY_SWITCH_FEATURES[] }) => ({
+    url: 'importer/v1/importers/resume',
+    method: 'PUT',
+    data,
+});
+
+export const rollbackImport = (reportID: string, Features: EASY_SWITCH_FEATURES[]) => ({
+    url: `importer/v1/reports/${reportID}/undo`,
+    method: 'POST',
+    data: { Features },
+});
+
+export const createSignupOAuthToken = (
+    data: OAuthProps & {
+        Features: EASY_SWITCH_FEATURES[];
+        Source: EASY_SWITCH_SOURCES;
+    }
+) => ({
+    url: 'oauth-token/v1/tokens/external',
+    method: 'POST',
+    data,
+});
+
+export const createBYOEAddress = (Email: string) => ({
+    url: 'mail/v4/byoe-address',
+    method: 'POST',
+    data: { Email },
+});
+
+export const convertToBYOEAddress = (addressID: string) => ({
+    url: `mail/v4/byoe-address/${addressID}/convert`,
+    method: 'POST',
+});
+
+export const getOrganizationUsers = (
+    params: { DomainName: string; Provider: ApiImportProvider },
+    useCachedData: boolean = false
+) => ({
+    url: `importer/v1/organizations/users`,
+    method: 'GET',
+    params: {
+        ...params,
+        ...(useCachedData ? { UseCachedData: true } : {}),
+    },
+});
+
+export const getOrganizationDomains = (provider: ApiImportProvider) => ({
+    url: `importer/v1/organizations/domains`,
+    method: 'GET',
+    params: { Provider: provider },
+});
+
+export const getOrganizationImporter = () => ({
+    url: `importer/v1/organizations`,
+    method: 'GET',
+});
+
+export const createOrganizationImporter = (data: ApiCreateImporterOrganization) => ({
+    url: 'importer/v1/organizations',
+    method: 'POST',
+    data,
+});
+
+export const createOrganizationImporterMigration = (data: ApiCreateImporterOrganizationMigration) => ({
+    url: 'importer/v1/organizations/migrations',
+    method: 'POST',
+    data,
+});
+
+export const getConnectionStatus = (provider: ApiImportProvider) => ({
+    url: `importer/v1/organizations/connection/status/${provider}`,
+    method: 'GET',
+});
+
+export const getJoiningLink = (importerOrganizationId: string) => ({
+    url: `importer/v1/organizations/${importerOrganizationId}/joining-link`,
+    method: 'GET',
+});
+
+export const createJoiningLink = (importerOrganizationId: string, data: ApiCreateJoiningLink) => ({
+    url: `importer/v1/organizations/${importerOrganizationId}/joining-link`,
+    method: 'POST',
+    data,
+});
+
+export const patchOrganizationImporter = (
+    importerOrganizationId: string,
+    data: { State: ApiImporterOrganizationState }
+) => ({
+    url: `importer/v1/organizations/${importerOrganizationId}`,
+    method: 'PATCH',
+    data,
+});

@@ -1,0 +1,299 @@
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { DecryptedAddressKey, DecryptedKey } from '@proton/shared/lib/interfaces/Key';
+import type { OrganizationKey } from '@proton/shared/lib/interfaces/OrganizationKey';
+import type { User } from '@proton/shared/lib/interfaces/User';
+
+import type { DecryptedActionPayload } from '../../lib/crypto/processes/access-token/open-action-payload';
+import type { FileDescriptorProcessResult } from '../../lib/crypto/processes/file/create-file-descriptor';
+import type { CreateSecureLinkData } from '../../lib/crypto/processes/secure-link/create-secure-link';
+import type { Group, GroupWithPublicKeys } from '../../lib/groups/groups.types';
+import type {
+    EncodedItemKeyRotation,
+    FolderCreateInputDto,
+    FolderDataResponse,
+    FolderMoveInputDto,
+    FolderUpdateContentInputDto,
+    InviteAcceptRequest,
+    InviteCreateRequest,
+    ItemCreateRequest,
+    ItemFileOutput,
+    ItemMoveIndividualToShareRequest,
+    ItemRevisionContentsResponse,
+    ItemUpdateRequest,
+    KeyRotationKeyPair,
+    NewUserInviteCreateRequest,
+    NewUserInvitePromoteRequest,
+    PublicLinkGetContentResponse,
+    ShareGetResponse,
+    ShareKeyResponse,
+    VaultCreateRequest,
+    VaultUpdateRequest,
+} from '../api/pass';
+import type { FileID, FileIdentifier } from '../data/files';
+import type { ShareRole, ShareType } from '../data/shares';
+import type { NativeMessageData } from '../desktop';
+import type { MaybeNull } from '../utils';
+import type {
+    FolderId,
+    FolderKey,
+    FolderKeysByShareId,
+    InviteTargetKey,
+    ItemId,
+    ItemKey,
+    ItemShareKey,
+    OpenedItem,
+    Rotation,
+    ShareId,
+    TypedOpenedShare,
+    VaultShareKey,
+} from './pass-types';
+
+export type PassCryptoManagerContext = {
+    user?: User;
+    userKeys?: DecryptedKey[];
+    addresses?: Address[];
+    primaryUserKey?: DecryptedKey;
+    primaryAddress?: Address;
+    shareManagers: Map<ShareId, ShareManager>;
+    fileKeys: Map<string, Uint8Array<ArrayBuffer>>;
+    groups: Map<string, GroupWithPublicKeys>;
+    folderKeys: FolderKeysByShareId;
+};
+
+export type PassCryptoSnapshot = Pick<PassCryptoManagerContext, 'shareManagers' | 'folderKeys'>;
+
+export interface PassCryptoWorker extends SerializableCryptoContext<PassCryptoSnapshot> {
+    ready: boolean;
+    getDecryptedAddressKeys: (addressId: string) => Promise<DecryptedAddressKey[]>;
+    getContext: () => PassCryptoManagerContext;
+    hydrate: (options: {
+        addresses: Address[];
+        keyPassword: string;
+        snapshot?: SerializedCryptoContext<PassCryptoSnapshot>;
+        user: User;
+        groups?: Group[];
+        clear?: boolean;
+    }) => Promise<void>;
+    clear: () => void;
+    setGroup: (group: Group) => void;
+    getShareManager: (shareId: ShareId) => ShareManager;
+    encryptForNativeMessaging: <T extends NativeMessageData>(
+        payload: T,
+        sender: 'extension' | 'desktop'
+    ) => Promise<string>;
+    decryptFromNativeMessaging: <T extends NativeMessageData>(
+        payload: string,
+        sender: 'extension' | 'desktop'
+    ) => Promise<T>;
+    createVault: (content: Uint8Array<ArrayBuffer>) => Promise<VaultCreateRequest>;
+    updateVault: (data: { shareId: ShareId; content: Uint8Array<ArrayBuffer> }) => Promise<VaultUpdateRequest>;
+    canOpenShare: (shareId: ShareId) => boolean;
+    openShare: <T extends ShareType = ShareType>(data: {
+        encryptedShare: ShareGetResponse;
+        encryptedShareKeys?: ShareKeyResponse[];
+    }) => Promise<MaybeNull<TypedOpenedShare<T>>>;
+    updateShareKeys: (data: { shareId: ShareId; encryptedShareKeys: ShareKeyResponse[] }) => Promise<void>;
+    removeShare: (shareId: ShareId) => void;
+    openItem: (data: { shareId: ShareId; encryptedItem: ItemRevisionContentsResponse }) => Promise<OpenedItem>;
+    createItem: (data: {
+        shareId: ShareId;
+        content: Uint8Array<ArrayBuffer>;
+        folderId?: MaybeNull<string>;
+    }) => Promise<ItemCreateRequest>;
+    updateItem: (data: {
+        content: Uint8Array<ArrayBuffer>;
+        lastRevision: number;
+        itemKey: ItemKey;
+    }) => Promise<ItemUpdateRequest>;
+    createFolder: (data: {
+        shareId: ShareId;
+        content: Uint8Array<ArrayBuffer>;
+        parentFolderId: MaybeNull<string>;
+    }) => Promise<FolderCreateInputDto>;
+    openFolder: (data: { shareId: string; encryptedFolder: FolderDataResponse }) => Promise<Uint8Array<ArrayBuffer>>;
+    updateFolder: (data: {
+        shareId: ShareId;
+        folderId: string;
+        content: Uint8Array<ArrayBuffer>;
+    }) => Promise<FolderUpdateContentInputDto>;
+    moveFolder: (data: {
+        shareId: ShareId;
+        folderId: string;
+        targetParentFolderId: MaybeNull<string>;
+    }) => Promise<FolderMoveInputDto>;
+    moveItem: (data: {
+        encryptedItemKeys: EncodedItemKeyRotation[];
+        itemId: ItemId;
+        shareId: ShareId;
+        targetShareId: string;
+        folderId?: MaybeNull<string>;
+        /** Destination folder in the target share, null/undefined if move to the share root */
+        targetFolderId?: MaybeNull<string>;
+    }) => Promise<ItemMoveIndividualToShareRequest>;
+    createInvite: (data: {
+        email: string;
+        invitedPublicKey: string;
+        role: ShareRole;
+        shareId: ShareId;
+        targetKeys: InviteTargetKey[];
+        itemId?: ItemId;
+        hideSensitiveContent?: boolean;
+    }) => Promise<InviteCreateRequest>;
+    promoteInvite: (data: { shareId: ShareId; invitedPublicKey: string }) => Promise<NewUserInvitePromoteRequest>;
+    createNewUserInvite: (data: {
+        email: string;
+        role: ShareRole;
+        shareId: ShareId;
+        itemId?: ItemId;
+        hideSensitiveContent?: boolean;
+    }) => Promise<NewUserInviteCreateRequest>;
+    acceptVaultInvite: (data: {
+        invitedAddressId: string;
+        inviteKeys: KeyRotationKeyPair[];
+        inviterPublicKeys: string[];
+    }) => Promise<InviteAcceptRequest>;
+    acceptGroupVaultInvite: (data: {
+        organizationKey: MaybeNull<OrganizationKey>;
+        groupId: string;
+        inviteKeys: KeyRotationKeyPair[];
+        inviterPublicKeys: string[];
+    }) => Promise<InviteAcceptRequest>;
+    readVaultInvite: (data: {
+        encryptedVaultContent: string;
+        invitedAddressId: string;
+        inviteKey: KeyRotationKeyPair;
+        inviterPublicKeys: string[];
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    readGroupVaultInvite: (data: {
+        encryptedVaultContent: string;
+        organizationKey: MaybeNull<OrganizationKey>;
+        groupId: string;
+        inviteKey: KeyRotationKeyPair;
+        inviterPublicKeys: string[];
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    createFileDescriptor: (
+        data: FileIdentifier & { encryptionVersion: number; metadata: Uint8Array<ArrayBuffer> }
+    ) => Promise<FileDescriptorProcessResult>;
+    openFileDescriptor: (data: {
+        file: ItemFileOutput;
+        itemKey: ItemKey;
+        shareId: ShareId;
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    createFileChunk: (data: {
+        chunk: Blob;
+        chunkIndex: number;
+        encryptionVersion: number;
+        fileID: FileID;
+        shareId: ShareId;
+        totalChunks: number;
+    }) => Promise<Blob>;
+    openFileChunk: (data: {
+        chunk: Uint8Array<ArrayBuffer>;
+        chunkIndex: number;
+        encryptionVersion: number;
+        fileID: FileID;
+        shareId: ShareId;
+        totalChunks: number;
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    registerFileKey: (data: FileIdentifier & { fileKey: Uint8Array<ArrayBuffer> }) => void;
+    unregisterFileKey: (data: FileIdentifier) => void;
+    getFileKey: (data: FileIdentifier) => Uint8Array<ArrayBuffer>;
+    registerFolderKey: (data: { shareId: ShareId; folderId: string; folderKey: FolderKey }) => void;
+    getFolderKey: (data: { shareId: ShareId; folderId: string }) => FolderKey;
+    /** Drops the given folder keys, or every key of the share when `folderIds` is omitted */
+    removeFolderKeys: (shareId: ShareId, folderIds?: FolderId[]) => void;
+    encryptFileKey: (data: FileIdentifier & { itemKey: ItemKey }) => Promise<Uint8Array<ArrayBuffer>>;
+    createSecureLink: (data: { itemKey: ItemKey }) => Promise<CreateSecureLinkData>;
+    openSecureLink: (data: {
+        linkKey: string;
+        publicLinkContent: PublicLinkGetContentResponse;
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    openLinkKey: (data: {
+        encryptedLinkKey: string;
+        linkKeyShareKeyRotation: number;
+        shareId: ShareId;
+        itemId: ItemId;
+        folderId: MaybeNull<string>;
+        linkKeyEncryptedWithItemKey: boolean;
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+    openItemKey: (data: {
+        encryptedItemKey: EncodedItemKeyRotation;
+        shareId: ShareId;
+        folderId: MaybeNull<string>;
+    }) => Promise<ItemKey>;
+    openSecureLinkFileDescriptor: (data: {
+        encryptedFileKey: string;
+        encryptedItemKey: string;
+        encryptedMetadata: string;
+        encryptionVersion: number;
+        fileID: FileID;
+        linkKey: string;
+    }) => Promise<Uint8Array<ArrayBuffer>>;
+
+    /** Generates a fresh 32-byte raw access-token key, encrypts+signs it
+     * with the user's primary key, and returns both forms.
+     * Raw key never persists in the worker; the saga forwards it to the
+     * server (encrypted) and to the user (raw, base64-url) once. */
+    createAccessTokenKey: () => Promise<{ encrypted: string; raw: Uint8Array<ArrayBuffer> }>;
+
+    /** Recovers the raw 32 bytes of a stored access-token key by
+     * decrypting it with the user's primary private key. */
+    openAccessTokenKey: (encryptedKey: string) => Promise<Uint8Array<ArrayBuffer>>;
+
+    /** Wraps every rotation of a vault's share keys with the raw PAT key
+     * (AES-GCM, AAD=ShareKey) so the holder of the PAT can decrypt items
+     * in that vault. */
+    createAccessTokenShareKeys: (data: {
+        rawPatKey: Uint8Array<ArrayBuffer>;
+        shareId: ShareId;
+    }) => Promise<KeyRotationKeyPair[]>;
+
+    /** Decrypts + protobuf-decodes an `ActionPayload` carried by a
+     * pat-monitor record, using the raw PAT key as the symmetric key
+     * (AAD = "proton.pass.payload"). Returns `null` for empty input. */
+    openActionPayload: (data: {
+        encodedPayload: string;
+        rawPatKey: Uint8Array<ArrayBuffer>;
+    }) => Promise<MaybeNull<DecryptedActionPayload>>;
+}
+
+export type ShareContext<T extends ShareType = ShareType> = {
+    share: TypedOpenedShare<T>;
+    latestRotation: Rotation;
+    vaultKeys: Map<Rotation, VaultShareKey>;
+    itemKeys: Map<Rotation, ItemShareKey>;
+};
+
+export interface ShareManager<T extends ShareType = ShareType> extends SerializableCryptoContext<ShareContext> {
+    getShare: () => TypedOpenedShare<T>;
+    setShare: (share: TypedOpenedShare<T>) => void;
+    getType: () => ShareType;
+    isGroupShare: () => boolean;
+
+    isActive: () => boolean;
+
+    getLatestRotation: () => Rotation;
+    setLatestRotation: (rotation: Rotation) => void;
+
+    hasVaultShareKey: (rotation: Rotation) => boolean;
+    getVaultShareKey: (rotation: Rotation) => VaultShareKey;
+    getVaultShareKeys: () => VaultShareKey[];
+    addVaultShareKey: (vaultShareKey: VaultShareKey) => void;
+
+    hasItemShareKey: (rotation: Rotation) => boolean;
+    getItemShareKey: (rotation: Rotation) => ItemShareKey;
+    getItemShareKeys: () => ItemShareKey[];
+    addItemShareKey: (itemShareKey: ItemShareKey) => void;
+}
+
+interface SerializableCryptoContext<S> {
+    serialize: () => SerializedCryptoContext<S>;
+}
+
+export type SerializedCryptoContext<T> =
+    T extends SerializableCryptoContext<infer U> ? SerializedCryptoContext<U>
+    : T extends Uint8Array<ArrayBuffer> ? string
+    : T extends Map<infer K, infer U> ? (readonly [K, SerializedCryptoContext<U>])[]
+    : T extends (infer U)[] ? SerializedCryptoContext<U>[]
+    : T extends {} ? { [K in keyof T as T[K] extends CryptoKey ? never : K]: SerializedCryptoContext<T[K]> }
+    : T;

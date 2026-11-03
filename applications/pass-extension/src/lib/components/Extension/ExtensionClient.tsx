@@ -1,0 +1,123 @@
+import type { FC, ReactNode } from 'react';
+import { createContext, useEffect, useMemo } from 'react';
+import { useDispatch } from 'react-redux';
+
+import { AppStateManager } from '@proton/pass/components/Core/AppStateManager';
+import { usePassCore } from '@proton/pass/components/Core/PassCoreProvider';
+import { PASS_DEFAULT_THEME } from '@proton/pass/constants';
+import { createUseContext } from '@proton/pass/hooks/useContextFactory';
+import { usePassConfig } from '@proton/pass/hooks/usePassConfig';
+import { useVisibleEffect } from '@proton/pass/hooks/useVisibleEffect';
+import { clientErrored } from '@proton/pass/lib/client';
+import { telemetryBool } from '@proton/pass/lib/telemetry/utils';
+import { lock, signoutIntent } from '@proton/pass/store/actions/creators/auth';
+import { syncIntent } from '@proton/pass/store/actions/creators/client';
+import { TelemetryEventName } from '@proton/pass/types/data/telemetry';
+import type { MaybeNull } from '@proton/pass/types/utils';
+import { AppStatus } from '@proton/pass/types/worker/state';
+import sentry, { setUID as setSentryUID } from '@proton/shared/lib/helpers/sentry';
+import noop from '@proton/utils/noop';
+
+import type { WorkerMessageWithSender } from '../../../types/messages';
+import { useExtensionActivityProbe } from '../../hooks/useExtensionActivityProbe';
+import { useExtensionClientInit } from '../../hooks/useExtensionClientInit';
+import { isExtensionMessage } from '../../message/utils';
+import { reloadManager } from '../../utils/reload';
+import { isRuntimeStale } from '../../utils/runtime';
+import { useExtensionContext } from './ExtensionSetup';
+
+export interface ExtensionClientContextValue {
+    logout: (options: { soft: boolean }) => void;
+    lock: () => void;
+    sync: () => void;
+}
+
+const ExtensionClientContext = createContext<MaybeNull<ExtensionClientContextValue>>(null);
+export const useExtensionClient = createUseContext(ExtensionClientContext);
+
+type Props = {
+    children: (connected: boolean) => ReactNode;
+    onWorkerMessage?: (message: WorkerMessageWithSender) => void;
+};
+
+export const ExtensionClient: FC<Props> = ({ children, onWorkerMessage }) => {
+    const core = usePassCore();
+    const config = usePassConfig();
+    const { frameUrl, port, senderTabId } = useExtensionContext();
+
+    const activityProbe = useExtensionActivityProbe();
+    const dispatch = useDispatch();
+
+    const ready = useExtensionClientInit(
+        useMemo(
+            () => ({
+                onConnectivity: core.connectivity.setStatus,
+                onStateChange: (state) => {
+                    if (state.criticalRuntimeError) reloadManager.runtimeReload().catch(noop);
+
+                    if (clientErrored(state.status) || state.criticalRuntimeError) {
+                        core.onTelemetry(
+                            TelemetryEventName.ErrorResumingSession,
+                            {},
+                            {
+                                extensionBrowser: BUILD_TARGET,
+                                extensionReloadRequired: telemetryBool(state.criticalRuntimeError ?? false),
+                            }
+                        );
+                    }
+
+                    setSentryUID(state.UID);
+                },
+                onSettingsChange: (settings) => core.theme.setState(settings.theme ?? PASS_DEFAULT_THEME),
+            }),
+            []
+        )
+    );
+
+    useEffect(() => {
+        if (BUILD_TARGET !== 'firefox') {
+            sentry({
+                config,
+                denyUrls: [],
+                sentryConfig: {
+                    host: new URL(config.API_URL).host,
+                    release: config.APP_VERSION,
+                    environment: `browser-pass::${core.endpoint}`,
+                },
+                beforeSendIgnore: isRuntimeStale,
+                setupIgnore: () => false,
+            });
+        }
+
+        core.setExtensionClientState?.({ url: frameUrl, tabId: senderTabId, port: port.name });
+
+        if (onWorkerMessage) {
+            const listener = (message: unknown) => isExtensionMessage(message) && onWorkerMessage(message);
+            port.onMessage.addListener(listener);
+            return () => port.onMessage.removeListener(listener);
+        }
+    }, []);
+
+    useVisibleEffect((visible) => {
+        if (visible) activityProbe.start();
+        else activityProbe.cancel();
+    }, []);
+
+    const context = useMemo<ExtensionClientContextValue>(
+        () => ({
+            lock: () => {
+                AppStateManager.reset();
+                AppStateManager.setStatus(AppStatus.SESSION_LOCKED);
+                dispatch(lock());
+            },
+            logout: ({ soft }) => {
+                AppStateManager.reset();
+                dispatch(signoutIntent({ soft }));
+            },
+            sync: () => dispatch(syncIntent()),
+        }),
+        []
+    );
+
+    return <ExtensionClientContext.Provider value={context}>{children(ready)}</ExtensionClientContext.Provider>;
+};

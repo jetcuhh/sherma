@@ -1,0 +1,11 @@
+@use '~@proton/styles/scss/lib/config' as *;
+@use '~@proton/styles/scss/lib/em' as *;
+
+.kbd {
+	padding-block: 0;
+	padding-inline: em(4);
+	background-color: var(--background-strong);
+	color: var(--text-norm);
+	border: 1px solid var(--border-norm);
+	border-radius: var(--border-radius-sm);
+}

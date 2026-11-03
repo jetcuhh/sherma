@@ -1,0 +1,48 @@
+import { createSlice } from '@reduxjs/toolkit';
+
+import type { UserSettingsState } from '@proton/account/userSettings';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { createAsyncModelThunk, handleAsyncModel, previousSelector } from '@proton/redux-utilities/creator';
+import { getInitialModelState } from '@proton/redux-utilities/initialModelState';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import { getDirectoryCalendars } from '@proton/shared/lib/api/calendars';
+import { CALENDAR_TYPE } from '@proton/shared/lib/calendar/constants';
+import type { HolidaysDirectoryCalendar } from '@proton/shared/lib/interfaces/calendar/Calendar';
+
+const name = 'holidaysDirectory' as const;
+
+export interface HolidaysDirectoryState extends UserSettingsState {
+    [name]: ModelState<HolidaysDirectoryCalendar[]>;
+}
+
+type SliceState = HolidaysDirectoryState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+export const selectHolidaysDirectory = (state: HolidaysDirectoryState) => state[name];
+
+const modelThunk = createAsyncModelThunk<Model, HolidaysDirectoryState, ProtonThunkArguments>(`${name}/fetch`, {
+    miss: ({ extraArgument }) => {
+        return extraArgument
+            .api<{ Calendars: HolidaysDirectoryCalendar[] }>({
+                ...getDirectoryCalendars(CALENDAR_TYPE.HOLIDAYS),
+                silence: true,
+            })
+            .then(({ Calendars }) => {
+                return Calendars;
+            });
+    },
+    previous: previousSelector(selectHolidaysDirectory),
+});
+
+const initialState = getInitialModelState<Model>();
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {},
+    extraReducers: (builder) => {
+        handleAsyncModel(builder, modelThunk);
+    },
+});
+
+export const holidaysDirectoryReducer = { [name]: slice.reducer };
+export const holidaysDirectoryThunk = modelThunk.thunk;

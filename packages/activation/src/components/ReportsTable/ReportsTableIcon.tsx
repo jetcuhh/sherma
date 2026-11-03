@@ -1,0 +1,48 @@
+import type { ReactNode } from 'react';
+
+import Logo from '@proton/components/components/logo/Logo';
+import { APPS } from '@proton/shared/lib/constants';
+import contactsLogo from '@proton/styles/assets/img/import/importTypes/contacts.svg';
+import googleDriveLogo from '@proton/styles/assets/img/import/providers/google-drive.svg';
+import googleLogo from '@proton/styles/assets/img/import/providers/google.svg';
+import outlookLogo from '@proton/styles/assets/img/import/providers/outlook.svg';
+import yahooLogo from '@proton/styles/assets/img/import/providers/yahoo_short.svg';
+
+import type { ApiImportProvider } from '../../api/api.interface';
+import { getImportProviderFromApiProvider } from '../../helpers/getImportProviderFromApiProvider';
+import { ImportProvider, ImportType } from '../../interface';
+
+interface Props {
+    provider: ApiImportProvider;
+    product: ImportType;
+}
+
+export const providerLogos: Partial<Record<ImportProvider, string>> = {
+    [ImportProvider.GOOGLE]: googleLogo,
+    [ImportProvider.OUTLOOK]: outlookLogo,
+    [ImportProvider.YAHOO]: yahooLogo,
+};
+
+export const getProviderLogo = (provider: ImportProvider, product: ImportType) =>
+    provider === ImportProvider.GOOGLE && product === ImportType.DRIVE ? googleDriveLogo : providerLogos[provider];
+
+const productLogos: Partial<Record<ImportType, ReactNode>> = {
+    [ImportType.MAIL]: <Logo appName={APPS.PROTONMAIL} variant="glyph-only" size={5} className="self-center mr-4" />,
+    [ImportType.CALENDAR]: (
+        <Logo appName={APPS.PROTONCALENDAR} variant="glyph-only" size={5} className="self-center mr-4" />
+    ),
+    [ImportType.CONTACTS]: <img src={contactsLogo} alt="" className="self-center mr-4" width={20} />,
+    [ImportType.DRIVE]: <Logo appName={APPS.PROTONDRIVE} variant="glyph-only" size={5} className="self-center mr-4" />,
+};
+
+export const ReportsTableIcon = ({ provider: apiProvider, product }: Props) => {
+    const provider = getImportProviderFromApiProvider(apiProvider);
+
+    const logo = getProviderLogo(provider, product);
+
+    if (logo) {
+        return <img src={logo} alt="" className="self-center mr-4" width={20} />;
+    }
+
+    return <>{productLogos[product]}</>;
+};

@@ -1,0 +1,589 @@
+import { InactiveSessionError } from '@proton/shared/lib/api/helpers/errors';
+import { API_CUSTOM_ERROR_CODES } from '@proton/shared/lib/errors';
+import { ApiError } from '@proton/shared/lib/fetch/ApiError';
+import type { ProtonConfig } from '@proton/shared/lib/interfaces/config';
+
+import { type ApiAuth, AuthMode } from '../../types/api/api';
+import type { Maybe } from '../../types/utils';
+import { TEST_SERVER_TIME, mockAPIResponse } from '../../utils/tests/fixtures/api';
+import { LockedSessionError, PassErrorCode } from './errors';
+import { createApi } from './factory';
+import * as refresh from './refresh';
+import type { RefreshSessionData } from './refresh';
+
+jest.mock('./refresh', () => ({
+    ...jest.requireActual('./refresh'),
+    refreshHandlerFactory: jest.fn(),
+}));
+
+const { APP_VERSION_BAD } = API_CUSTOM_ERROR_CODES;
+
+const asyncNextTick = () => new Promise(process.nextTick);
+
+describe('API factory', () => {
+    const config = { APP_NAME: 'proton-pass', APP_VERSION: '0.0.1-test', API_URL: 'https://test.api' } as ProtonConfig;
+    const refreshMock = jest.fn<Promise<Partial<RefreshSessionData>>, []>(() => Promise.resolve({}));
+    const refreshHandleFactorySpy = jest.mocked(refresh.refreshHandlerFactory);
+
+    const fetchMock = jest.fn<Promise<Response>, [url: string, options: any], any>(() =>
+        Promise.resolve(mockAPIResponse())
+    );
+
+    refreshHandleFactorySpy.mockImplementation(
+        ({ onRefresh }) =>
+            async () =>
+                onRefresh((await refreshMock()) as RefreshSessionData)
+    );
+
+    let auth: Maybe<ApiAuth> = undefined;
+    const getAuth = jest.fn().mockImplementation(() => auth);
+    const listener = jest.fn();
+
+    (global as any).fetch = fetchMock;
+
+    /** Recreated per test: connectivity state is intentionally preserved by
+     * `api.reset`, so a shared instance would carry `failureCount` and
+     * `unreachable` from one scenario into the next. */
+    let api: ReturnType<typeof createApi>;
+
+    beforeEach(async () => {
+        auth = undefined;
+        api = createApi({ config, getAuth });
+        api.setResumeLock(false);
+        api.subscribe(listener);
+        listener.mockClear();
+        fetchMock.mockClear();
+        refreshMock.mockClear();
+    });
+
+    describe('Factory', () => {
+        test('should create initial API state', () => {
+            expect(api.getState()).toEqual({
+                appVersionBad: false,
+                failureCount: 0,
+                online: true,
+                ticksUntilOnline: 0,
+                pendingCount: 0,
+                queued: [],
+                refreshing: false,
+                resumeLocked: false,
+                serverTime: undefined,
+                sessionInactive: false,
+                sessionLocked: false,
+                unreachable: false,
+            });
+        });
+
+        test('should keep track of pending requests', async () => {
+            const resolvers: ((res: Response) => void)[] = [];
+
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)));
+
+            expect(api.getState().pendingCount).toEqual(0);
+
+            const call1 = api({}).then(asyncNextTick);
+            const call2 = api({}).then(asyncNextTick);
+            const call3 = api({}).then(asyncNextTick);
+
+            await asyncNextTick();
+
+            expect(api.getState().pendingCount).toEqual(3);
+            resolvers[0](mockAPIResponse());
+            await call1;
+            expect(api.getState().pendingCount).toEqual(2);
+
+            resolvers[1](mockAPIResponse());
+            await call2;
+            expect(api.getState().pendingCount).toEqual(1);
+
+            resolvers[2](mockAPIResponse());
+            await call3;
+            expect(api.getState().pendingCount).toEqual(0);
+        });
+
+        test('should support request treshold', async () => {
+            const backPressuredApi = createApi({ config, getAuth, threshold: 1 });
+            const resolvers: ((res: Response) => void)[] = [];
+
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)));
+
+            const call1 = backPressuredApi({}).then(asyncNextTick);
+            const call2 = backPressuredApi({}).then(asyncNextTick);
+            const call3 = backPressuredApi({}).then(asyncNextTick);
+
+            await asyncNextTick();
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(backPressuredApi.getState().pendingCount).toEqual(3);
+
+            resolvers[0](mockAPIResponse());
+            await call1;
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+
+            resolvers[1](mockAPIResponse());
+            await call2;
+            expect(fetchMock).toHaveBeenCalledTimes(3);
+
+            resolvers[2](mockAPIResponse());
+            await call3;
+        });
+
+        test('`prioritize` bypasses the threshold queue', async () => {
+            const backPressuredApi = createApi({ config, getAuth, threshold: 1 });
+            const resolvers: ((res: Response) => void)[] = [];
+
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)));
+
+            /** Saturate the threshold with a normal request */
+            const blocking = backPressuredApi({});
+            await asyncNextTick();
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            /** Priority request dispatches immediately, bypassing the gate */
+            const priority = backPressuredApi({ prioritize: true });
+            await asyncNextTick();
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+
+            resolvers[0](mockAPIResponse());
+            resolvers[1](mockAPIResponse());
+            await Promise.all([blocking, priority]);
+        });
+    });
+
+    describe('Server time', () => {
+        test('should be set on API call', async () => {
+            expect(api.getState().serverTime).toEqual(undefined);
+            await api({ url: 'some/endpoint' });
+            expect(api.getState().serverTime).toEqual(TEST_SERVER_TIME);
+        });
+
+        test('should throw if no date header response', async () => {
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 200, {}));
+            await expect(api({})).rejects.toThrow('Could not fetch server time');
+        });
+    });
+
+    describe('Response', () => {
+        test('should support JSON response', async () => {
+            const json = { id: 'refresh-response-1' };
+            fetchMock.mockResolvedValueOnce(mockAPIResponse(json, 200));
+            expect(await api({ url: 'endpoint', output: 'json' })).toEqual(json);
+        });
+
+        test('should support RAW response', async () => {
+            const response = mockAPIResponse({ id: 'refresh-response-2' }, 200);
+            fetchMock.mockResolvedValueOnce(response);
+            expect(await api({ url: 'endpoint', output: 'raw' })).toEqual(response);
+        });
+
+        test('should support STREAM response', async () => {
+            const response = mockAPIResponse({ id: 'refresh-response-3' }, 200);
+            fetchMock.mockResolvedValueOnce(response);
+            expect(await api({ url: 'endpoint', output: 'stream' })).toEqual(response.body);
+        });
+    });
+
+    describe('Authentication', () => {
+        test('should allow authenticated requests when `AuthMode.TOKEN`', async () => {
+            auth = { type: AuthMode.TOKEN, AccessToken: 'access-000', UID: 'id-000', RefreshToken: 'refresh-000' };
+            await api({ url: 'some/endpoint' });
+            const [url, { headers }] = fetchMock.mock.lastCall!;
+
+            expect(url.toString()).toEqual('https://test.api/some/endpoint');
+            expect(headers.Authorization).toEqual(`Bearer ${auth.AccessToken}`);
+            expect(headers['x-pm-uid']).toEqual(auth.UID);
+            expect(headers['x-pm-appversion']).toEqual('web-pass@0.0.1-dev');
+        });
+
+        test('should allow authenticated requests when `AuthMode.COOKIE`', async () => {
+            auth = { type: AuthMode.COOKIE, UID: 'id-000' };
+            await api({ url: 'some/endpoint' });
+            const [url, { headers }] = fetchMock.mock.lastCall!;
+
+            expect(url.toString()).toEqual('https://test.api/some/endpoint');
+            expect(headers.Authorization).toBeUndefined();
+            expect(headers['x-pm-uid']).toEqual(auth.UID);
+            expect(headers['x-pm-appversion']).toEqual('web-pass@0.0.1-dev');
+        });
+
+        test('should allow unauthenticated requests', async () => {
+            await api({ url: 'some/public/endpoint' });
+            const [url, { headers }] = fetchMock.mock.lastCall!;
+            expect(url.toString()).toEqual('https://test.api/some/public/endpoint');
+            expect(headers.Authorization).toBeUndefined();
+            expect(headers['x-pm-uid']).toBeUndefined();
+            expect(headers['x-pm-appversion']).toEqual('web-pass@0.0.1-dev');
+        });
+    });
+
+    describe('Locked session', () => {
+        test('should handle locked session', async () => {
+            fetchMock.mockResolvedValueOnce(
+                mockAPIResponse(
+                    {
+                        Code: PassErrorCode.SESSION_LOCKED,
+                        Error: 'Locked',
+                    },
+                    422
+                )
+            );
+
+            await expect(api({ url: 'some/protected/endpoint' })).rejects.toThrow(LockedSessionError());
+            expect(listener).toHaveBeenCalledTimes(1);
+            expect(listener).toHaveBeenCalledWith({ status: 'locked', type: 'session' });
+            expect(api.getState().sessionLocked).toEqual(true);
+        });
+
+        test('all subsequent calls should fail early', async () => {
+            fetchMock.mockResolvedValueOnce(
+                mockAPIResponse(
+                    {
+                        Code: PassErrorCode.SESSION_LOCKED,
+                        Error: 'Locked',
+                    },
+                    422
+                )
+            );
+
+            await expect(api({ url: 'some/protected/endpoint' })).rejects.toThrow(LockedSessionError());
+            await expect(api({ url: 'some/other/endpoint' })).rejects.toThrow(LockedSessionError());
+            await expect(api({ url: 'some/other/endpoint' })).rejects.toThrow(LockedSessionError());
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe('Inactive session', () => {
+        test('should handle inactive session', async () => {
+            refreshMock.mockRejectedValueOnce(InactiveSessionError());
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 401));
+            await expect(api({ url: 'some/protected/endpoint' })).rejects.toThrow(InactiveSessionError());
+            expect(listener).toHaveBeenCalledTimes(2);
+            expect(listener.mock.calls[0][0]).toEqual({ status: 'inactive', type: 'session', silent: false });
+            expect(listener.mock.calls[1][0]).toEqual({ type: 'error', error: 'Session timed out', silent: false });
+            expect(api.getState().sessionInactive).toEqual(true);
+        });
+
+        test('all subsequent calls should fail early', async () => {
+            refreshMock.mockRejectedValueOnce(InactiveSessionError());
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 401));
+            await expect(api({ url: 'some/protected/endpoint' })).rejects.toThrow(InactiveSessionError());
+            await expect(api({ url: 'some/other/endpoint' })).rejects.toThrow(InactiveSessionError());
+            await expect(api({ url: 'some/other/endpoint' })).rejects.toThrow(InactiveSessionError());
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        test('should not deactivate the session on a rate limited refresh', async () => {
+            refreshMock.mockRejectedValueOnce(new ApiError('Too many requests', 429, 'ApiError'));
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 401));
+
+            await expect(api({ url: 'some/protected/endpoint' })).rejects.toMatchObject({ status: 429 });
+            expect(api.getState().sessionInactive).toEqual(false);
+        });
+
+        test('should try to refresh session', async () => {
+            const response = { id: 'refresh-response-4' };
+            refreshMock.mockResolvedValueOnce({ RefreshToken: 'refresh-001' });
+
+            fetchMock
+                .mockResolvedValueOnce(mockAPIResponse({}, 401))
+                .mockResolvedValueOnce(mockAPIResponse(response, 200));
+
+            await expect(api({ url: 'some/protected/endpoint' })).resolves.toEqual(response);
+            expect(listener).toHaveBeenCalledTimes(1);
+            expect(listener).toHaveBeenCalledWith({ type: 'refresh', data: { RefreshToken: 'refresh-001' } });
+            expect(api.getState().sessionInactive).toEqual(false);
+        });
+    });
+
+    describe('Resume lock', () => {
+        test('should default to unlocked', () => {
+            expect(api.getState().resumeLocked).toBe(false);
+        });
+
+        test('`setResumeLock` should toggle resume-locked state', () => {
+            api.setResumeLock(true);
+            expect(api.getState().resumeLocked).toBe(true);
+            api.setResumeLock(false);
+            expect(api.getState().resumeLocked).toBe(false);
+        });
+
+        test('should let session-resume routes through when locked', async () => {
+            api.setResumeLock(true);
+            const allowed = [
+                'tests/ping',
+                'pass/v1/user/session/lock/check',
+                'pass/v1/user/session/lock/force_lock',
+                'auth/v4/sessions/local/key',
+                'core/v4/users',
+                'auth/refresh',
+                'core/v4/auth',
+            ];
+
+            for (const url of allowed) {
+                fetchMock.mockResolvedValueOnce(mockAPIResponse());
+                await expect(api({ url })).resolves.toBeDefined();
+            }
+
+            expect(fetchMock).toHaveBeenCalledTimes(allowed.length);
+        });
+
+        test('should reject non-resume routes with offline error when locked', async () => {
+            api.setResumeLock(true);
+
+            await expect(api({ url: 'pass/v1/share' })).rejects.toThrow('No network connection');
+            await expect(api({ url: 'pass/v1/user/access' })).rejects.toThrow('No network connection');
+            await expect(api({ url: 'core/v4/events' })).rejects.toThrow('No network connection');
+
+            expect(fetchMock).not.toHaveBeenCalled();
+        });
+
+        test('rejected calls should NOT increment pendingCount', async () => {
+            api.setResumeLock(true);
+            await expect(api({ url: 'pass/v1/share' })).rejects.toThrow();
+            expect(api.getState().pendingCount).toBe(0);
+        });
+
+        test('should let everything through once unlocked', async () => {
+            api.setResumeLock(true);
+            await expect(api({ url: 'pass/v1/share' })).rejects.toThrow();
+
+            api.setResumeLock(false);
+            fetchMock.mockResolvedValueOnce(mockAPIResponse());
+            await expect(api({ url: 'pass/v1/share' })).resolves.toBeDefined();
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        test('`api.reset` should NOT clear resume lock', async () => {
+            api.setResumeLock(true);
+            await api.reset();
+            expect(api.getState().resumeLocked).toBe(true);
+        });
+    });
+
+    describe('Errors', () => {
+        test('should handle offline errors', async () => {
+            fetchMock.mockRejectedValueOnce({ ok: false });
+            await expect(api({})).rejects.toThrow('No network connection');
+            expect(api.getState().online).toBe(false);
+        });
+
+        test('should handle unavailable service errors', async () => {
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 503));
+            await expect(api({})).rejects.toThrow(ApiError);
+            expect(api.getState().unreachable).toBe(true);
+        });
+
+        test('should handle bad client version errors', async () => {
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({ Code: APP_VERSION_BAD, Error: 'Bad verson' }, 500));
+            await expect(api({})).rejects.toThrow('App version outdated');
+            expect(api.getState().appVersionBad).toBe(true);
+        });
+
+        test('should classify TimeoutError as OFFLINE', async () => {
+            const timeoutError = Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+            fetchMock.mockRejectedValueOnce(timeoutError);
+
+            await expect(api({})).rejects.toThrow();
+            expect(api.getState().online).toBe(false);
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: false, unreachable: false });
+        });
+    });
+
+    describe('Consecutive failures', () => {
+        /** `retry-after` above `RETRY_DELAY_MAX` so a 429 escapes `retryHandler`
+         * instead of being absorbed by a retry. This is the outage condition. */
+        const failWith = async (status: number, body = {}) => {
+            fetchMock.mockResolvedValueOnce(
+                mockAPIResponse(body, status, { date: TEST_SERVER_TIME.toUTCString(), 'retry-after': '30' })
+            );
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(ApiError);
+        };
+
+        test('should stay reachable below the failure threshold', async () => {
+            await failWith(429);
+            await failWith(429);
+
+            expect(api.getState().failureCount).toBe(2);
+            expect(api.getState().unreachable).toBe(false);
+        });
+
+        test('should become unreachable once the threshold is reached', async () => {
+            await failWith(429);
+            await failWith(429);
+            await failWith(429);
+
+            expect(api.getState().failureCount).toBe(3);
+            expect(api.getState().unreachable).toBe(true);
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: true, unreachable: true });
+        });
+
+        test('should count failures of any status, not just rate limits', async () => {
+            await failWith(429);
+            await failWith(408);
+            await failWith(404);
+
+            expect(api.getState().unreachable).toBe(true);
+        });
+
+        test('should not count errors of a removed share', async () => {
+            await failWith(422, { Code: PassErrorCode.DISABLED_SHARE, Error: 'Share disabled' });
+            await failWith(422, { Code: PassErrorCode.NOT_EXIST_SHARE, Error: 'Share does not exist' });
+            await failWith(422, { Code: PassErrorCode.DISABLED_SHARE, Error: 'Share disabled' });
+
+            expect(api.getState().failureCount).toBe(0);
+            expect(api.getState().unreachable).toBe(false);
+        });
+
+        test('should clear the count on a successful response', async () => {
+            await failWith(429);
+            await failWith(429);
+
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}));
+            await expect(api({ url: 'some/endpoint' })).resolves.toEqual({});
+
+            expect(api.getState().failureCount).toBe(0);
+
+            await failWith(429);
+            expect(api.getState().unreachable).toBe(false);
+        });
+
+        test('should not count failures thrown before the request left the client', async () => {
+            fetchMock.mockResolvedValueOnce(
+                mockAPIResponse({ Code: PassErrorCode.SESSION_LOCKED, Error: 'Locked' }, 422)
+            );
+
+            /** The first call reaches the API but its 422 is mapped to a `LockedSessionError`,
+             * subsequent ones short-circuit on `sessionLocked` without leaving the client.
+             * None of them says anything about server health. */
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(LockedSessionError());
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(LockedSessionError());
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(LockedSessionError());
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(LockedSessionError());
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(api.getState().failureCount).toBe(0);
+            expect(api.getState().unreachable).toBe(false);
+        });
+
+        test('should not count an invalidated session', async () => {
+            refreshMock.mockRejectedValue(InactiveSessionError());
+            auth = { type: AuthMode.COOKIE, UID: 'test-uid' };
+
+            fetchMock.mockResolvedValueOnce(mockAPIResponse({}, 401));
+            await expect(api({ url: 'some/endpoint' })).rejects.toThrow(InactiveSessionError());
+
+            expect(api.getState().failureCount).toBe(0);
+            expect(api.getState().unreachable).toBe(false);
+        });
+    });
+
+    describe('Connectivity stabilization', () => {
+        test('defers ONLINE broadcast until all pending requests have settled', async () => {
+            const resolvers: ((res: Response) => void)[] = [];
+
+            /** 1. Simulate offline */
+            fetchMock.mockRejectedValueOnce({ ok: false });
+            await expect(api({})).rejects.toThrow();
+            expect(api.getState().online).toBe(false);
+            listener.mockClear();
+
+            /** 2. Two concurrent requests recover: both succeed but ONLINE
+             * should only fire once the last one settles */
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)));
+
+            const call1 = api({});
+            const call2 = api({});
+            await asyncNextTick();
+
+            /** 3. First request settles: countdown at 1, no ONLINE event yet */
+            resolvers[0](mockAPIResponse());
+            await call1;
+            expect(api.getState().ticksUntilOnline).toBe(1);
+            expect(listener).not.toHaveBeenCalledWith({ type: 'connectivity', online: true, unreachable: false });
+
+            /** 4. Last request settles: countdown reaches 0, ONLINE flushed */
+            resolvers[1](mockAPIResponse());
+            await call2;
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: true, unreachable: false });
+            expect(api.getState().ticksUntilOnline).toBe(0);
+        });
+
+        test('broadcasts OFFLINE immediately without waiting for pending requests to drain', async () => {
+            /** 1. Two concurrent requests: one deferred success, one immediate failure */
+            const resolvers: ((res: Response) => void)[] = [];
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockRejectedValueOnce({ ok: false });
+
+            const successFetch = api({});
+            const offlineFetch = api({}).catch(() => {});
+            await asyncNextTick();
+
+            /** 2. Failure resolves first: OFFLINE broadcast immediately, deferred ONLINE discarded */
+            await offlineFetch;
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: false, unreachable: false });
+            expect(api.getState().ticksUntilOnline).toBe(0);
+
+            /** 3. Deferred success resolves: back ONLINE */
+            resolvers[0](mockAPIResponse());
+            await successFetch;
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: true, unreachable: false });
+            expect(api.getState().ticksUntilOnline).toBe(0);
+        });
+
+        test('does not re-broadcast OFFLINE when already offline', async () => {
+            /** 1. Simulate offline */
+            fetchMock.mockRejectedValueOnce({ ok: false });
+            await expect(api({})).rejects.toThrow();
+            expect(api.getState().online).toBe(false);
+            listener.mockClear();
+
+            /** 2. Another failure while already offline: no duplicate connectivity event */
+            fetchMock.mockRejectedValueOnce({ ok: false });
+            await expect(api({})).rejects.toThrow();
+            expect(listener).not.toHaveBeenCalledWith({ type: 'connectivity', online: false, unreachable: false });
+        });
+
+        test('clears pending ONLINE event when a concurrent request fails', async () => {
+            const resolvers: ((res: Response) => void)[] = [];
+            const rejecters: ((err: any) => void)[] = [];
+
+            /** 1. Simulate offline */
+            fetchMock.mockRejectedValueOnce({ ok: false });
+            await expect(api({})).rejects.toThrow();
+            listener.mockClear();
+
+            /** 2. Two deferred concurrent requests */
+            fetchMock
+                .mockImplementationOnce(() => new Promise<Response>((res) => resolvers.push(res)))
+                .mockImplementationOnce(() => new Promise<Response>((_, rej) => rejecters.push(rej)));
+
+            const successFetch = api({});
+            const offlineFetch = api({}).catch(() => {});
+            await asyncNextTick();
+
+            /** 3. First request succeeds */
+            resolvers[0](mockAPIResponse());
+            await successFetch;
+            expect(api.getState().ticksUntilOnline).toBe(1);
+            expect(listener).not.toHaveBeenCalledWith({ type: 'connectivity', online: true, unreachable: false });
+            listener.mockClear();
+
+            /** 4. Second request fails: OFFLINE broadcast immediately */
+            rejecters[0]({ ok: false });
+            await offlineFetch;
+            expect(api.getState().ticksUntilOnline).toBe(0);
+            expect(listener).toHaveBeenCalledWith({ type: 'connectivity', online: false, unreachable: false });
+        });
+    });
+});

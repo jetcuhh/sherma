@@ -1,0 +1,43 @@
+{
+    "name": "@proton/features",
+    "description": "Feature toggles",
+    "exports": {
+        "./interface": "./interface.ts",
+        "./reducer": "./reducer.ts",
+        "./testing/features": "./testing/features.ts",
+        "./testing/mockUseFeature": "./testing/mockUseFeature.ts",
+        "./useFeature": "./useFeature.ts",
+        "./useFeatures": "./useFeatures.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "test": "jest",
+        "test:ci": "jest --runInBand --ci --logHeapUsage"
+    },
+    "dependencies": {
+        "@proton/react-redux-store": "workspace:^",
+        "@proton/redux-utilities": "workspace:^",
+        "@proton/shared": "workspace:^",
+        "@proton/utils": "workspace:^",
+        "@reduxjs/toolkit": "catalog:",
+        "react": "catalog:",
+        "redux-thunk": "catalog:"
+    },
+    "devDependencies": {
+        "@proton/jest-env": "workspace:^",
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@proton/test-api": "workspace:^",
+        "@testing-library/jest-dom": "catalog:",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "jest": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "typescript": "catalog:"
+    }
+}

@@ -1,0 +1,576 @@
+import type { BrowserOptions, SeverityLevel } from '@sentry/browser';
+import {
+    Integrations as SentryIntegrations,
+    addBreadcrumb,
+    captureException,
+    configureScope,
+    init,
+    makeFetchTransport,
+    captureMessage as sentryCaptureMessage,
+} from '@sentry/browser';
+import type { BrowserTransportOptions } from '@sentry/browser/types/transports/types';
+import type { Breadcrumb } from '@sentry/types/types/breadcrumb';
+import type { ErrorEvent, EventHint } from '@sentry/types/types/event';
+
+import { Availability, AvailabilityTypes } from '@proton/utils/availability';
+
+import { getApiError, getIsConnectionIssue } from '../api/helpers/apiErrorHelper';
+import { VPN_HOSTNAME } from '../constants';
+import { ApiError } from '../fetch/ApiError';
+import { getUIDHeaders } from '../fetch/headers';
+import type { ProtonConfig } from '../interfaces/config';
+import { isElectronApp } from './desktop';
+
+type SentryContext = {
+    authHeaders: { [key: string]: string };
+    enabled: boolean;
+};
+
+type SentryConfig = {
+    host: string;
+    release: string;
+    environment: string;
+};
+
+type SentryDenyUrls = BrowserOptions['denyUrls'];
+type SentryIgnoreErrors = BrowserOptions['ignoreErrors'];
+
+type SentryOptions = {
+    config: ProtonConfig;
+    denyUrls?: SentryDenyUrls;
+    ignoreErrors?: SentryIgnoreErrors;
+    sentryConfig?: SentryConfig;
+    sessionTracking?: boolean;
+    UID?: string;
+    beforeSendIgnore?: (event: ErrorEvent, hint: EventHint) => boolean;
+    setupIgnore?: (config: SentryConfig) => boolean;
+};
+
+const context: SentryContext = {
+    authHeaders: {},
+    enabled: true,
+};
+
+const SAFE_QUERY_PARAMS = new Set([
+    'page',
+    'pagesize',
+    'sort',
+    'desc',
+    'type',
+    'parsedomain',
+    'start',
+    'end',
+    'limit',
+    'plan',
+    'cycle',
+    'currency',
+    'coupon',
+    'billing',
+    'minimumcycle',
+    'users',
+    'trial',
+    'app',
+    'product',
+]);
+const QUERY_PARAM_REGEX = /([?&])([\w%][^=&#\s]*)=([^&#\r\n]*)/g;
+const EMAIL_ADDRESS_REGEX = /(^|[\s/?#&=@"'<>,;])[^\s/?#&=@"'<>,;]{1,64}(?:@|%40)[^\s/?#&@"'<>,;]{1,253}\.[a-z]{2,}/gi;
+const RESET_TOKEN_PATH_REGEX = /(core\/v4\/reset\/)[^/?#]+\/[^/?#]+/gi;
+const VERIFICATION_TOKEN_PATH_REGEX = /(core\/v4\/verification\/[^/?#]+\/)[^?#]+/gi;
+const FRAGMENT_REGEX = /(?:#|%23).*$/is;
+
+/**
+ * Maximum depth we walk into `data` / `extra` containers when redacting. Kept in
+ * sync with the `normalizeDepth` passed to Sentry's `init`, since anything
+ * deeper than that is dropped before it leaves the browser anyway.
+ */
+const MAX_REDACTION_DEPTH = 5;
+
+type RedactionOptions = {
+    /**
+     * `ui.*` breadcrumb messages are DOM selectors (e.g. `div#root > button`),
+     * where a `#` carries no secret and redacting it destroys the selector.
+     */
+    redactFragment?: boolean;
+};
+
+/**
+ * Redact the values we consider sensitive anywhere in a Sentry event:
+ * - anything after a hash, which may be sensitive (e.g. a public share password,
+ *   Ex: https://drive.proton.dev/urls/TBYS1295RG#[password]);
+ * - every query parameter value, except the keys in `SAFE_QUERY_PARAMS`;
+ * - email addresses, wherever they are (path: calendar busy-schedule, free text);
+ * - the username and token of core/v4/reset/{username}/{token};
+ * - the token and code of core/v4/verification/{method}/{token}/{code}.
+ */
+export const redactSensitiveString = (value: string, { redactFragment = true }: RedactionOptions = {}) => {
+    const withoutPII = value
+        .replace(QUERY_PARAM_REGEX, (match, separator, key) =>
+            SAFE_QUERY_PARAMS.has(key.replace(/\[\]$/, '').toLowerCase()) ? match : `${separator}${key}=[Filtered]`
+        )
+        .replace(EMAIL_ADDRESS_REGEX, '$1[Filtered]')
+        .replace(RESET_TOKEN_PATH_REGEX, '$1[Filtered]/[Filtered]')
+        .replace(VERIFICATION_TOKEN_PATH_REGEX, '$1[Filtered]');
+
+    return redactFragment ? withoutPII.replace(FRAGMENT_REGEX, '#[Filtered]') : withoutPII;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const prototype = Object.getPrototypeOf(value);
+
+    return prototype === Object.prototype || prototype === null;
+};
+
+/**
+ * Redact every string reachable in a plain object / array, in place. Only plain
+ * objects and arrays are traversed, so class instances handed to Sentry are left
+ * for its own serialiser to deal with.
+ */
+const redactSensitiveContainer = (
+    container: Record<string, unknown> | unknown[],
+    options?: RedactionOptions,
+    depth = 0
+) => {
+    if (depth >= MAX_REDACTION_DEPTH) {
+        return;
+    }
+
+    const entries: [string | number, unknown][] = Array.isArray(container)
+        ? container.map((value, index) => [index, value])
+        : Object.entries(container);
+
+    for (const [key, value] of entries) {
+        if (typeof value === 'string') {
+            (container as Record<string | number, unknown>)[key] = redactSensitiveString(value, options);
+        } else if (Array.isArray(value) || isPlainObject(value)) {
+            redactSensitiveContainer(value, options, depth + 1);
+        }
+    }
+};
+
+export const setUID = (uid: string | undefined) => {
+    context.authHeaders = uid ? getUIDHeaders(uid) : {};
+};
+
+export const setSentryEnabled = (enabled: boolean) => {
+    context.enabled = enabled;
+};
+
+type FirstFetchParameter = Parameters<typeof fetch>[0];
+const getContentTypeHeaders = (input: FirstFetchParameter): HeadersInit => {
+    const url = input.toString();
+    /**
+     * The sentry library does not append the content-type header to requests. The documentation states
+     * what routes accept what content-type. Those content-type headers are also expected through our sentry tunnel.
+     */
+    if (url.includes('/envelope/')) {
+        return { 'content-type': 'application/x-sentry-envelope' };
+    }
+
+    if (url.includes('/store/')) {
+        return { 'content-type': 'application/json' };
+    }
+
+    return {};
+};
+
+const sentryFetch: typeof fetch = (input, init?) => {
+    return globalThis.fetch(input, {
+        ...init,
+        headers: {
+            ...init?.headers,
+            ...getContentTypeHeaders(input),
+            ...context.authHeaders,
+        },
+    });
+};
+
+const makeProtonFetchTransport = (options: BrowserTransportOptions) => {
+    return makeFetchTransport(options, sentryFetch);
+};
+
+const isLocalhost = (host: string) => host.startsWith('localhost');
+export const isProduction = (host: string) =>
+    host.endsWith('.proton.me') || host.endsWith('.protonvpn.com') || host === VPN_HOSTNAME;
+
+const getDefaultSentryConfig = ({ APP_VERSION, COMMIT }: ProtonConfig): SentryConfig => {
+    const host = self.location.host;
+    return {
+        host,
+        release: isProduction(host) ? APP_VERSION : COMMIT,
+        environment: host.split('.').splice(1).join('.'),
+    };
+};
+
+const getDefaultDenyUrls = (): SentryDenyUrls => {
+    return [
+        // Google Adsense
+        /pagead\/js/i,
+        // Facebook flakiness
+        /graph\.facebook\.com/i,
+        // Facebook blocked
+        /connect\.facebook\.net\/en_US\/all\.js/i,
+        // Woopra flakiness
+        /eatdifferent\.com\.woopra-ns\.com/i,
+        /static\.woopra\.com\/js\/woopra\.js/i,
+        // Chrome extensions
+        /extensions\//i,
+        /chrome:\/\//i,
+        /chrome-extension:\/\//i,
+        /moz-extension:\/\//i,
+        /webkit-masked-url:\/\//i,
+        // Facebook in-app browser scripts
+        /iabjs:\/\//i,
+        // Other plugins
+        /127\.0\.0\.1:4001\/isrunning/i, // Cacaoweb
+        /webappstoolbarba\.texthelp\.com\//i,
+        /metrics\.itunes\.apple\.com\.edgesuite\.net\//i,
+    ];
+};
+
+const getDefaultIgnoreErrors = (): SentryIgnoreErrors => {
+    return [
+        // Ignore random plugins/extensions
+        'top.GLOBALS',
+        'canvas.contentDocument',
+        'MyApp_RemoveAllHighlights',
+        'atomicFindClose',
+        // See http://toolbar.conduit.com/Developer/HtmlAndGadget/Methods/JSInjection.aspx
+        'conduitPage',
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1678243
+        'XDR encoding failure',
+        'Request timed out',
+        'No network connection',
+        'Failed to fetch',
+        'Load failed',
+        'NetworkError when attempting to fetch resource.',
+        'webkitExitFullScreen', // Bug in Firefox for iOS.
+        'InactiveSession',
+        'InvalidStateError', // Ignore Pale Moon throwing InvalidStateError trying to use idb
+        'UnhandledRejection', // Happens too often in extensions and we have lints for that, so should be safe to ignore.
+        /chrome-extension/,
+        /moz-extension/,
+        /window\.ethereum/, // Uncaught errors from browser-injected wallet scripts (see brave/brave-browser#58670).
+        'TransferCancel', // User action to interrupt upload or download in Drive.
+        'UploadConflictError', // User uploading the same file again in Drive.
+        'UploadUserError', // Upload error on user's side in Drive.
+        'ValidationError', // Validation error on user's side in Drive.
+        'ChunkLoadError', // WebPack loading source code.
+        /ResizeObserver loop/, // Chromium bug https://stackoverflow.com/questions/49384120/resizeobserver-loop-limit-exceeded
+        // See: http://blog.errorception.com/2012/03/tale-of-unfindable-js-error.html
+        'originalCreateNotification',
+        'http://tt.epicplay.com',
+        "Can't find variable: ZiteReader",
+        'jigsaw is not defined',
+        'ComboSearch is not defined',
+        'http://loading.retry.widdit.com/',
+        // Facebook borked
+        'fb_xd_fragment',
+        // ISP "optimizing" proxy - `Cache-Control: no-transform` seems to reduce this. (thanks @acdha)
+        // See http://stackoverflow.com/questions/4113268/how-to-stop-javascript-injection-from-vodafone-proxy
+        'bmi_SafeAddOnload',
+        'EBCallBackMessageReceived',
+        // Avast extension error
+        '_avast_submit',
+        'AbortError',
+        /unleash/i,
+        /Unexpected EOF/i,
+        // React DOM throwing this error, however it seems it has no impact on user experience.
+        'Permission denied to access property "type"',
+        "Can't find variable: FileReader", // Ignore FileReader error as it is thrown by bots crawling our apps
+        /__firefox__/, // Firefox for iOS injected scripts
+        "Can't find variable: EmptyRanges", // Injected script on iOS Safari
+    ];
+};
+
+function main({
+    config,
+    denyUrls = getDefaultDenyUrls(),
+    ignoreErrors = getDefaultIgnoreErrors(),
+    sentryConfig = getDefaultSentryConfig(config),
+    sessionTracking = false,
+    UID,
+    beforeSendIgnore,
+    setupIgnore = ({ host }) => isLocalhost(host),
+}: SentryOptions) {
+    const { SENTRY_DSN, SENTRY_DESKTOP_DSN, APP_VERSION } = config;
+    const sentryDSN = isElectronApp ? SENTRY_DESKTOP_DSN || SENTRY_DSN : SENTRY_DSN;
+    const { host, release, environment } = sentryConfig;
+
+    // No need to configure it if we don't load the DSN
+    if (!sentryDSN || setupIgnore(sentryConfig)) {
+        return;
+    }
+
+    setUID(UID);
+
+    // Assumes sentryDSN is: https://111b3eeaaec34cae8e812df705690a36@sentry/11
+    // To get https://111b3eeaaec34cae8e812df705690a36@protonmail.com/api/core/v4/reports/sentry/11
+    const dsn = sentryDSN.replace('sentry', `${host}/api/core/v4/reports/sentry`);
+
+    init({
+        dsn,
+        release,
+        environment,
+        normalizeDepth: 5,
+        transport: makeProtonFetchTransport,
+        autoSessionTracking: sessionTracking,
+        // do not log calls to console.log, console.error, etc.
+        integrations: [
+            new SentryIntegrations.Breadcrumbs({
+                console: false,
+            }),
+        ],
+        // Disable client reports. Client reports are used by sentry to retry events that failed to send on visibility change.
+        // Unfortunately Sentry does not use the custom transport for those, and thus fails to add the headers the API requires.
+        sendClientReports: false,
+        beforeSend(event, hint) {
+            if (beforeSendIgnore?.(event, hint)) {
+                return null;
+            }
+
+            const error = hint?.originalException as any;
+            const stack = typeof error === 'string' ? error : error?.stack;
+            // Filter out broken ferdi errors
+            if (stack && stack.match(/ferdi|franz/i)) {
+                return null;
+            }
+
+            // Not interested in uncaught API errors, or known errors
+            if (error instanceof ApiError || error?.trace === false) {
+                return null;
+            }
+
+            if (!context.enabled) {
+                return null;
+            }
+
+            if (event.request?.url) {
+                event.request.url = redactSensitiveString(event.request.url);
+            }
+
+            if (event.request?.headers) {
+                redactSensitiveContainer(event.request.headers);
+            }
+
+            if (event.message) {
+                event.message = redactSensitiveString(event.message);
+            }
+
+            if (event.contexts) {
+                redactSensitiveContainer(event.contexts);
+            }
+
+            if (event.tags) {
+                redactSensitiveContainer(event.tags);
+            }
+            if (event.breadcrumbs) {
+                event.breadcrumbs = event.breadcrumbs.map((breadcrumb) => {
+                    if (breadcrumb.category === 'fetch' && breadcrumb.data) {
+                        breadcrumb.message = breadcrumb.data.url;
+                    }
+
+                    // Button titles may contain accidental PII
+                    if (
+                        breadcrumb.category === 'ui.click' &&
+                        breadcrumb.message &&
+                        breadcrumb.message.startsWith('button')
+                    ) {
+                        breadcrumb.message = breadcrumb.message.replace(/\[title=".+?"\]/g, '[title="(Filtered)"]');
+                    }
+
+                    // The rules above only cover the breadcrumb categories that existed when they
+                    // were written. Every other breadcrumb has to get the same treatment rather
+                    // than passing through untouched: `drive.logger`, for instance, carries every
+                    // Drive log line as a free-form string. Redact generically so that the next
+                    // category someone adds is covered by default.
+                    const redactFragment = !breadcrumb.category?.startsWith('ui.');
+
+                    if (breadcrumb.message) {
+                        breadcrumb.message = redactSensitiveString(breadcrumb.message, { redactFragment });
+                    }
+
+                    if (breadcrumb.data) {
+                        redactSensitiveContainer(breadcrumb.data, { redactFragment });
+                    }
+
+                    return breadcrumb;
+                });
+            }
+
+            // Anything after a hash may be sensitive (e.g. a public share password, Ex:
+            // https://drive.proton.dev/urls/TBYS1295RG#[password]), so always redact it.
+            if (event.exception && event.exception.values) {
+                event.exception.values = event.exception.values.map((error) => {
+                    if (error.value) {
+                        error.value = redactSensitiveString(error.value);
+                    }
+
+                    return error;
+                });
+            }
+
+            // This should help provide more context for Promise rejections that throw an Event object instead of an Error object.
+            if (hint && hint.originalException instanceof Event) {
+                event.extra = event.extra || {};
+                event.extra.originalEvent = {
+                    type: hint.originalException.type,
+                    target: String(hint.originalException.target),
+                };
+            }
+
+            // `extra` is free-form and is never enumerated above, yet it carries raw strings
+            // (e.g. Drive's `extra.logMessage`, which is the verbatim log line whose copy in
+            // `event.exception` we do redact). Run last so additions above are covered too.
+            if (event.extra) {
+                redactSensitiveContainer(event.extra);
+            }
+
+            return event;
+        },
+        // Some ignoreErrors and denyUrls are taken from this gist: https://gist.github.com/Chocksy/e9b2cdd4afc2aadc7989762c4b8b495a
+        // This gist is suggested in the Sentry documentation: https://docs.sentry.io/clients/javascript/tips/#decluttering-sentry
+        ignoreErrors,
+        denyUrls,
+    });
+
+    configureScope((scope) => {
+        scope.setTag('appVersion', APP_VERSION);
+    });
+}
+
+export const setSentryTags = (tags: Record<string, any>) => {
+    configureScope((scope) => {
+        for (const [tagName, value] of Object.entries(tags)) {
+            scope.setTag(tagName, value);
+        }
+    });
+};
+
+export const traceError = (...args: Parameters<typeof captureException>) => {
+    if (!isLocalhost(self.location.host)) {
+        captureException(...args);
+        Availability.mark(AvailabilityTypes.SENTRY);
+    }
+};
+
+export const addSentryBreadcrumb = (breadcrumb: Breadcrumb): void => {
+    if (typeof self === 'undefined' || isLocalhost(self.location.host)) {
+        return;
+    }
+    addBreadcrumb(breadcrumb);
+};
+
+export const captureMessage = (...args: Parameters<typeof sentryCaptureMessage>) => {
+    if (!isLocalhost(self.location.host)) {
+        sentryCaptureMessage(...args);
+    }
+};
+
+export const getSentryError = (error: any): any => {
+    if (error instanceof ApiError) {
+        const { message, code } = getApiError(error);
+        return message && code >= 400 && code < 500 ? message : null;
+    }
+    if (
+        !error ||
+        error.ignore ||
+        getIsConnectionIssue(error) ||
+        error.message === 'Failed to fetch' ||
+        error.message === 'Load failed' ||
+        error.message === 'Operation aborted' ||
+        error.name === 'AbortError'
+    ) {
+        return;
+    }
+    return error;
+};
+
+export enum SentryMailInitiatives {
+    ASSISTANT = 'assistant',
+    ATTACHMENT_ENCRYPTION_ERROR = 'attachment-encryption-error',
+    ATTACHMENT_UPLOAD_ERROR = 'attachment-upload-error',
+    COMPOSER = 'composer',
+    DRAWER_SECURITY_CENTER = 'drawer-security-center',
+    DRAWER_VPN = 'drawer-vpn',
+    LIST_ACTIONS_TELEMETRY = 'list-actions-telemetry',
+    MAIL_ONBOARDING = 'mail-onboarding',
+    MAIL_REDUX_ERRORS = 'mail-redux-errors',
+    MIGRATION_TOOL = 'migration-tool',
+    MOVE_ACTIONS = 'move-actions',
+    REMOVE_EMAIL_TRACKERS = 'remove-email-trackers',
+    UPSELL_MODALS = 'upsell-modals',
+    CATEGORIES_VIEW = 'categories-view',
+    LOGGER = 'mail-logger',
+}
+
+export enum SentryCommonInitiatives {
+    POST_SUBSCRIPTION = 'post-subscription',
+    ENCRYPTED_SEARCH = 'encrypted-search',
+    CONTACT_IMPORT = 'contact-import',
+    EVENT_NOTIFIER = 'event-notifier',
+}
+
+export enum SentryCalendarInitiatives {
+    RSVP_NOTE = 'rsvp-note',
+    BOOKINGS = 'bookings',
+}
+
+export enum SentryRealtimeInitiatives {
+    SDK_SWITCH = 'realtime-sdk-switch',
+}
+
+export type SentryInitiative =
+    | `${SentryMailInitiatives}`
+    | `${SentryCommonInitiatives}`
+    | `${SentryCalendarInitiatives}`
+    | `${SentryRealtimeInitiatives}`;
+
+type CaptureExceptionArgs = Parameters<typeof captureException>;
+
+type InitiativeContext = {
+    tags?: Record<string, string>;
+    extra?: Record<string, unknown>;
+    level?: SeverityLevel;
+    fingerprint?: string[];
+};
+
+/**
+ * Capture error with an additional initiative tag
+ */
+export const traceInitiativeError = (
+    initiative: SentryInitiative,
+    error: CaptureExceptionArgs[0],
+    context?: InitiativeContext
+) => {
+    if (!isLocalhost(self.location.host)) {
+        captureException(error, {
+            ...context,
+            tags: {
+                ...context?.tags,
+                initiative,
+            },
+        });
+    }
+};
+
+/**
+ * Capture message with an additional initiative tag
+ */
+export const captureInitiativeMessage = (
+    initiative: SentryInitiative,
+    message: string,
+    context?: InitiativeContext
+) => {
+    captureMessage(message, {
+        ...context,
+        tags: {
+            ...context?.tags,
+            initiative,
+        },
+    });
+};
+
+export default main;

@@ -1,0 +1,37 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import isTruthy from '@proton/utils/isTruthy';
+
+import { isActive, isTrashed } from '../../lib/items/item.predicates';
+import type { AliasMailbox } from '../../types/data/alias';
+import type { ItemRevision } from '../../types/data/items';
+import type { Maybe } from '../../types/utils';
+import { prop } from '../../utils/fp/lens';
+import { deobfuscate } from '../../utils/obfuscate/xor';
+import type { AliasDetailsState } from '../reducers';
+import type { State } from '../types';
+import { selectVisibleAliasItems, selectVisibleLoginItems } from './items';
+
+const selectAliasState = ({ alias }: State) => alias;
+export const selectAliasOptions = ({ alias }: State) => alias.aliasOptions;
+export const selectAliasMailboxes = ({ alias }: State) => alias.mailboxes;
+
+export const selectAliasDetails = (aliasEmail: string) =>
+    createSelector([selectAliasState], (alias): Maybe<AliasDetailsState> => alias.aliasDetails?.[aliasEmail]);
+
+export const selectMailboxesForAlias = (aliasEmail: string) =>
+    createSelector([selectAliasState], (alias): Maybe<AliasMailbox[]> => alias.aliasDetails?.[aliasEmail]?.mailboxes);
+
+export const selectAliasByAliasEmail = (aliasEmail: string) =>
+    createSelector([selectVisibleAliasItems], (aliasItems): Maybe<ItemRevision<'alias'>> =>
+        aliasItems.find((item) => item.aliasEmail! === aliasEmail)
+    );
+
+export const selectCanManageAlias = ({ user: { plan } }: State) => Boolean(plan?.ManageAlias);
+export const selectTrashedAliasCount = createSelector(selectVisibleAliasItems, (items) => items.filter(isTrashed).length);
+
+/** Filters out all login items which were created from an alias item */
+export const selectNonAliasedLoginItems = createSelector([selectVisibleLoginItems, selectVisibleAliasItems], (logins, aliases) => {
+    const aliasEmails = new Set<string>(aliases.map(prop('aliasEmail')).filter(isTruthy));
+    return logins.filter((item) => isActive(item) && !aliasEmails.has(deobfuscate(item.data.content.itemEmail)));
+});

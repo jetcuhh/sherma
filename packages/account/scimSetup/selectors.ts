@@ -1,0 +1,102 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import { EntitlementName } from '@proton/payments/core/entitlements/entitlement-names';
+import { getTotalEntitlementQuantity } from '@proton/payments/core/entitlements/helpers';
+import { GROUP_MEMBER_STATE } from '@proton/shared/lib/interfaces/GroupMember';
+import type { GroupMember } from '@proton/shared/lib/interfaces/GroupMember';
+import type { EnhancedMember } from '@proton/shared/lib/interfaces/Member';
+import { getIsMemberSetup } from '@proton/shared/lib/keys/memberHelper';
+
+import { selectEntitlements } from '../entitlements';
+import { selectGroupMembers } from '../groupMembers';
+import { selectGroups } from '../groups';
+import { getIsScimGroup, getIsScimGroupPendingKeys } from '../groups/groupFlags';
+import { selectMembers } from '../members';
+import { selectJoinedUnprivatizationState } from '../members/unprivatizeMembers';
+import { selectOrganization } from '../organization';
+import hasKeylessSsoEntitlement from './hasKeylessSsoEntitlement';
+
+/**
+ * Orgs on a plan with the keyless-sso entitlement don't need group keys, so nothing about a
+ * SCIM sync ever needs admin approval.
+ */
+export const selectIsKeylessSsoOrganizationPlan = createSelector(selectOrganization, (organizationState) =>
+    hasKeylessSsoEntitlement(organizationState.value?.PlanName)
+);
+
+/** Members awaiting manual approval (unprivatization). */
+export const selectPendingScimUsers = createSelector(selectJoinedUnprivatizationState, (joinedState) =>
+    joinedState.approval.map(({ member }) => member)
+);
+
+/** Pending-keys group members keyed by group ID. */
+export const selectPendingScimMembersByGroup = createSelector(
+    selectGroups,
+    selectGroupMembers,
+    selectMembers,
+    (groupsState, groupMembersState, membersState) => {
+        const addressToMemberMap: Record<string, EnhancedMember | undefined> = {};
+        for (const member of membersState.value ?? []) {
+            for (const address of member.Addresses ?? []) {
+                addressToMemberMap[address.ID] = member;
+            }
+        }
+
+        const pendingMembersByGroup: Record<string, GroupMember[]> = {};
+        for (const group of groupsState.value ?? []) {
+            const groupMembers = groupMembersState[group.ID]?.value;
+            if (groupMembers) {
+                pendingMembersByGroup[group.ID] = Object.values(groupMembers).filter((m) => {
+                    if (m.State !== GROUP_MEMBER_STATE.PENDING_KEYS) {
+                        return false;
+                    }
+
+                    return getIsMemberSetup(m.AddressID ? addressToMemberMap[m.AddressID] : undefined);
+                });
+            }
+        }
+        return pendingMembersByGroup;
+    }
+);
+
+/**
+ * Members who still hold the organization key although no assigned role grants access to it, e.g.
+ * after a SCIM sync removed them from their last admin group. Only known once member roles are loaded.
+ * Excludes the current user, as the API never demotes the admin who approves the clean-up, and members
+ * whose demotion is already scheduled, as nothing is left to approve for them.
+ */
+export const selectMembersRequiringOrgKeyDemotion = createSelector(selectMembers, (membersState) =>
+    (membersState.value ?? []).filter(
+        (member) => member.requiresOrgKeyDemotion && !member.hasScheduledOrgKeyDemotion && !member.Self
+    )
+);
+
+/**
+ * Groups that need finalizing during SCIM setup: newly synced groups still missing keys, plus
+ * existing SCIM groups that have keys but gained pending-keys members.
+ */
+export const selectPendingScimGroups = createSelector(
+    selectIsKeylessSsoOrganizationPlan,
+    selectGroups,
+    selectPendingScimMembersByGroup,
+    selectEntitlements,
+    (isKeylessSsoOrganizationPlan, groupsState, pendingMembersByGroup, entitlementsState) => {
+        // Orgs on plans with the keyless-sso entitlement must not see or approve pending SCIM groups.
+        if (isKeylessSsoOrganizationPlan) {
+            return [];
+        }
+
+        // Same for orgs whose plan doesn't grant the groups entitlement, and while entitlements load.
+        if (!entitlementsState.value || !getTotalEntitlementQuantity(entitlementsState.value, EntitlementName.Groups)) {
+            return [];
+        }
+
+        const groups = groupsState.value ?? [];
+        const newGroups = groups.filter(getIsScimGroupPendingKeys);
+        const updatedGroups = groups.filter(
+            (group) =>
+                getIsScimGroup(group) && group.Address.HasKeys && (pendingMembersByGroup[group.ID]?.length ?? 0) > 0
+        );
+        return [...newGroups, ...updatedGroups];
+    }
+);

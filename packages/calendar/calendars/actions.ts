@@ -1,0 +1,74 @@
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+
+import type { AddressesState } from '@proton/account/addresses';
+import { addressesThunk } from '@proton/account/addresses';
+import type { OrganizationState } from '@proton/account/organization';
+import { organizationActions } from '@proton/account/organization';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { updateMember } from '@proton/shared/lib/api/calendars';
+import { updateOrganizationSettings } from '@proton/shared/lib/api/organization';
+import { CALENDAR_DISPLAY } from '@proton/shared/lib/calendar/constants';
+import { getMemberAndAddress } from '@proton/shared/lib/calendar/members';
+import type { OrganizationSettingsBooleanProperties } from '@proton/shared/lib/interfaces/Organization';
+
+import { type CalendarsState, calendarsActions, calendarsThunk } from './index';
+
+export const changeCalendarVisiblity = ({
+    calendarID,
+    display,
+}: {
+    calendarID: string;
+    display: boolean;
+}): ThunkAction<Promise<void>, CalendarsState & AddressesState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch, _, extra) => {
+        const [calendars, addresses] = await Promise.all([dispatch(calendarsThunk()), dispatch(addressesThunk())]);
+        const members = calendars.find(({ ID }) => ID === calendarID)?.Members || [];
+        const [{ ID: memberID }] = getMemberAndAddress(addresses, members);
+
+        dispatch(calendarsActions.updateCalendarVisibility({ calendarID, memberID, display }));
+
+        try {
+            extra.eventManager.stop();
+            await extra.api(
+                updateMember(calendarID, memberID, {
+                    Display: display ? CALENDAR_DISPLAY.VISIBLE : CALENDAR_DISPLAY.HIDDEN,
+                })
+            );
+        } catch (error) {
+            dispatch(calendarsActions.updateCalendarVisibility({ calendarID, memberID, display: !display }));
+        } finally {
+            extra.eventManager.start();
+        }
+    };
+};
+
+export const toggleOrganizationSetting = ({
+    checked,
+    settingName,
+}: {
+    checked: boolean;
+    settingName: OrganizationSettingsBooleanProperties;
+}): ThunkAction<Promise<void>, OrganizationState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch, _, extra) => {
+        try {
+            extra.eventManager.stop();
+            dispatch(
+                organizationActions.updateOrganizationSettings({
+                    value: { [settingName]: checked },
+                })
+            );
+
+            await extra.api(updateOrganizationSettings({ [settingName]: checked }));
+        } catch (error) {
+            // If the user doesn't fill password or the query fails, we rollback the state
+            dispatch(
+                organizationActions.updateOrganizationSettings({
+                    value: { [settingName]: !checked },
+                })
+            );
+            throw new Error();
+        } finally {
+            extra.eventManager.start();
+        }
+    };
+};

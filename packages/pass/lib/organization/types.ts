@@ -1,0 +1,33 @@
+import type {
+    OrgMemberVaultItemReport,
+    OrganizationUrlPauseEntryValues,
+    UserMonitorReport,
+} from '../../types/api/pass';
+import type { MaybeNull } from '../../types/utils';
+
+export type OrganizationReportDTO = { page?: number; pageSize?: number };
+
+export type MonitorReport = Partial<UserMonitorReport> & {
+    primaryEmail: string;
+    emailBreachCount: number;
+};
+
+export type UsageReport = OrgMemberVaultItemReport & {
+    primaryEmail: string;
+    lastActivityTime?: MaybeNull<number>;
+};
+
+export type PauseListEntryAddDTO = {
+    url: string;
+    values: OrganizationUrlPauseEntryValues;
+};
+
+export type PauseListEntryUpdateDTO = {
+    id: string;
+    values: OrganizationUrlPauseEntryValues;
+};
+
+export type PauseListEntryDeleteDTO = {
+    id: string;
+    url: string;
+};

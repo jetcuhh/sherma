@@ -1,0 +1,146 @@
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { Input } from '@proton/atoms/Input/Input';
+import { IcCross } from '@proton/icons/icons/IcCross';
+import { IcMagnifier } from '@proton/icons/icons/IcMagnifier';
+
+import { useItemFilters } from '../../../hooks/items/useItemFilters';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useSearchShortcut } from '../../../hooks/useSearchShortcut';
+import { selectFolder } from '../../../store/selectors/folders';
+import { selectShare } from '../../../store/selectors/shares';
+import type { ShareType } from '../../../types/data/shares';
+import { TelemetryEventName } from '../../../types/data/telemetry';
+import type { MaybeNull } from '../../../types/utils';
+import { isEmptyString } from '../../../utils/string/is-empty-string';
+import { usePassCore } from '../../Core/PassCoreProvider';
+import { useNavigationFilters } from '../../Navigation/NavigationFilters';
+import { useItemScope } from '../../Navigation/NavigationMatches';
+
+import './SearchBar.scss';
+
+type Props = {
+    disabled?: boolean;
+    trash?: boolean;
+};
+
+const SEARCH_DEBOUNCE_TIME = 75;
+
+export const SearchBar = memo(({ disabled, trash }: Props) => {
+    const { onTelemetry } = usePassCore();
+    const scope = useItemScope();
+    const { filters, setFilters } = useNavigationFilters();
+    const itemTypeOptions = useItemFilters();
+
+    /** Keep reference for telemetry purposes */
+    const initial = useRef<MaybeNull<string>>(filters.search);
+
+    const [search, setSearch] = useState<string>(filters.search ?? '');
+    const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_TIME);
+
+    const inputRef = useRef<HTMLInputElement>(null);
+    const { selectedShareId, selectedFolderId, type = '*' } = filters;
+
+    const vault = useSelector(selectShare<ShareType.Vault>(selectedShareId));
+    const folder = useSelector(selectFolder(selectedShareId, selectedFolderId));
+
+    const placeholder = useMemo(() => {
+        if (trash) return c('Placeholder').t`Search in Trash`;
+
+        const pluralItemType = itemTypeOptions[type]?.label.toLowerCase();
+
+        const vaultName = (() => {
+            switch (scope) {
+                case 'trash':
+                    return c('Label').t`Trash`;
+                case 'secure-links':
+                    return c('Action').t`Secure links`;
+                case 'shared-by-me':
+                    return c('Label').t`Shared by me`;
+                case 'shared-with-me':
+                    return c('Label').t`Shared with me`;
+                default: {
+                    const vaultName = vault?.content.name.trim();
+                    return vaultName && folder ? `${vaultName} > ${folder.name}` : vaultName;
+                }
+            }
+        })();
+
+        switch (type) {
+            case '*':
+                return vaultName ? c('Placeholder').t`Search in ${vaultName}` : c('Placeholder').t`Search in all items`;
+            default: {
+                // translator: ${pluralItemType} can be either "logins", "notes", "aliases", or "cards". Full sentence example: "Search notes in all vaults"
+                return vaultName
+                    ? c('Placeholder').t`Search ${pluralItemType} in ${vaultName}`
+                    : c('Placeholder').t`Search ${pluralItemType} in all items`;
+            }
+        }
+    }, [vault, folder, type, scope, trash]);
+
+    const handleClear = () => {
+        setSearch('');
+        setFilters({ search: '' });
+        inputRef.current?.focus();
+    };
+
+    const handleFocus = () => inputRef.current?.select();
+
+    const handleBlur = () => {
+        if (isEmptyString(search)) return;
+        if (search !== initial.current) {
+            initial.current = null;
+            void onTelemetry(TelemetryEventName.SearchTriggered, {}, {});
+        }
+    };
+
+    useSearchShortcut(handleFocus);
+
+    useEffect(handleFocus, []);
+    useEffect(() => setFilters({ search: debouncedSearch }), [debouncedSearch]);
+
+    useEffect(() => {
+        /** Edge-case: reset internal search state
+         * if `filters.search` was cleared */
+        if (filters.search === '') setSearch('');
+    }, [filters.search]);
+
+    return (
+        <Input
+            autoFocus
+            className="pass-searchbar"
+            inputClassName="text-rg text-ellipsis"
+            disabled={disabled}
+            onBlur={handleBlur}
+            onFocus={handleFocus}
+            onValue={setSearch}
+            placeholder={`${placeholder}…`}
+            title={`${placeholder}…`}
+            prefix={<IcMagnifier />}
+            ref={inputRef}
+            suffix={
+                search !== '' && (
+                    <Button
+                        shape="ghost"
+                        size="small"
+                        color="weak"
+                        icon
+                        pill
+                        onClick={handleClear}
+                        title={c('Action').t`Clear search`}
+                    >
+                        <IcCross alt={c('Action').t`Clear search`} />
+                    </Button>
+                )
+            }
+            value={search}
+            name="search"
+        />
+    );
+});
+
+SearchBar.displayName = 'SearchBarMemo';

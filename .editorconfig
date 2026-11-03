@@ -1,0 +1,25 @@
+# http://editorconfig.org
+root = true
+
+[*]
+indent_size = 4
+indent_style = space
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.scss]
+indent_size = 2
+indent_style = tab
+
+[tests/mail-renderer/public/**]
+trim_trailing_whitespace = false
+insert_final_newline = unset
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+charset = unset

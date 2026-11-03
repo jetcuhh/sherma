@@ -1,0 +1,150 @@
+import { c } from 'ttag';
+
+import { binaryStringToUint8Array, uint8ArrayToBinaryString } from '@proton/shared/lib/helpers/encoding';
+import noop from '@proton/utils/noop';
+
+import { PassEncryptionTag } from '../../../../types/crypto/pass-types';
+import { logger } from '../../../../utils/logger';
+import { deobfuscate } from '../../../../utils/obfuscate/xor';
+import { zeroize } from '../../../../utils/object/zero';
+import { getEpoch } from '../../../../utils/time/epoch';
+import { generateOfflineComponents, getOfflineKeyDerivation } from '../../../cache/crypto';
+import { decryptData, importSymmetricKey } from '../../../crypto/utils/crypto-helpers';
+import { PassCryptoError } from '../../../crypto/utils/errors';
+import { loadCoreCryptoWorker } from '../../../crypto/utils/worker';
+import type { AuthService } from '../../service';
+import { getInvalidPasswordString } from '../../utils';
+import type { LockAdapterPassword } from '../types';
+import { LockMode } from '../types';
+
+/** Password locking involves the offline configuration. As such,
+ * we can only password lock if we have a valid offline config in
+ * order to be able to verify the user password locally without an
+ * SRP flow. Booting offline should rely on this lock adapter */
+export const passwordLockAdapterFactory = (auth: AuthService): LockAdapterPassword => {
+    const { authStore, api } = auth.config;
+
+    const adapter: LockAdapterPassword = {
+        type: LockMode.PASSWORD,
+
+        check: async () => {
+            logger.info(`[PasswordLock] checking password lock`);
+            if (!authStore.hasOfflineComponents()) return { mode: LockMode.NONE, locked: false };
+            return { mode: adapter.type, locked: false, ttl: authStore.getLockTTL() };
+        },
+
+        /** Creating a password lock should first verify the user password
+         * with SRP. Only then should we compute the offline components.
+         * Repersists the session with the `offlineKD` encrypted in the session
+         * blob. As such creating a password lock is online-only. */
+        create: async (passwordBuff, ttl, onBeforeCreate) => {
+            logger.info(`[PasswordLock] creating password lock`);
+            const password = deobfuscate(passwordBuff, { zeroize: true });
+            const verified = await auth.confirmPassword(password);
+
+            if (!verified) throw new Error(getInvalidPasswordString(authStore));
+            await onBeforeCreate?.();
+
+            if (!authStore.hasOfflinePassword()) {
+                const components = await generateOfflineComponents(password);
+                authStore.setOfflineComponents(components);
+            }
+
+            authStore.setLockMode(adapter.type);
+            authStore.setLockTTL(ttl);
+            authStore.setLockLastExtendTime(getEpoch());
+            authStore.setUnlockRetryCount(0);
+
+            await auth.persistSession().catch(noop);
+
+            return { mode: adapter.type, locked: false, ttl };
+        },
+
+        /** Resets every auth store properties relative to offline
+         * mode and re-persists the session accordingly */
+        delete: async () => {
+            logger.info(`[PasswordLock] deleting password lock`);
+            authStore.setLockLastExtendTime(undefined);
+            authStore.setLockTTL(undefined);
+            authStore.setLockMode(LockMode.NONE);
+            authStore.setLocked(false);
+            authStore.setUnlockRetryCount(0);
+
+            await auth.persistSession().catch(noop);
+
+            return { mode: LockMode.NONE, locked: false };
+        },
+
+        /** Password locking should reset the in-memory `OfflineKD`.
+         * Remove the session lock token as well preeventively in case
+         * a user ends up in a situation with both a password and an
+         * API lock - this should not happen */
+        lock: async () => {
+            logger.info(`[PasswordLock] locking session`);
+            authStore.setOfflineKD(undefined);
+            authStore.setLockToken(undefined);
+            authStore.setLocked(true);
+
+            return { mode: adapter.type, locked: true };
+        },
+
+        /** Password unlocking involves checking if we can decrypt the
+         * `encryptedCacheKey` with the argon2 derivation of the provided
+         * secret. The `offlineKD` is encrypted in the session blob, as
+         * such, we cannot rely on it for comparison when booting offline.
+         * Load the crypto workers early in case password unlocking
+         * happens before we boot the application state (hydrate.saga) */
+        unlock: async (password) => {
+            const unlockRetryCount = authStore.getUnlockRetryCount() + 1;
+
+            /** API may have been flagged as sessionLocked before
+             * booting offline - as such reset the api state to
+             * avoid failing subsequent requests. */
+            await api.reset();
+
+            try {
+                await loadCoreCryptoWorker();
+
+                const offlineConfig = authStore.getOfflineConfig();
+                const offlineVerifier = authStore.getOfflineVerifier();
+
+                if (!(offlineConfig && offlineVerifier)) throw new PassCryptoError('Invalid password lock');
+
+                const { salt, params } = offlineConfig;
+
+                const secret = deobfuscate(password);
+                zeroize(password);
+                const offlineKD = await getOfflineKeyDerivation(secret, binaryStringToUint8Array(salt), params);
+                const offlineKey = await importSymmetricKey(offlineKD);
+
+                /** this will throw if the derived offlineKD is incorrect */
+                await decryptData(offlineKey, binaryStringToUint8Array(offlineVerifier), PassEncryptionTag.Offline);
+                const hash = uint8ArrayToBinaryString(offlineKD);
+
+                authStore.setOfflineKD(hash);
+                authStore.setLocked(false);
+
+                /** `onSessionPersist` side-effect propagates the unlocked session state.
+                 * In the extension, this is what allows `onResumeStart` to detect a
+                 * valid offline session after a SW reload and re-boot offline. */
+                await auth.syncLock({ unlockRetryCount: 0, lockLastExtendTime: getEpoch() }).catch(noop);
+
+                return hash;
+            } catch (err) {
+                if (err instanceof PassCryptoError) throw err;
+
+                if (unlockRetryCount >= 3) {
+                    await auth.logout({ soft: false, broadcast: true });
+                    throw new Error(c('Warning').t`Too many attempts`);
+                }
+
+                await auth.syncLock({ unlockRetryCount }).catch(noop);
+                await auth.lock(adapter.type, { broadcast: true, soft: true });
+
+                throw new Error(getInvalidPasswordString(authStore));
+            }
+        },
+    };
+
+    return adapter;
+};

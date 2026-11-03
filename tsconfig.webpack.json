@@ -1,0 +1,12 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "target": "esnext",
+        "esModuleInterop": true,
+        "allowJs": true,
+        "types": ["node"]
+    },
+    "ts-node": {
+        "ignore": ["node_modules/(?!@proton)"]
+    }
+}

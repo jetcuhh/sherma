@@ -1,0 +1,94 @@
+import { Router } from 'react-router-dom';
+
+import { render, screen } from '@testing-library/react';
+import { createMemoryHistory } from 'history';
+
+import { generateSimpleCalendar } from '@proton/calendar/testing/builders';
+import createCache from '@proton/shared/lib/helpers/cache';
+
+import { mockUseAuthentication } from '../../../testing/mockUseAuthentication';
+import { CacheProvider } from '../../cache/Provider';
+import ModalsProvider from '../../modals/Provider';
+import type { CalendarsSectionProps } from './CalendarsSection';
+import CalendarsSection from './CalendarsSection';
+
+jest.mock('@proton/account/addresses/hooks', () => ({
+    __esModule: true,
+    default: jest.fn(() => [
+        [
+            {
+                Email: 'test@pm.gg',
+                Status: 1,
+                Receive: 1,
+                Send: 1,
+            },
+        ],
+    ]),
+    useGetAddresses: jest.fn(),
+}));
+jest.mock('../../../hooks/useEventManager', () => () => ({}));
+jest.mock('../../eventManager/calendar/useCalendarsInfoListener', () => ({ useCalendarsInfoListener: () => ({}) }));
+jest.mock('../../eventManager/calendar/CalendarModelEventManagerProvider', () => ({
+    useCalendarModelEventManager: jest.fn(),
+}));
+jest.mock('@proton/app-context/useConfig', () => ({
+    useConfig: () => ({ APP_NAME: 'proton-calendar', APP_VERSION: 'test' }),
+}));
+jest.mock('@proton/account/addresses/hooks', () => ({
+    __esModule: true,
+    default: jest.fn(() => [
+        [
+            {
+                Email: 'test@pm.gg',
+                Status: 1,
+                Receive: 1,
+                Send: 1,
+            },
+        ],
+    ]),
+    useGetAddresses: jest.fn(),
+}));
+
+function renderComponent(props?: Partial<CalendarsSectionProps>) {
+    const defaultProps: CalendarsSectionProps = {
+        addresses: [],
+        calendars: [],
+        children: null,
+        // defaultCalendarID?: string,
+        // loading?: boolean,
+        // onSetDefault?: (id: string) => Promise<void>,
+        onEdit: jest.fn(),
+        onDelete: jest.fn(),
+        // onExport?: (calendar: Calendar) => void,
+    };
+
+    mockUseAuthentication({ mode: '' } as any);
+
+    return (
+        <ModalsProvider>
+            <Router history={createMemoryHistory()}>
+                <CacheProvider cache={createCache()}>
+                    <CalendarsSection {...defaultProps} {...props} />
+                </CacheProvider>
+            </Router>
+        </ModalsProvider>
+    );
+}
+
+describe('CalendarsSection', () => {
+    it('renders properly', () => {
+        render(
+            renderComponent({
+                calendars: [generateSimpleCalendar(1, { name: 'calendar1' })],
+            })
+        );
+
+        expect(screen.getByText('calendar1')).toBeInTheDocument();
+    });
+
+    it('does not render a table when no calendars are provided', () => {
+        render(renderComponent());
+
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    });
+});

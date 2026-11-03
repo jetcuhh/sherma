@@ -1,0 +1,75 @@
+import { useState } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { Href } from '@proton/atoms/Href/Href';
+import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
+import type { User } from '@proton/shared/lib/interfaces/User';
+import { getHasRecoveryMessage } from '@proton/shared/lib/recoveryFile/storage';
+
+import type { PrivateAuthenticationStore } from '../../containers/app/interface';
+import Checkbox from '../input/Checkbox';
+import Label from '../label/Label';
+import type { PromptProps } from '../prompt/Prompt';
+import Prompt from '../prompt/Prompt';
+
+export const shouldShowConfirmSignOutModal = ({
+    user,
+    authentication,
+}: {
+    user: User;
+    authentication: PrivateAuthenticationStore;
+}) => {
+    const hasEnabledDeviceBasedRecovery = authentication.getTrusted();
+
+    return hasEnabledDeviceBasedRecovery || getHasRecoveryMessage(user.ID);
+};
+
+interface Props extends Omit<PromptProps, 'title' | 'buttons' | 'children'> {
+    onSignOut: (clearData: boolean) => void;
+}
+
+const ConfirmSignOutModal = ({ onSignOut, ...rest }: Props) => {
+    const [clearData, setClearData] = useState(false);
+
+    return (
+        <Prompt
+            title={c('Title').t`Sign out`}
+            buttons={[
+                <Button
+                    color="norm"
+                    onClick={() => {
+                        onSignOut(clearData);
+                        rest.onClose?.();
+                    }}
+                >
+                    {c('Action').t`Sign out`}
+                </Button>,
+                <Button onClick={rest.onClose}>{c('Action').t`Cancel`}</Button>,
+            ]}
+            {...rest}
+        >
+            <p className="mt-0">
+                {c('Info').t`Recovery information will remain on this device unless you select to delete it.`}
+            </p>
+
+            <div className="flex flex-row items-start">
+                <Checkbox
+                    id="delete-recovery-storage"
+                    className="mr-2"
+                    checked={clearData}
+                    onChange={() => setClearData(!clearData)}
+                />
+                <div className="flex-1">
+                    <Label htmlFor="delete-recovery-storage" className="block pt-0">
+                        {c('Label').jt`Delete recovery-related information.`}{' '}
+                        <Href href={getKnowledgeBaseUrl('/device-data-recovery')}>{c('Link').t`What’s this?`}</Href>
+                    </Label>
+                </div>
+            </div>
+        </Prompt>
+    );
+};
+
+export default ConfirmSignOutModal;

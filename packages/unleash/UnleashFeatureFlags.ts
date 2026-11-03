@@ -1,0 +1,446 @@
+/**
+ * Feature flag list from Unleash
+ * Format should be FeatureFlagName = 'FeatureFlagName'
+ */
+
+enum AccountB2BFeatureFlag {
+    AccountSettingsUserDisableFE = 'AccountSettingsUserDisableFE',
+    AdminConsoleSurvey = 'AdminConsoleSurvey',
+    AdminRoleMVP = 'AdminRoleMVP',
+    AdminRolesWithMSP = 'AdminRolesWithMSP',
+    DataRetentionPolicy = 'DataRetentionPolicy',
+    MembersRemote = 'MembersRemote',
+    SsoForPbs = 'SsoForPbs',
+    SyncOwnerRoleClientKillSwitch = 'SyncOwnerRoleClientKillSwitch',
+    UserGroupsGroupOwner = 'UserGroupsGroupOwner',
+    UserGroupsScimGroups = 'UserGroupsScimGroups',
+}
+
+enum AccountCryptoFeatureFlag {
+    CryptoPostQuantumOptIn = 'CryptoPostQuantumOptIn',
+    SocialRecoverySklDisabled = 'SocialRecoverySklDisabled',
+}
+
+enum AccountFeatureFlag {
+    DisableSsoBackupPassword = 'DisableSsoBackupPassword',
+    DriveDashboard = 'DriveDashboard',
+    DriveTrialOffer = 'DriveTrialOffer',
+    EduGainSSO = 'EduGainSSO',
+    EnableZenDeskAIAgent = 'EnableZenDeskAIAgent',
+    MailTrialOffer = 'MailTrialOffer',
+    PassAccountNewOnboarding = 'PassAccountNewOnboarding',
+    PassTrialOffer = 'PassTrialOffer',
+    ShowLiteAppCheckoutV2 = 'ShowLiteAppCheckoutV2',
+    ShowSignInRestrictionToggle = 'ShowSignInRestrictionToggle',
+    SpacesAvailable = 'SpacesAvailable',
+    VisionarySignup = 'VisionarySignup',
+    VPNDashboard = 'VPNDashboard',
+    VPNReferralWithoutTrial = 'VPNReferralWithoutTrial',
+}
+
+enum AccountMSAFeatureFlag {
+    B2BDarkWebMonitoring = 'B2BDarkWebMonitoring',
+    B2BNonPrivateEmailPhone = 'B2BNonPrivateEmailPhone',
+    MSPStorageOptionEnabled = 'MSPStorageOptionEnabled',
+}
+
+enum AccountVPNFeatureFlag {
+    B2BAlwaysOnWindowsRelease = 'B2BAlwaysOnWindowsRelease',
+    VpnB2bUserActivity = 'VpnB2bUserActivity',
+    VpnOrganizationLogRelayGatewayCreationMultiIp = 'VpnOrganizationLogRelayGatewayCreationMultiIp',
+    VpnOrganizationLogRelayGatewayUpdateMultiIp = 'VpnOrganizationLogRelayGatewayUpdateMultiIp',
+    B2BGatewayChartViewEnabled = 'B2BGatewayChartViewEnabled',
+}
+
+type AccountProjectFeatureFlag =
+    | `${AccountB2BFeatureFlag}`
+    | `${AccountCryptoFeatureFlag}`
+    | `${AccountFeatureFlag}`
+    | `${AccountMSAFeatureFlag}`
+    | `${AccountVPNFeatureFlag}`;
+
+enum ActivationFeatureFlag {
+    MaintenanceImporter = 'MaintenanceImporter',
+    CanClaimExternalAddress = 'CanClaimExternalAddress',
+}
+
+enum AdminFeatureFlag {
+    MLInsiderThreatAPIReportOnly = 'MLInsiderThreatAPIReportOnly',
+    SplitLookup = 'SplitLookup',
+    UserSecurityModal = 'UserSecurityModal',
+}
+
+export enum CalendarFeatureFlag {
+    CalendarEventsPrefetch = 'CalendarEventsPrefetch',
+    CalendarMetrics = 'CalendarMetrics',
+    EditSingleOccurrenceWeb = 'EditSingleOccurrenceWeb',
+    NGCWebAccess = 'NGCWebAccess',
+    RsvpCommentWeb = 'RsvpCommentWeb',
+}
+
+export enum CalendarKillSwitchFlag {
+    CalendarBookingsDisabled = 'CalendarBookingsDisabled',
+    CalendarExternalBookingsDisabled = 'CalendarExternalBookingsDisabled',
+    ZoomIntegrationDisabled = 'ZoomIntegrationDisabled',
+}
+
+export enum CommonFeatureFlag {
+    AlwaysOnUpsell = 'AlwaysOnUpsell',
+    AuthenticatorSettingsEnabled = 'AuthenticatorSettingsEnabled',
+    AutoAddMeetingLink = 'AutoAddMeetingLink',
+    AvatarColorWeb = 'AvatarColorWeb',
+    B2BAlwaysOnEnabled = 'B2BAlwaysOnEnabled',
+    B2BOnboarding = 'B2BOnboarding',
+    B2BSidebarRefreshEnabled = 'B2BSidebarRefreshEnabled',
+    BreachAlertsNotificationsCommon = 'BreachAlertsNotificationsCommon',
+    CalendarBusyTimeSlots = 'CalendarBusyTimeSlots',
+    CentralisedOffersDelivery = 'CentralisedOffersDelivery',
+    CollectLogs = 'CollectLogs',
+    ColorPerEventWeb = 'ColorPerEventWeb',
+    CreateInboxBringYourOwnEmailDisabled = 'CreateInboxBringYourOwnEmailDisabled',
+    CryptoDisableUndecryptableKeys = 'CryptoDisableUndecryptableKeys',
+    DarkWebEmailNotifications = 'DarkWebEmailNotifications',
+    DesktopDownloadApiEnabled = 'DesktopDownloadApiEnabled',
+    DisableElectronMail = 'DisableElectronMail',
+    DisablePostSubscriptionB2BOnboarding = 'DisablePostSubscriptionB2BOnboarding',
+    EasySwitchB2CForDriveWeb = 'EasySwitchB2CForDriveWeb',
+    EasySwitchB2CForDriveWebNewUI = 'EasySwitchB2CForDriveWebNewUI',
+    EasySwitchB2CForDriveWebSidebarRollout = 'EasySwitchB2CForDriveWebSidebarRollout',
+    EasySwitchOutlookSelectAccountDisabled = 'EasySwitchOutlookSelectAccountDisabled',
+    EventLoopInterval = 'EventLoopInterval',
+    ForceReload = 'ForceReload',
+    GoUnlimitedOffer2025 = 'GoUnlimitedOffer2025',
+    InboxBringYourOwnEmail = 'InboxBringYourOwnEmail',
+    InboxBringYourOwnEmailClient = 'InboxBringYourOwnEmailClient',
+    InboxBringYourOwnEmailImportPeriod = 'InboxBringYourOwnEmailImportPeriod',
+    InboxBringYourOwnEmailImportPeriodExperiment = 'InboxBringYourOwnEmailImportPeriodExperiment',
+    InboxBringYourOwnEmailSignup = 'InboxBringYourOwnEmailSignup',
+    // INDA-782: Remove this
+    InboxDesktopAppSessionCacheDisabled = 'InboxDesktopAppSessionCacheDisabled',
+    InboxDesktopDefaultEmailSetupHelperDisabled = 'InboxDesktopDefaultEmailSetupHelperDisabled',
+    InboxDesktopDefaultEmailSetupHelperDisabledV2 = 'InboxDesktopDefaultEmailSetupHelperDisabledV2',
+    InboxDesktopInAppPayments = 'InboxDesktopInAppPayments',
+    InboxDesktopMacSigningMigrationBanner = 'InboxDesktopMacSigningMigrationBanner',
+    InboxDesktopManualUpdateBannerDisabled = 'InboxDesktopManualUpdateBannerDisabled',
+    InboxWebPostSubscriptionFlow = 'InboxWebPostSubscriptionFlow',
+    KeyTransparencyLogOnly = 'KeyTransparencyLogOnly',
+    KeyTransparencyShowUI = 'KeyTransparencyShowUI',
+    LogWasmLoadingDisabled = 'LogWasmLoadingDisabled',
+    LumoDeactivateGuestModeFrontend = 'LumoDeactivateGuestModeFrontend',
+    LumoEarlyAccess = 'LumoEarlyAccess',
+    LumoHighLoad = 'LumoHighLoad',
+    LumoSignInHelp = 'LumoSignInHelp',
+    LumoSmoothedRendering = 'LumoSmoothedRendering',
+    LumoTooling = 'LumoTooling',
+    MailPostSignupZeroNinetyNinePromo = 'MailPostSignupZeroNinetyNinePromo',
+    MaxContactsImport = 'MaxContactsImport',
+    MeetSpotlightType = 'MeetSpotlightType',
+    NewCancellationFlowUpsell = 'NewCancellationFlowUpsell',
+    NewScheduleOption = 'NewScheduleOption',
+    Oles365 = 'Oles365',
+    OrganizationLevelEasySwitch = 'OrganizationLevelEasySwitch',
+    PassNewOnboarding = 'PassNewOnboarding',
+    PassSimpleLoginLifetimeOffer = 'PassSimpleLoginLifetimeOffer',
+    PingOMatic = 'PingOMatic',
+    ReferralExpansionDiscover = 'ReferralExpansionDiscover',
+    ReferralFreeUsersDiscover = 'ReferralFreeUsersDiscover',
+    ScribeAdminSetting = 'ScribeAdminSetting',
+    SelfTroubleshoot = 'SelfTroubleshoot',
+    // Monthly subscriber nudge kill switches (default off; enable to hide the nudge)
+    SubscriberNudgeBundleMonthlyDisabled = 'SubscriberNudgeBundleMonthlyDisabled',
+    SubscriberNudgeDriveMonthlyDisabled = 'SubscriberNudgeDriveMonthlyDisabled',
+    SubscriberNudgeMailMonthlyDisabled = 'SubscriberNudgeMailMonthlyDisabled',
+    UnlimitedToDuoPermanentOffer = 'UnlimitedToDuoPermanentOffer',
+    UnlimitedToDuoDiscountedOffer = 'UnlimitedToDuoDiscountedOffer',
+    VPNDrawer = 'VPNDrawer',
+    WalletAztecoWeb = 'WalletAztecoWeb',
+    WalletFullSync = 'WalletFullSync',
+    WebApiRateLimiter = 'WebApiRateLimiter',
+    WebNPSModal = 'WebNPSModal',
+}
+
+enum DocsFeatureFlag {
+    // General
+    DocsDarkTheme = 'DocsDarkTheme',
+    DocsEmojiPicker = 'DocsEmojiPicker',
+    DocsGatePrivateInviteAccess = 'DocsGatePrivateInviteAccess',
+    DocsHomepageBulkMove = 'DocsHomepageBulkMove',
+    DocsHomepageBulkTrash = 'DocsHomepageBulkTrash',
+    DocsODTEnabled = 'DocsODTEnabled',
+    DocsOpenTracer = 'DocsOpenTracer',
+    DocsPublicEditing = 'DocsPublicEditing',
+    DownloadLogs = 'DownloadLogs',
+    DriveDocsDisabled = 'DriveDocsDisabled',
+    DriveWebTextFileEdit = 'DriveWebTextFileEdit',
+    // Comments
+    DocsEnableNotificationsOnNewComment = 'DocsEnableNotificationsOnNewComment',
+    // Public sharing
+    DriveDocsPublicSharingDisabled = 'DriveDocsPublicSharingDisabled',
+    // Suggestions
+    DocsSuggestionsDisabled = 'DocsSuggestionsDisabled',
+    // Sheets
+    DocsSheetsDisabled = 'DocsSheetsDisabled',
+    SheetsActionsStorageEnabled = 'SheetsActionsStorageEnabled',
+    SheetsCustomDateTimeFormatEnabled = 'SheetsCustomDateTimeFormatEnabled',
+    SheetsCustomNumberFormatEnabled = 'SheetsCustomNumberFormatEnabled',
+    SheetsDriftDetectionEnabled = 'SheetsDriftDetectionEnabled',
+    SheetsMountAfterInitialLoadDisabled = 'SheetsMountAfterInitialLoadDisabled',
+    SheetsODSExportEnabled = 'SheetsODSExportEnabled',
+    SheetsODSImportEnabled = 'SheetsODSImportEnabled',
+    SheetsPatchesStorageEnabled = 'SheetsPatchesStorageEnabled',
+    SheetsStatusBarEnabled = 'SheetsStatusBarEnabled',
+    SheetsTablesEnabled = 'SheetsTablesEnabled',
+    // Update compression and chunking
+    DocsClientSquashingDisabled = 'DocsClientSquashingDisabled',
+    DocsClientSquashingEnabled = 'DocsClientSquashingEnabled',
+    DocsUpdateChunkingEnabled = 'DocsUpdateChunkingEnabled',
+    DocsUpdateCompressionEnabled = 'DocsUpdateCompressionEnabled',
+    SheetsClientSquashingDisabled = 'SheetsClientSquashingDisabled',
+    SheetsClientSquashingEnabled = 'SheetsClientSquashingEnabled',
+    SheetsUpdateChunkingEnabled = 'SheetsUpdateChunkingEnabled',
+    SheetsUpdateCompressionEnabled = 'SheetsUpdateCompressionEnabled',
+    // SDK Migration
+    DocsDocumentViewerEventsSDK = 'DocsDocumentViewerEventsSDK',
+    DocsDriveCompatSDK = 'DocsDriveCompatSDK',
+    DocsInvitationsDriveSDK = 'DocsInvitationsDriveSDK',
+    DocsLoadRecentsWithDriveSDK = 'DocsLoadRecentsWithDriveSDK',
+    DocsMoveModalDriveSDK = 'DocsMoveModalDriveSDK',
+    DocsTrashWithDriveSDK = 'DocsTrashWithDriveSDK',
+}
+
+enum DriveFeatureFlag {
+    // Kill switches
+    DriveDownloadScanDisabled = 'DriveDownloadScanDisabled',
+    DriveExternalInvitationsDisabled = 'DriveSharingExternalInvitationsDisabled',
+    DrivePublicShareEditModeDisabled = 'DrivePublicShareEditModeDisabled',
+    DriveSharingDisabled = 'DriveSharingDisabled',
+    DriveSharingEditingDisabled = 'DriveSharingEditingDisabled',
+    // Rollouts
+    DriveWebRecentlyAccessed = 'DriveWebRecentlyAccessed',
+    DriveWebSearchFoundation = 'DriveWebSearchFoundation',
+    // Offers
+    DriveFreeMinutesUpload = 'DriveFreeMinutesUpload',
+    DriveFreeMinutesUploadDisabled = 'DriveFreeMinutesUploadDisabled',
+    DrivePostSignupOneDollarPromo = 'DrivePostSignupOneDollarPromo',
+    // Promos
+    DriveWebSharePageUpsell = 'DriveWebSharePageUpsell',
+    DriveWebShareURLSignupModal = 'DriveWebShareURLSignupModal',
+    // Others
+    DriveWebEncryptedThumbnailCache = 'DriveWebEncryptedThumbnailCache',
+    DriveWebRecoveryASV = 'DriveWebRecoveryASV',
+    DriveWebReportAbuseDirectShare = 'DriveWebReportAbuseDirectShare',
+    DriveWebSDKMismatchDetection = 'DriveWebSDKMismatchDetection',
+    // SDK rollouts — names should match @protontech/drive-sdk FeatureFlags enum, or have a manual mapping
+    DriveCryptoEncryptBlocksWithPgpAead = 'DriveCryptoEncryptBlocksWithPgpAead',
+    DriveSmallFileUpload = 'DriveSmallFileUpload',
+    // Lumo in Drive
+    DriveWebLumo = 'DriveWebLumo',
+    DriveWebLumoDestructiveActionsDisabled = 'DriveWebLumoDestructiveActionsDisabled',
+}
+
+enum LumoFeatureFlag {
+    LumoAiPaperTrail = 'LumoAiPaperTrail',
+    LumoAiPaperTrailPopup = 'LumoAiPaperTrailPopup',
+    LumoAiPaperTrailRoute = 'LumoAiPaperTrailRoute',
+    LumoAllowPurchasingCredits = 'LumoAllowPurchasingCredits',
+    LumoApertusModel = 'LumoApertusModel',
+    LumoAPIKeyManagement = 'LumoAPIKeyManagement',
+    LumoArtifactSlides = 'LumoArtifactSlides',
+    LumoArtifactsView = 'LumoArtifactsView',
+    LumoArtifactsViewSpotlight = 'LumoArtifactsViewSpotlight',
+    LumoAskUserQuestionsTool = 'LumoAskUserQuestionsTool',
+    LumoCreateScheduleTool = 'LumoCreateScheduleTool',
+    LumoCustomAgents = 'LumoCustomAgents',
+    LumoDarkMode = 'LumoDarkMode',
+    LumoDictationV2 = 'LumoDictationV2',
+    LumoImageTools = 'LumoImageTools',
+    LumoMaxAvailableFree = 'LumoMaxAvailableFree',
+    LumoMaxAvailableGuest = 'LumoMaxAvailableGuest',
+    LumoMeowmory = 'LumoMeowmory',
+    LumoNativeAuthAndroid = 'LumoNativeAuthAndroid',
+    LumoNativeAuthIOS = 'LumoNativeAuthIOS',
+    LumoNativeComposer = 'LumoNativeComposer',
+    LumoNativeComposerImage = 'LumoNativeComposerImage',
+    LumoNativeComposerModelSelection = 'LumoNativeComposerModelSelection',
+    LumoNewMarketingLinks = 'LumoNewMarketingLinks',
+    LumoPreviewModel = 'LumoPreviewModel',
+    LumoProjects = 'LumoProjects',
+    LumoRetrievalTools = 'LumoRetrievalTools',
+    LumoSchedules = 'LumoSchedules',
+    LumoShowNextPromptSuggestions = 'LumoShowNextPromptSuggestions',
+    LumoSmoothedRendering = 'LumoSmoothedRendering',
+    LumoSpecialTheme = 'LumoSpecialTheme',
+    LumoSurveyFreeUsers = 'LumoSurveyFreeUsers',
+    LumoSurveyGuestUsers = 'LumoSurveyGuestUsers',
+    LumoSurveyPaidUsers = 'LumoSurveyPaidUsers',
+    LumoVisualizationInstructions = 'LumoVisualizationInstructions',
+    WhatsNewV1p2 = 'WhatsNewV1p2',
+    WhatsNewV1p3 = 'WhatsNewV1p3',
+    WhatsNewV2 = 'WhatsNewV2',
+}
+
+export enum MailFeatureFlag {
+    ComposerAssistant = 'ComposerAssistant',
+    MailMetrics = 'MailMetrics',
+    MailWebListTelemetry = 'MailWebListTelemetry',
+    PasswordNudge = 'PasswordNudge',
+    PasswordNudgeForPaidUsers = 'PasswordNudgeForPaidUsers',
+    RemoveReplyStyles = 'RemoveReplyStyles',
+    ReplayOnboardingModal = 'ReplayOnboardingModal',
+    // Category view flags, used to control the whole category view
+    CategoryOnboardingDisableCategorize = 'CategoryOnboardingDisableCategorize',
+    CategoryReportUnreadCountDisabled = 'CategoryReportUnreadCountDisabled',
+    CategoryView = 'CategoryView',
+    CategoryViewVariant = 'CategoryViewVariant',
+    UseUserEmbedding = 'UseUserEmbedding',
+    MailStoreDebugMode = 'MailStoreDebugMode',
+    // Attempt to fix the unability to save/send drafts on huge accounts
+    PreventEventLoopCallOnCompose = 'PreventEventLoopCallOnCompose',
+    //ML R&D
+    LumoInMail = 'LumoInMail',
+    LumoInMailStandalonePrompt = 'LumoInMailStandalonePrompt',
+    OneTimePasscode = 'OneTimePasscode',
+    ScribeToLumo = 'ScribeToLumo',
+    // reworked local search using foundation search
+    ContentSearch = 'ContentSearch',
+    // Gates the booking page entry point in the composer footer (moved into the More options menu on small screens)
+    BookingsInComposerEnabled = 'BookingsInComposerEnabled',
+}
+
+enum MailKillSwitchFlag {
+    CategoryViewConversationPrefetchDisabled = 'CategoryViewConversationPrefetchDisabled',
+    ComposerInlineImageReuploadDisabled = 'ComposerInlineImageReuploadDisabled',
+    EncryptedSearchMigrationSystemDisabled = 'EncryptedSearchMigrationSystemDisabled',
+    MailInfitiniteLoopRateLimiterDisabled = 'MailInfitiniteLoopRateLimiterDisabled',
+    MailPostSignupOneDollarPromoDisabled = 'MailPostSignupOneDollarPromoDisabled',
+    RawLinkParsingDisabled = 'RawLinkParsingDisabled',
+    RetryElementsOnReconnectDisabled = 'RetryElementsOnReconnectDisabled',
+}
+
+enum MeetFeatureFlag {
+    EnableAccessibilityAnnouncements = 'EnableAccessibilityAnnouncements',
+    MeetAdaptiveStream = 'MeetAdaptiveStream',
+    MeetAdminLowerHand = 'MeetAdminLowerHand',
+    MeetAllowMLSLogExport = 'MeetAllowMLSLogExport',
+    MeetAllowNewHostAssignment = 'MeetAllowNewHostAssignment',
+    MeetBackgroundEffectsOnMobileBrowsers = 'MeetBackgroundEffectsOnMobileBrowsers',
+    MeetBlurMulticlassPersonConfidenceBoost = 'MeetBlurMulticlassPersonConfidenceBoost',
+    MeetBlurPersonConfidenceBoost = 'MeetBlurPersonConfidenceBoost',
+    MeetChatLumoEmojis = 'MeetChatLumoEmojis',
+    MeetChatMentions = 'MeetChatMentions',
+    MeetChatThreads = 'MeetChatThreads',
+    MeetClientMetricsLog = 'MeetClientMetricsLog',
+    MeetCollectLogsKillSwitch = 'MeetCollectLogsKillSwitch',
+    MeetCoreWorker = 'MeetCoreWorker',
+    MeetCountdownUpsell = 'MeetCountdownUpsell',
+    MeetCpuOptimizations = 'MeetCpuOptimizations',
+    MeetCustomVirtualBackground = 'MeetCustomVirtualBackground',
+    MeetDebugMode = 'MeetDebugMode',
+    MeetDeepFilterNet = 'MeetDeepFilterNet',
+    MeetDeepFilterNetMobile = 'MeetDeepFilterNetMobile',
+    MeetDesktopMacSigningMigrationBanner = 'MeetDesktopMacSigningMigrationBanner',
+    MeetDesktopScreenPickerEnabled = 'MeetDesktopScreenPickerEnabled',
+    MeetDtlnPerfMonitor = 'MeetDtlnPerfMonitor',
+    MeetDynacast = 'MeetDynacast',
+    MeetE2eeDebugStats = 'MeetE2eeDebugStats',
+    MeetE2eeDisableRecovery = 'MeetE2eeDisableRecovery',
+    MeetE2eeRecoveryAggressive = 'MeetE2eeRecoveryAggressive',
+    MeetEarlyAccess = 'MeetEarlyAccess',
+    MeetEarlyAccessPublic = 'MeetEarlyAccessPublic',
+    MeetEnableAudioMixing = 'MeetEnableAudioMixing',
+    MeetEnableScreenShareAudio = 'MeetEnableScreenShareAudio',
+    MeetEnableSpatialAudio = 'MeetEnableSpatialAudio',
+    MeetErrorReporting = 'MeetErrorReporting',
+    MeetFeedbackOnSkip = 'MeetFeedbackOnSkip',
+    MeetFixedAudioContextSampleRate = 'MeetFixedAudioContextSampleRate',
+    MeetForceDisableNoiseCancellationOnEdge = 'MeetForceDisableNoiseCancellationOnEdge',
+    MeetH264 = 'MeetH264',
+    MeetHigherBitrate = 'MeetHigherBitrate',
+    MeetJoinTelemetry = 'MeetJoinTelemetry',
+    MeetLiveCaptions = 'MeetLiveCaptions',
+    MeetMeetingTimeout = 'MeetMeetingTimeout',
+    MeetNewChatHandling = 'MeetNewChatHandling',
+    MeetNewJoinFunctions = 'MeetNewJoinFunctions',
+    MeetOpenLinksInDesktopApp = 'MeetOpenLinksInDesktopApp',
+    MeetOpenMessageFromPreview = 'MeetOpenMessageFromPreview',
+    MeetParticipantsLayouts = 'MeetParticipantsLayouts',
+    MeetPastMeetings = 'MeetPastMeetings',
+    MeetPromptOnTabClose = 'MeetPromptOnTabClose',
+    MeetProtonCalendarDeepLink = 'MeetProtonCalendarDeepLink',
+    MeetQualityTelemetry = 'MeetQualityTelemetry',
+    MeetQualityTelemetryKillSwitch = 'MeetQualityTelemetryKillSwitch',
+    MeetRecordingEncryption = 'MeetRecordingEncryption',
+    MeetRecordingRecoveryUI = 'MeetRecordingRecoveryUI',
+    MeetRecordingShowAllRecordings = 'MeetRecordingShowAllRecordings',
+    MeetRecordingWebCodecs = 'MeetRecordingWebCodecs',
+    MeetRemainingTime = 'MeetRemainingTime',
+    MeetRemoveSentryEventLimit = 'MeetRemoveSentryEventLimit',
+    MeetSaveCaptionLanguagePreference = 'MeetSaveCaptionLanguagePreference',
+    MeetScheduleInAdvance = 'MeetScheduleInAdvance',
+    MeetScreenShareAudioSupportedElectronVersion = 'MeetScreenShareAudioSupportedElectronVersion',
+    MeetSeamlessKeyRotationEnabled = 'MeetSeamlessKeyRotationEnabled',
+    MeetShowMLSLogs = 'MeetShowMLSLogs',
+    MeetShowReloadTrackButton = 'MeetShowReloadTrackButton',
+    MeetShowUpsellModalAfterMeeting = 'MeetShowUpsellModalAfterMeeting',
+    MeetSimulcast = 'MeetSimulcast',
+    MeetSoundNotificationsEnabled = 'MeetSoundNotificationsEnabled',
+    MeetUnblockAudioButton = 'MeetUnblockAudioButton',
+    MeetUpsell = 'MeetUpsell',
+    MeetUseCachedServerTime = 'MeetUseCachedServerTime',
+    MeetVirtualBackground = 'MeetVirtualBackground',
+    MeetVp9 = 'MeetVp9',
+    MeetWaitingRoom = 'MeetWaitingRoom',
+    MeetWaitingRoomJoin = 'MeetWaitingRoomJoin',
+    MeetWebClientDebug = 'MeetWebClientDebug',
+    PersonalMeetingRotation = 'PersonalMeetingRotation',
+    MeetParticipantCountMismatch = 'MeetParticipantCountMismatch',
+    MeetTranscription = 'MeetTranscription',
+    MeetExtendedTelemetry = 'MeetExtendedTelemetry',
+    MeetHandleStalledLiveKitReconnect = 'MeetHandleStalledLiveKitReconnect',
+    MeetJoinLeaveSoundsNotifications = 'MeetJoinLeaveSoundsNotifications',
+    MeetAllowResettingFrozenVideoTracks = 'MeetAllowResettingFrozenVideoTracks',
+}
+
+enum PaymentsFeatureFlag {
+    ApplePayCapabilities = 'ApplePayCapabilities',
+    CheckoutCondensedAddons = 'CheckoutCondensedAddons',
+    DomainVpnBiz2023 = 'DomainVpnBiz2023',
+    EmailForInvoices = 'EmailForInvoices',
+    EmailForInvoicesKillSwitch = 'EmailForInvoicesKillSwitch',
+    EnableIdeal = 'EnableIdeal',
+    NewProtonBusinessBundlePlans = 'NewProtonBusinessBundlePlans',
+    PaymentProcessorsRefactor = 'PaymentProcessorsRefactor',
+    PaypalKrw = 'PaypalKrw',
+    SepaPayments = 'SepaPayments',
+    SepaPaymentsB2C = 'SepaPaymentsB2C',
+    Vpn2024AddonsExperiment = 'Vpn2024AddonsExperiment',
+    Vpn2024SignupExperiment = 'Vpn2024SignupExperiment',
+}
+
+enum VPNFeatureFlag {
+    PurchaseAttributionSurveyEnabled = 'PurchaseAttributionSurveyEnabled',
+}
+
+enum WalletFeatureFlag {
+    ImportPaperWallet = 'ImportPaperWallet',
+    WalletDarkMode = 'WalletDarkMode',
+    WalletExportTransaction = 'WalletExportTransaction',
+    WalletMessageSigner = 'WalletMessageSigner',
+}
+
+export type FeatureFlag =
+    | AccountProjectFeatureFlag
+    | `${ActivationFeatureFlag}`
+    | `${AdminFeatureFlag}`
+    | `${CalendarFeatureFlag}`
+    | `${CalendarKillSwitchFlag}`
+    | `${CommonFeatureFlag}`
+    | `${DocsFeatureFlag}`
+    | `${DriveFeatureFlag}`
+    | `${LumoFeatureFlag}`
+    | `${MailFeatureFlag}`
+    | `${MailKillSwitchFlag}`
+    | `${MeetFeatureFlag}`
+    | `${PaymentsFeatureFlag}`
+    | `${VPNFeatureFlag}`
+    | `${WalletFeatureFlag}`;

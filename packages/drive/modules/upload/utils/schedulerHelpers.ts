@@ -1,0 +1,107 @@
+import { NodeType } from '@protontech/drive-sdk';
+
+import type { QueueEntry } from '../store/uploadQueue.store';
+import type { FileUploadItems, FolderCreationItem, SchedulerLoad, UploadTask } from '../types';
+import { UploadStatus, isPhotosUploadItem } from '../types';
+import { buildItemsById, getFolderDepth, isParentReady } from './dependencyHelpers';
+
+function getReadyFolderTasks(
+    queueItems: QueueEntry[],
+    itemsById: Map<string, QueueEntry>,
+    maxCount: number
+): UploadTask[] {
+    const readyFolders = queueItems
+        .filter((entry): entry is FolderCreationItem => {
+            return (
+                entry.type === NodeType.Folder &&
+                entry.status === UploadStatus.Pending &&
+                isParentReady(entry, itemsById)
+            );
+        })
+        // Sort by depth for parent-first creation
+        .sort((a, b) => {
+            const depthA = getFolderDepth(a, itemsById);
+            const depthB = getFolderDepth(b, itemsById);
+            return depthA - depthB;
+        })
+        .slice(0, maxCount);
+
+    return readyFolders.map((entry) => ({
+        uploadId: entry.uploadId,
+        type: NodeType.Folder,
+        name: entry.name,
+        parentUid: entry.parentUid,
+        batchId: entry.batchId,
+        modificationTime: entry.modificationTime,
+    }));
+}
+
+function getReadyFileTasks(
+    queueItems: QueueEntry[],
+    itemsById: Map<string, QueueEntry>,
+    maxCount: number
+): UploadTask[] {
+    const readyFiles = queueItems
+        .filter((entry): entry is FileUploadItems => {
+            return (
+                (entry.type === NodeType.File || entry.type === NodeType.Photo) &&
+                entry.status === UploadStatus.Pending &&
+                isParentReady(entry, itemsById)
+            );
+        })
+        .slice(0, maxCount);
+
+    return readyFiles.map((entry): UploadTask => {
+        if (isPhotosUploadItem(entry)) {
+            return {
+                uploadId: entry.uploadId,
+                type: NodeType.Photo,
+                name: entry.name,
+                batchId: entry.batchId,
+                file: entry.file,
+                sizeEstimate: entry.clearTextExpectedSize,
+                existingNodeUid: entry.existingNodeUid,
+                isUnfinishedUpload: entry.isUnfinishedUpload,
+                isForPhotos: true,
+                allowEmptyFile: entry.allowEmptyFile,
+            };
+        }
+
+        return {
+            uploadId: entry.uploadId,
+            type: NodeType.File,
+            name: entry.name,
+            parentUid: entry.parentUid,
+            batchId: entry.batchId,
+            file: entry.file,
+            sizeEstimate: entry.clearTextExpectedSize,
+            existingNodeUid: entry.existingNodeUid,
+            isUnfinishedUpload: entry.isUnfinishedUpload,
+            allowEmptyFile: entry.allowEmptyFile,
+        };
+    });
+}
+
+export function getNextTasks(
+    queueItems: QueueEntry[],
+    currentLoad: SchedulerLoad,
+    maxConcurrentFiles: number,
+    maxConcurrentFolders: number
+): UploadTask[] {
+    const tasks: UploadTask[] = [];
+    const itemsById = buildItemsById(queueItems);
+
+    const availableFolderSlots = maxConcurrentFolders - currentLoad.activeFolders;
+    if (availableFolderSlots > 0) {
+        const folderTasks = getReadyFolderTasks(queueItems, itemsById, availableFolderSlots);
+        tasks.push(...folderTasks);
+    }
+
+    const availableFileSlots = maxConcurrentFiles - currentLoad.activePreparingFiles;
+    if (availableFileSlots > 0) {
+        const fileTasks = getReadyFileTasks(queueItems, itemsById, availableFileSlots);
+        tasks.push(...fileTasks);
+    }
+
+    return tasks;
+}

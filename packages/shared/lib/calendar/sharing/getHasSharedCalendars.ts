@@ -1,0 +1,54 @@
+import { getAllMembers, getCalendarInvitations, getPublicLinks } from '../../api/calendars';
+import { getApiWithAbort } from '../../api/helpers/customConfig';
+import type { Api } from '../../interfaces/Api';
+import type { GetAllMembersApiResponse, GetCalendarInvitationsResponse } from '../../interfaces/calendar/Api';
+import type { CalendarWithOwnMembers } from '../../interfaces/calendar/Calendar';
+import type { CalendarUrlsResponse } from '../../interfaces/calendar/Link';
+import { getIsOwnedCalendar } from '../calendar';
+import { filterOutDeclinedInvitations } from './shareProton/shareProton';
+
+const getHasSharedCalendars = async ({
+    calendars,
+    api,
+    catchErrors,
+}: {
+    calendars: CalendarWithOwnMembers[];
+    api: Api;
+    catchErrors?: boolean;
+}) => {
+    const { signal, abort } = new AbortController();
+    const apiWithAbort = getApiWithAbort(api, signal);
+
+    let hasSharedCalendars = false;
+
+    await Promise.all(
+        calendars
+            .filter((calendar) => getIsOwnedCalendar(calendar))
+            .map(async ({ ID }) => {
+                try {
+                    const [{ CalendarUrls: links }, { Members }, { Invitations }] = await Promise.all([
+                        apiWithAbort<CalendarUrlsResponse>(getPublicLinks(ID)),
+                        apiWithAbort<GetAllMembersApiResponse>(getAllMembers(ID)),
+                        apiWithAbort<GetCalendarInvitationsResponse>(getCalendarInvitations(ID)),
+                    ]);
+
+                    const pendingOrAcceptedInvitations = filterOutDeclinedInvitations(Invitations);
+                    if (links.length || Members.length > 1 || pendingOrAcceptedInvitations.length) {
+                        hasSharedCalendars = true;
+                        abort();
+                    }
+                } catch (e: any) {
+                    if (!catchErrors) {
+                        const error =
+                            e instanceof Error ? e : new Error('Unknown error getting calendar links or members');
+
+                        throw error;
+                    }
+                }
+            })
+    );
+
+    return hasSharedCalendars;
+};
+
+export default getHasSharedCalendars;

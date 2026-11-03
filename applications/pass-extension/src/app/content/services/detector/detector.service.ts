@@ -1,0 +1,304 @@
+import {
+    clearDetectionCache,
+    createRulesetRegistry,
+    flagOverride,
+    flagSubtreeAsIgnored,
+    getTypeScore,
+    prepass,
+    shadowPiercingContains,
+    shouldRunClassifier,
+} from '@protontech/autofill';
+import { randomForestModelProvider } from '@protontech/autofill/models/random_forest';
+import type { FieldType, ModelProvider } from '@protontech/autofill/types';
+import { FormType, fieldTypes, formTypes } from '@protontech/autofill/types';
+import type { Fnode } from '@protontech/fathom';
+
+import { createModelProvider } from '@proton/pass/lib/extension/model-artifact/model-artifact';
+import type { DetectionRulesMatch } from '@proton/pass/lib/extension/rules/types';
+import type { Callback, Maybe, MaybeNull } from '@proton/pass/types/utils';
+import { compareDomNodes } from '@proton/pass/utils/dom/sort';
+import { prop } from '@proton/pass/utils/fp/lens';
+import { truthy } from '@proton/pass/utils/fp/predicates';
+import { liftSort } from '@proton/pass/utils/fp/sort';
+import { logger } from '@proton/pass/utils/logger';
+import { sendToE2eTests } from '@proton/pass/utils/tests/e2e';
+import { DOM_SETTLE_MS } from '@proton/pass/utils/time/next-tick';
+import { withMaxExecutionTime } from '@proton/pass/utils/time/performance';
+import { wait } from '@proton/shared/lib/helpers/promise';
+import noop from '@proton/utils/noop';
+
+import { contentScriptMessage, sendMessage } from '../../../../lib/message/send-message';
+import { BUNDLED_MODEL_ID } from '../../../../lib/utils/version';
+import { WorkerMessageType } from '../../../../types/messages';
+import { MAX_MAX_DETECTION_TIME, MIN_MAX_DETECTION_TIME } from '../../constants.static';
+import { selectNodeFromPath } from './detector.utils';
+
+const rulesetMaker = (runtime?: ModelProvider) =>
+    runtime
+        ? createRulesetRegistry({ runtime }).make('runtime')
+        : createRulesetRegistry({ randomForest: randomForestModelProvider }).make('randomForest');
+
+type Ruleset = ReturnType<typeof rulesetMaker>;
+
+/** Module-level, not per-instance : tab hide/show recreates the detector within the same JS realm, and a page's model must survive that. */
+let ruleset: MaybeNull<Ruleset> = null;
+/** Lazy : avoids building an unused bundled ruleset when the runtime model resolves first. */
+const getRuleset = () => (ruleset ??= rulesetMaker());
+let modelRuleset: MaybeNull<Promise<void>> = null;
+let modelId: string = BUNDLED_MODEL_ID;
+const NOOP_EL = document.createElement('form');
+const DETECTION_TIE_TRESHOLD = 0.01;
+
+const resolveModelProvider = async (): Promise<Maybe<{ modelId: string; provider: ModelProvider }>> => {
+    const { artifact } = await sendMessage.on(
+        contentScriptMessage({ type: WorkerMessageType.MODEL_ARTIFACT_REQUEST }),
+        (res) => (res.type === 'success' ? res : { artifact: null })
+    );
+
+    if (!artifact) return undefined;
+
+    const result = createModelProvider(artifact);
+    if (!result.ok) {
+        logger.warn(`[Detector] ${result.error}`);
+        return undefined;
+    }
+
+    return { modelId: artifact.modelId, provider: result.provider };
+};
+
+/** Caches the in-flight promise so a recreated detector awaits the same resolution instead of racing it. */
+const resolveModelRuleset = (): Promise<void> => {
+    return (modelRuleset ??= resolveModelProvider().then((resolved) => {
+        if (resolved) {
+            ruleset = rulesetMaker(resolved.provider);
+            modelId = resolved.modelId;
+        }
+    }));
+};
+
+type DetectorConfig = {
+    root: Document;
+    onBottleneck?: (data: { detectionTime: number; hostname: string }) => void;
+};
+
+export type DetectedForm = { formType: FormType; form: HTMLElement; fields: DetectedField[] };
+export type DetectedField = { fieldType: FieldType; field: HTMLInputElement };
+type DetectorState = { rules: MaybeNull<DetectionRulesMatch> };
+
+type BoundRuleset = ReturnType<Ruleset['against']>;
+type PredictionResult<T extends string> = { fnode: Fnode; type: T; score: number };
+type PredictionBestSelector<T extends string> = (
+    candidates: [PredictionResult<T>, PredictionResult<T>]
+) => PredictionResult<T>;
+
+const getPredictionsFor = <T extends string>(
+    boundRuleset: BoundRuleset,
+    options: {
+        type: 'form' | 'field';
+        subTypes: T[];
+        selectBest: PredictionBestSelector<T>;
+    }
+): PredictionResult<T>[] => {
+    /* This `get` call is necessary even when `subTypes` is empty : it
+     * matches the base `form`/`field` rules whose `through` effects flag
+     * candidates as processed, preventing `shouldRunClassifier` from
+     * re-triggering detection on every subsequent mutation */
+    boundRuleset.get(options.type);
+
+    const predictions = options.subTypes.reduce<Map<Fnode, PredictionResult<T>>>((results, subType) => {
+        const fnodes: Fnode[] = boundRuleset.get(subType);
+
+        fnodes.forEach((fnode) => {
+            const score = getTypeScore(fnode, subType);
+            const candidate = { type: subType, fnode, score };
+            const bestSoFar = results.get(fnode);
+
+            if (!bestSoFar) results.set(fnode, candidate);
+            else results.set(fnode, options.selectBest([candidate, bestSoFar]));
+        });
+
+        return results;
+    }, new Map());
+
+    return Array.from(predictions.values());
+};
+
+/* cluster each predicted field by its parent predicted
+ * form. If no such form exists, keep a reference to all
+ * "dangling" fields in order to process them accordingly */
+const groupFields = (
+    formPredictions: PredictionResult<FormType>[],
+    fieldPredictions: PredictionResult<FieldType>[]
+) => {
+    const grouping = new WeakMap<HTMLElement, DetectedField[]>();
+
+    fieldPredictions.forEach(({ fnode: fieldFNode, type: fieldType }) => {
+        const field = fieldFNode.element as HTMLInputElement;
+        const parent: HTMLElement =
+            formPredictions.find(({ fnode: formFNode }) => {
+                const form = formFNode.element;
+                return shadowPiercingContains(form, field);
+            })?.fnode.element ?? NOOP_EL;
+
+        const entry = grouping?.get(parent) ?? [];
+        entry.push({ fieldType, field });
+
+        return grouping.set(parent, entry);
+    });
+
+    return grouping;
+};
+
+const selectBest: PredictionBestSelector<any> = ([a, b]) => (a.score > b.score ? a : b);
+
+/* if we have a tie with a login form : always prefer the login type
+ * as it is less deceptive for the user. FIXME: on tie between login &
+ * register, we should query the autofillable candidates and adapt the
+ * form-type accordingly. In the case of a close tie between a register
+ * and a password-change form, pick password-change for autosave.  */
+const selectBestForm: PredictionBestSelector<FormType> = (candidates) => {
+    const pwChange = candidates.find(({ type }) => type === FormType.PASSWORD_CHANGE);
+    const login = candidates.find(({ type }) => type === FormType.LOGIN);
+    const register = candidates.find(({ type }) => type === FormType.REGISTER);
+    const delta = Math.abs(candidates[0].score - candidates[1].score);
+
+    if (pwChange && register) return delta <= DETECTION_TIE_TRESHOLD ? pwChange : register;
+    if (!login) return selectBest(candidates) as PredictionResult<FormType>;
+    else return login;
+};
+
+export const createDetectorService = (config: DetectorConfig) => {
+    const state: DetectorState = { rules: null };
+
+    const guard = <F extends Callback>(fn: F, id: string) =>
+        withMaxExecutionTime(fn, {
+            id,
+            maxTime: MIN_MAX_DETECTION_TIME,
+            onMaxTime: (detectionTime) => {
+                const { hostname } = window.location;
+                logger.info(`[Detector] Slow down detected on ${hostname} (${detectionTime.toFixed(2)}ms)`);
+
+                if (detectionTime >= MAX_MAX_DETECTION_TIME) {
+                    config?.onBottleneck?.({ detectionTime, hostname });
+                    throw new Error();
+                }
+            },
+        });
+
+    const predictForms = guard(
+        (subTypes: FormType[], boundRuleset?: BoundRuleset) =>
+            getPredictionsFor<FormType>(boundRuleset ?? getRuleset().against(config.root), {
+                type: 'form',
+                subTypes,
+                selectBest: selectBestForm,
+            }),
+        'detector::forms'
+    );
+
+    const predictFields = guard(
+        (subTypes: FieldType[], boundRuleset?: BoundRuleset) =>
+            getPredictionsFor<FieldType>(boundRuleset ?? getRuleset().against(config.root), {
+                type: 'field',
+                subTypes,
+                selectBest,
+            }),
+        'detector::fields'
+    );
+
+    const predictAll = guard((options?: { excludedFieldTypes?: Set<FieldType> }) => {
+        const excludedFieldTypes = options?.excludedFieldTypes;
+        const tFields = excludedFieldTypes ? fieldTypes.filter((type) => !excludedFieldTypes.has(type)) : fieldTypes;
+
+        /* Skip form-type scoring when no field types are predictable.
+         * Predictions still run against the bound ruleset in order to
+         * flag processed nodes (see `getPredictionsFor`) */
+        const tForms = tFields.length > 0 ? formTypes : [];
+
+        const boundRuleset = getRuleset().against(config.root);
+        const formPredictions = predictForms(tForms, boundRuleset);
+        const fieldPredictions = predictFields(tFields, boundRuleset);
+        const fieldMap = groupFields(formPredictions, fieldPredictions);
+
+        const forms = formPredictions.map(({ fnode: formFNode, type: formType }) => {
+            const fields = fieldMap.get(formFNode.element) ?? [];
+            return {
+                form: formFNode.element as HTMLElement,
+                formType,
+                fields: fields.sort(liftSort(compareDomNodes<HTMLInputElement>, prop('field'))),
+            };
+        });
+
+        /* only start tracking forms which have a positive detection result or
+         * dangling forms which have at least one detected field */
+        const formsToTrack = forms.filter(({ formType, fields }) => formType !== FormType.NOOP || fields.length > 0);
+        clearDetectionCache(); /* clear visibility cache on each detection run */
+
+        return formsToTrack;
+    }, 'detector::all');
+
+    const detector = {
+        init: async () => {
+            await Promise.all([
+                resolveModelRuleset().catch(noop),
+                sendMessage
+                    .onSuccess(contentScriptMessage({ type: WorkerMessageType.WEBSITE_RULES_REQUEST }), ({ rules }) => {
+                        if (rules !== null) {
+                            logger.debug('[Detector] Resolved website detection rules');
+                            state.rules = rules;
+                        }
+                    })
+                    .catch(noop),
+            ]);
+
+            sendToE2eTests('model', modelId);
+        },
+
+        applyRules: () => {
+            state.rules?.exclude?.forEach((selector) => {
+                const match = document.querySelector<HTMLElement>(selector);
+                if (match) flagSubtreeAsIgnored(match);
+            });
+
+            if (state.rules?.version === '2') {
+                state.rules?.include?.forEach((rule) => {
+                    const { selector, formType, fields } = rule;
+                    const form = selectNodeFromPath(document, selector);
+                    if (!form) return;
+
+                    flagOverride({
+                        form,
+                        formType,
+                        fields: (fields ?? [])
+                            ?.map(({ selector, fieldType }) => {
+                                const field = selectNodeFromPath(form, selector);
+                                if (field) return { field, fieldType };
+                            })
+                            .filter(truthy),
+                    });
+                });
+            }
+        },
+
+        /* Run pre-detection checks with proper timing to avoid blocking the UI.
+         * Triggers rule application to exclude/include nodes for the classifier,
+         * then runs prepass for clustering and heuristic exclusions.
+         * Uses requestIdleCallback since visibility checks can be costly and
+         * trigger DOM repaints, with a small delay to ensure DOM stability. */
+        shouldPredict: (): Promise<boolean> =>
+            new Promise(async (resolve) => {
+                await wait(DOM_SETTLE_MS);
+                requestIdleCallback(() => {
+                    detector.applyRules();
+                    prepass();
+                    resolve(shouldRunClassifier());
+                });
+            }),
+
+        predictAll,
+        getModelId: () => modelId,
+    };
+
+    return detector;
+};
+
+export type DetectorService = ReturnType<typeof createDetectorService>;

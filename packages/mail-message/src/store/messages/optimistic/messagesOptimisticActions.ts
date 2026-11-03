@@ -1,0 +1,23 @@
+import { createAction } from '@reduxjs/toolkit';
+
+import type { LabelChanges } from '../../../helpers/labels';
+import type { MarkAsChanges } from '../../../helpers/message/messages';
+import type { MessageState } from '../messagesTypes';
+
+export const optimisticApplyLabels = createAction<{
+    ID: string;
+    changes: LabelChanges;
+    unreadStatuses?: { id: string; unread: number }[];
+}>('message/optimistic/applyLabels');
+
+export const optimisticMarkAs = createAction<{ ID: string; changes: MarkAsChanges }>('message/optimistic/markAs');
+
+export const optimisticDelete = createAction<string[]>('message/optimistic/delete');
+
+export const optimisticEmptyLabel = createAction<string>('message/optimistic/emptyLabel');
+
+export const optimisticRestore = createAction<MessageState[]>('message/optimistic/restore');
+
+export const optimisticUpdateFlag = createAction<{ ID: string; flagToAdd?: number; flagToRemove?: number }>(
+    'message/optimistic/updateFlag'
+);

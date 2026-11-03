@@ -1,0 +1,38 @@
+import { isBrave, isChrome, isEdgeChromium, isFirefox, isSafari } from '@proton/shared/lib/helpers/browser';
+
+import { Clients, PASS_CHROME_URL, PASS_EDGE_URL, PASS_FIREFOX_URL } from '../../../constants';
+import type { Browser } from '../../../types/browser';
+import type { MaybeNull } from '../../../types/utils';
+
+const global = globalThis as any;
+
+/* Based on https://github.com/mozilla/webextension-polyfill Chrome check */
+const detectBrowser = (): Browser =>
+    typeof global.browser === 'undefined' || Object.getPrototypeOf(global.browser) !== Object.prototype
+        ? 'chrome'
+        : 'firefox';
+
+export const getWebStoreUrl = (): string =>
+    ({ chrome: BUILD_STORE_TARGET === 'edge' ? PASS_EDGE_URL : PASS_CHROME_URL, firefox: PASS_FIREFOX_URL })[
+        detectBrowser()
+    ];
+
+export type SupportedExtensionClient = Clients.Chrome | Clients.Brave | Clients.Edge | Clients.Firefox;
+
+export const getExtensionSupportedBrowser = (): MaybeNull<SupportedExtensionClient> => {
+    if (isChrome()) return Clients.Chrome;
+    if (isBrave()) return Clients.Brave;
+    if (isEdgeChromium()) return Clients.Edge;
+    // TEMP disable FF if (isFirefox()) return Clients.Firefox;
+    return null;
+};
+
+/** Widens {@link getExtensionSupportedBrowser} to the clients we can point at a
+ * store listing, including the ones the extension does not autodetect. */
+export const getBrowserClient = (): MaybeNull<Clients> => {
+    const supported = getExtensionSupportedBrowser();
+    if (supported) return supported;
+    if (isSafari()) return Clients.Safari;
+    if (isFirefox()) return Clients.Firefox;
+    return null;
+};

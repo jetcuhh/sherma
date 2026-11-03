@@ -1,0 +1,475 @@
+import type { UnlockDTO } from '@proton/pass/lib/auth/lock/types';
+import type { AuthOptions } from '@proton/pass/lib/auth/service';
+import type { AuthSession } from '@proton/pass/lib/auth/session';
+import type { ClipboardAutoClearDTO, ClipboardWriteDTO } from '@proton/pass/lib/clipboard/types';
+import type { PassCoreMethod, PassCoreRPC, PassCoreResult } from '@proton/pass/lib/core/core.types';
+import type { ModelArtifact } from '@proton/pass/lib/extension/model-artifact/model-artifact';
+import type { DetectionRulesMatch } from '@proton/pass/lib/extension/rules/types';
+import type { ConnectivityStatus } from '@proton/pass/lib/network/connectivity.utils';
+import type {
+    PasskeyCreatePayload,
+    PasskeyCreateResponse,
+    PasskeyGetPayload,
+    PasskeyGetResponse,
+    PasskeyQueryPayload,
+    SelectedPasskey,
+} from '@proton/pass/lib/passkeys/types';
+import type { PasswordAutosuggestOptions } from '@proton/pass/lib/password/types';
+import type { PauseListEntry } from '@proton/pass/lib/settings/pause-list';
+import type { Notification } from '@proton/pass/store/actions/enhancers/notification';
+import type { FeatureFlagState, FoldersByShareId, VaultShareItem } from '@proton/pass/store/reducers';
+import type { ProxiedSettings } from '@proton/pass/store/reducers/settings';
+import type { ToolbarPinState } from '@proton/pass/types/browser';
+import type { ShareId } from '@proton/pass/types/crypto/pass-types';
+import type { AliasOptionsResult } from '@proton/pass/types/data/alias';
+import type { B2BEvent } from '@proton/pass/types/data/b2b';
+import type { FileTransferErrorDTO, FileTransferWriteDTO } from '@proton/pass/types/data/files';
+import type { UniqueItem } from '@proton/pass/types/data/items';
+import type { AliasCreateRequest } from '@proton/pass/types/data/items.dto';
+import type { TelemetryEventDTO } from '@proton/pass/types/data/telemetry';
+import type { NativeMessageErrorType } from '@proton/pass/types/desktop';
+import type { Maybe, MaybeNull, Result } from '@proton/pass/types/utils';
+import type {
+    AutofillCCResult,
+    AutofillIdentityResult,
+    AutofillLoginResult,
+    AutofillQueryFilter,
+} from '@proton/pass/types/worker/autofill';
+import type { AutosaveRequest } from '@proton/pass/types/worker/autosave';
+import type { LoginItemPreview } from '@proton/pass/types/worker/data';
+import type { AutosaveFormEntry, FormStatusPayload, FormSubmitPayload } from '@proton/pass/types/worker/form';
+import type { OtpCode, OtpRequest } from '@proton/pass/types/worker/otp';
+import type { ClientEndpoint, ClientInitResult, EndpointContext, TabId } from '@proton/pass/types/worker/runtime';
+import type { SpotlightMessage } from '@proton/pass/types/worker/spotlight';
+import type { AppState, PopupInitialState } from '@proton/pass/types/worker/state';
+import type {
+    ExtensionForkPayload,
+    ExtensionForkResultPayload,
+} from '@proton/shared/lib/authentication/fork/extension';
+import type { PullForkResponse } from '@proton/shared/lib/authentication/interface';
+import type { User } from '@proton/shared/lib/interfaces/User';
+
+import type { NotificationRequest } from '../app/content/services/inline/notification/notification.app';
+import type { ClusterFrame } from '../app/worker/services/autofill.cc';
+import type { AutofillActionDTO, AutofillRequest, AutofillResult } from './autofill';
+import type {
+    FrameAttributes,
+    FrameCheckResult,
+    FrameField,
+    FrameFormsResult,
+    FrameQueryDTO,
+    FrameQueryResult,
+} from './frames';
+import type {
+    DropdownCloseDTO,
+    DropdownClosedDTO,
+    DropdownOpenDTO,
+    DropdownOpenedDTO,
+    DropdownStateDTO,
+    IconShiftRequest,
+    IconShiftResult,
+} from './inline';
+
+type WithPayload<T extends WorkerMessageType, P extends {}> = { type: T; payload: P };
+
+export type WorkerMessageWithSender<T extends WorkerMessage = WorkerMessage> = T & {
+    sender: ClientEndpoint;
+    receiver?: ClientEndpoint;
+    version: string;
+};
+
+export type PortFrameForwardingMessage<T = any> = {
+    forwardTo: string;
+    payload: T;
+    type: WorkerMessageType.PORT_FORWARDING_MESSAGE;
+};
+
+export enum WorkerMessageType {
+    ACCOUNT_EXTENSION = 'auth-ext',
+    ACCOUNT_FORK = 'fork',
+    ACCOUNT_ONBOARDING = 'pass-onboarding',
+    ACCOUNT_PROBE = 'pass-installed',
+    ACCOUNT_PROBE_2 = 'pass-account-probe',
+    ALIAS_CREATE = 'ALIAS_CREATE',
+    ALIAS_OPTIONS = 'ALIAS_OPTIONS',
+
+    AUTH_CHANGED = 'AUTH_CHANGED',
+    AUTH_CHECK = 'AUTH_CHECK',
+    AUTH_CONFIRM_PASSWORD = 'AUTH_CONFIRM_PASSWORD',
+    AUTH_INIT = 'AUTH_INIT',
+    AUTH_OFFLINE_SWITCH = 'AUTH_OFFLINE_SWITCH',
+    AUTH_PULL_FORK = 'AUTH_PULL_FORK',
+    AUTH_UNLOCK = 'AUTH_UNLOCK',
+
+    AUTOFILL_ACTION = 'AUTOFILL_ACTION',
+    AUTOFILL_CC_QUERY = 'AUTOFILL_CC_QUERY',
+    AUTOFILL_IDENTITY_QUERY = 'AUTOFILL_IDENTITY_QUERY',
+    AUTOFILL_LOGIN_QUERY = 'AUTOFILL_LOGIN_QUERY',
+    AUTOFILL_OTP_CHECK = 'AUTOFILL_OTP_CHECK',
+    AUTOFILL_SEQUENCE = 'AUTOFILL_SEQUENCE',
+    AUTOFILL_SYNC = 'AUTOFILL_SYNC',
+
+    AUTOSAVE_REQUEST = 'AUTOSAVE_REQUEST',
+    AUTOSUGGEST_ALIAS = 'AUTOSUGGEST_ALIAS',
+    AUTOSUGGEST_PASSWORD = 'AUTOSUGGEST_PASSWORD',
+
+    B2B_EVENT = 'B2B_EVENT',
+    CLIENT_INIT = 'CLIENT_INIT',
+    CLIPBOARD_AUTOCLEAR = 'CLIPBOARD_AUTOCLEAR',
+    CLIPBOARD_OFFSCREEN_READ = 'CLIPBOARD_OFFSCREEN_READ',
+    CLIPBOARD_OFFSCREEN_WRITE = 'CLIPBOARD_OFFSCREEN_WRITE',
+
+    CONNECTIVITY = 'CONNECTIVITY',
+    CONNECTIVITY_SYNC = 'CONNECTIVITY_SYNC',
+
+    DEBUG = 'DEBUG',
+    ENDPOINT_INIT = 'ENDPOINT_INIT',
+    FEATURE_FLAGS_UPDATE = 'FEATURE_FLAGS_UPDATE',
+    FETCH_ABORT = 'FETCH_ABORT',
+    FETCH_DOMAINIMAGE = 'FETCH_DOMAINIMAGE',
+    FORM_ENTRY_COMMIT = 'FORM_ENTRY_COMMIT',
+    FORM_ENTRY_REQUEST = 'FORM_ENTRY_REQUEST',
+    FORM_ENTRY_STAGE = 'FORM_ENTRY_STAGE',
+    FORM_ENTRY_STASH = 'FORM_ENTRY_STASH',
+    FORM_STATUS = 'FORM_STATUS',
+    FS_WRITE = 'FS_WRITE',
+    FS_ERROR = 'FS_ERROR',
+
+    INLINE_DROPDOWN_ATTACH = 'INLINE_DROPDOWN_ATTACH',
+    INLINE_DROPDOWN_CLOSE = 'INLINE_DROPDOWN_CLOSE',
+    INLINE_DROPDOWN_CLOSED = 'INLINE_DROPDOWN_CLOSED',
+    INLINE_DROPDOWN_OPENED = 'INLINE_DROPDOWN_OPENED',
+    INLINE_DROPDOWN_STATE = 'INLINE_DROPDOWN_STATE',
+    INLINE_DROPDOWN_TOGGLE = 'INLINE_DROPDOWN_TOGGLE',
+    INLINE_NOTIFICATION_OPEN = 'INLINE_NOTIFICATION_OPEN',
+    INLINE_ICON_SHIFT = 'INLINE_ICON_SHIFT',
+    INLINE_ICON_ATTACHED = 'INLINE_ICON_ATTACHED',
+
+    FRAME_DEFERRED_INIT = 'FRAME_DEFERRED_INIT',
+    FRAME_FIELD_LOCK = 'FRAME_FIELD_LOCK',
+    FRAME_FORM_CLUSTER = 'FRAME_FORM_CLUSTER',
+    FRAME_FORMS_QUERY = 'FRAME_FORMS_QUERY',
+    FRAME_QUERY = 'FRAME_QUERY',
+    FRAME_VISIBILITY = 'FRAME_VISIBILITY',
+
+    LOAD_CONTENT_SCRIPT = 'LOAD_CONTENT_SCRIPT',
+    LOCALE_UPDATED = 'LOCALE_UPDATED',
+    LOG_EVENT = 'LOG_EVENT',
+    LOG_REQUEST = 'LOG_REQUEST',
+    MODEL_ARTIFACT_REQUEST = 'MODEL_ARTIFACT_REQUEST',
+    MONITOR_2FAS = 'MONITOR_2FAS',
+    MONITOR_WEAK_PASSWORDS = 'MONITOR_WEAK_PASSWORDS',
+    NOTIFICATION = 'NOTIFICATION',
+    OTP_CODE_GENERATE = 'OTP_CODE_GENERATE',
+    PASS_CORE_RPC = 'PASS_CORE_RPC',
+    PASSKEY_CREATE = 'PASSKEY_CREATE',
+    PASSKEY_GET = 'PASSKEY_GET',
+    PASSKEY_INTERCEPT = 'PASSKEY_INTERCEPT',
+    PASSKEY_QUERY = 'PASSKEY_QUERY',
+    PAUSE_WEBSITE = 'PAUSE_WEBSITE',
+    PERMISSIONS_UPDATE = 'PERMISSIONS_UPDATE',
+    PING = 'PING',
+    POPUP_INIT = 'POPUP_INIT',
+    PORT_FORWARDING_MESSAGE = 'PORT_FORWARDING',
+    PORT_UNAUTHORIZED = 'PORT_UNAUTHORIZED',
+    REGISTER_ELEMENTS = 'REGISTER_ELEMENTS',
+    REGISTER_ELEMENTS_FALLBACK = 'REGISTER_ELEMENTS_FALLBACK',
+    RESOLVE_EXTENSION_KEY = 'RESOLVE_EXTENSION_KEY',
+    RESOLVE_USER = 'RESOLVE_USER',
+    SENTRY_CS_EVENT = 'SENTRY_CS_EVENT',
+    SETTINGS_UPDATE = 'SETTINGS_UPDATE',
+    SPOTLIGHT_ACK = 'SPOTLIGHT_ACK',
+    SPOTLIGHT_CHECK = 'SPOTLIGHT_CHECK',
+    SPOTLIGHT_REQUEST = 'SPOTLIGHT_REQUEST',
+    STORE_DISPATCH = 'STORE_DISPATCH',
+    TELEMETRY_EVENT = 'TELEMETRY_EVENT',
+    UNLOAD_CONTENT_SCRIPT = 'UNLOAD_CONTENT_SCRIPT',
+    UPDATE_AVAILABLE = 'UPDATE_AVAILABLE',
+    VAULTS_QUERY = 'VAULTS_QUERY',
+    WEBSITE_RULES_REQUEST = 'WEBSITE_RULES_REQUEST',
+    WORKER_RELOAD = 'WORKER_RELOAD',
+    WORKER_STATE_CHANGE = 'WORKER_STATE_CHANGE',
+}
+
+/* messages for communication with account */
+type AccountAuthExtMessage = { type: WorkerMessageType.ACCOUNT_EXTENSION };
+type AccountForkMessage = WithPayload<WorkerMessageType.ACCOUNT_FORK, ExtensionForkPayload>;
+type AccountPassOnboardingMessage = { type: WorkerMessageType.ACCOUNT_ONBOARDING };
+type AccountProbeMessage = { type: WorkerMessageType.ACCOUNT_PROBE };
+type AccountProbe2Message = { type: WorkerMessageType.ACCOUNT_PROBE_2 };
+
+type AliasCreateMessage = WithPayload<WorkerMessageType.ALIAS_CREATE, AliasCreateRequest>;
+type AliasOptionsMessage = { type: WorkerMessageType.ALIAS_OPTIONS };
+
+type AuthChangedMessage = WithPayload<WorkerMessageType.AUTH_CHANGED, AuthSession>;
+type AuthCheckMessage = WithPayload<WorkerMessageType.AUTH_CHECK, { immediate?: boolean }>;
+type AuthConfirmPasswordMessage = WithPayload<WorkerMessageType.AUTH_CONFIRM_PASSWORD, { password: string }>;
+type AuthInitMessage = { type: WorkerMessageType.AUTH_INIT; options: AuthOptions };
+type AuthOfflineSwitchMessage = { type: WorkerMessageType.AUTH_OFFLINE_SWITCH };
+export type AuthPullForkMessage = WithPayload<WorkerMessageType.AUTH_PULL_FORK, { selector: string }>;
+type AuthUnlockMessage = WithPayload<WorkerMessageType.AUTH_UNLOCK, UnlockDTO>;
+
+type AutofillActionMessage = WithPayload<WorkerMessageType.AUTOFILL_ACTION, AutofillActionDTO>;
+type AutofillCCQueryMessage = { type: WorkerMessageType.AUTOFILL_CC_QUERY };
+type AutofillIdentityQueryMessage = { type: WorkerMessageType.AUTOFILL_IDENTITY_QUERY };
+type AutofillLoginQueryMessage = WithPayload<WorkerMessageType.AUTOFILL_LOGIN_QUERY, AutofillQueryFilter>;
+type AutofillOTPCheckMessage = { type: WorkerMessageType.AUTOFILL_OTP_CHECK };
+type AutofillPasswordOptionsMessage = { type: WorkerMessageType.AUTOSUGGEST_PASSWORD };
+type AutofillSequenceMessage = WithPayload<WorkerMessageType.AUTOFILL_SEQUENCE, AutofillRequest>;
+export type AutofillSyncMessage = { type: WorkerMessageType.AUTOFILL_SYNC };
+
+type AutoSaveRequestMessage = WithPayload<WorkerMessageType.AUTOSAVE_REQUEST, AutosaveRequest>;
+type AutosuggestAliasMessage = { type: WorkerMessageType.AUTOSUGGEST_ALIAS };
+type B2BEventMessage = WithPayload<WorkerMessageType.B2B_EVENT, { event: B2BEvent }>;
+
+export type ClientInitMessage = WithPayload<WorkerMessageType.CLIENT_INIT, { tabId: TabId; online: boolean }>;
+type ClipboardReadMessage = { type: WorkerMessageType.CLIPBOARD_OFFSCREEN_READ };
+type ClipboardWriteMessage = WithPayload<WorkerMessageType.CLIPBOARD_OFFSCREEN_WRITE, ClipboardWriteDTO>;
+type ClipboardAutoClearMessage = WithPayload<WorkerMessageType.CLIPBOARD_AUTOCLEAR, ClipboardAutoClearDTO>;
+type ConnectivityStatusMessage = WithPayload<WorkerMessageType.CONNECTIVITY, { status: ConnectivityStatus }>;
+type ConnectivitySyncMessage = WithPayload<WorkerMessageType.CONNECTIVITY_SYNC, { online: boolean }>;
+
+type DebugMessage = WithPayload<WorkerMessageType.DEBUG, { debug: string }>;
+type EndpointInitMessage = WithPayload<WorkerMessageType.ENDPOINT_INIT, { popup?: boolean }>;
+
+export type FeatureFlagsUpdateMessage = WithPayload<WorkerMessageType.FEATURE_FLAGS_UPDATE, FeatureFlagState>;
+type FetchAbortMessage = WithPayload<WorkerMessageType.FETCH_ABORT, { requestId: string }>;
+type FetchDomainImageMessage = WithPayload<WorkerMessageType.FETCH_DOMAINIMAGE, { url: string }>;
+
+type FormEntryCommitMessage = WithPayload<WorkerMessageType.FORM_ENTRY_COMMIT, { reason: string }>;
+type FormEntryRequestMessage = { type: WorkerMessageType.FORM_ENTRY_REQUEST };
+type FormEntryStageMessage = WithPayload<WorkerMessageType.FORM_ENTRY_STAGE, FormSubmitPayload>;
+type FormEntryStashMessage = WithPayload<WorkerMessageType.FORM_ENTRY_STASH, { reason: string }>;
+type FormStatusMessage = WithPayload<WorkerMessageType.FORM_STATUS, FormStatusPayload>;
+
+export type FileTransferWriteMessage = WithPayload<WorkerMessageType.FS_WRITE, FileTransferWriteDTO>;
+export type FileTransferErrorMessage = WithPayload<WorkerMessageType.FS_ERROR, FileTransferErrorDTO>;
+
+type FrameDeferredInitMessage = { type: WorkerMessageType.FRAME_DEFERRED_INIT };
+type FrameFieldLockMessage = WithPayload<WorkerMessageType.FRAME_FIELD_LOCK, FrameField & { locked: boolean }>;
+type FrameFormClusterMessage = { type: WorkerMessageType.FRAME_FORM_CLUSTER };
+type FrameFormsQueryMessage = { type: WorkerMessageType.FRAME_FORMS_QUERY };
+export type FrameQueryMessage = WithPayload<WorkerMessageType.FRAME_QUERY, FrameQueryDTO>;
+type FrameVisibilityMessage = WithPayload<WorkerMessageType.FRAME_VISIBILITY, FrameAttributes>;
+
+type InlineDropdownAttachMessage = { type: WorkerMessageType.INLINE_DROPDOWN_ATTACH };
+type InlineDropdownClosedMessage = WithPayload<WorkerMessageType.INLINE_DROPDOWN_CLOSED, DropdownClosedDTO>;
+type InlineDropdownCloseMessage = WithPayload<WorkerMessageType.INLINE_DROPDOWN_CLOSE, DropdownCloseDTO>;
+type InlineDropdownOpenedMessage = WithPayload<WorkerMessageType.INLINE_DROPDOWN_OPENED, DropdownOpenedDTO>;
+export type InlineDropdownStateMessage = { type: WorkerMessageType.INLINE_DROPDOWN_STATE };
+type InlineDropdownToggleMessage = WithPayload<WorkerMessageType.INLINE_DROPDOWN_TOGGLE, DropdownOpenDTO>;
+type InlineIconAttachedMessage = WithPayload<WorkerMessageType.INLINE_ICON_ATTACHED, FrameField>;
+type InlineIconShiftMessage = WithPayload<WorkerMessageType.INLINE_ICON_SHIFT, IconShiftRequest>;
+type InlineNotificationMessage = WithPayload<WorkerMessageType.INLINE_NOTIFICATION_OPEN, NotificationRequest>;
+
+type LoadContentScriptMessage = { type: WorkerMessageType.LOAD_CONTENT_SCRIPT };
+export type LocaleUpdatedMessage = WithPayload<WorkerMessageType.LOCALE_UPDATED, { locale: string }>;
+type LogEventMessage = WithPayload<WorkerMessageType.LOG_EVENT, { log: string }>;
+type LogRequestMessage = { type: WorkerMessageType.LOG_REQUEST };
+type ModelArtifactRequestMessage = { type: WorkerMessageType.MODEL_ARTIFACT_REQUEST };
+type Monitor2FAsMessage = { type: WorkerMessageType.MONITOR_2FAS };
+type MonitorWeakPasswordsMessage = { type: WorkerMessageType.MONITOR_WEAK_PASSWORDS };
+type NotificationMessage = WithPayload<WorkerMessageType.NOTIFICATION, { notification: Notification }>;
+type OTPCodeGenerateMessage = WithPayload<WorkerMessageType.OTP_CODE_GENERATE, OtpRequest>;
+type PassCoreRPCMessage = WithPayload<WorkerMessageType.PASS_CORE_RPC, PassCoreRPC<PassCoreMethod>>;
+type PasskeyCreateMessage = WithPayload<WorkerMessageType.PASSKEY_CREATE, PasskeyCreatePayload>;
+type PasskeyGetMessage = WithPayload<WorkerMessageType.PASSKEY_GET, PasskeyGetPayload>;
+type PasskeyInterceptMessage = WithPayload<WorkerMessageType.PASSKEY_INTERCEPT, { reason: string }>;
+type PasskeyQueryMessage = WithPayload<WorkerMessageType.PASSKEY_QUERY, PasskeyQueryPayload>;
+type PauseWebsiteMessage = WithPayload<WorkerMessageType.PAUSE_WEBSITE, PauseListEntry>;
+type PermissionsUpdateMessage = WithPayload<WorkerMessageType.PERMISSIONS_UPDATE, { granted: boolean }>;
+type PingMessage = { type: WorkerMessageType.PING };
+type PopupInitMessage = WithPayload<WorkerMessageType.POPUP_INIT, { tabId: TabId }>;
+export type PortUnauthorizedMessage = { type: WorkerMessageType.PORT_UNAUTHORIZED };
+type RegisterElementsLegacyMessage = WithPayload<WorkerMessageType.REGISTER_ELEMENTS_FALLBACK, { hash: string }>;
+type RegisterElementsMessage = { type: WorkerMessageType.REGISTER_ELEMENTS };
+type ResolveExtensionKeyMessage = { type: WorkerMessageType.RESOLVE_EXTENSION_KEY };
+type ResolveUserDataMessage = { type: WorkerMessageType.RESOLVE_USER };
+type SentryCSEventMessage = WithPayload<WorkerMessageType.SENTRY_CS_EVENT, { message: string; data: any }>;
+export type SettingsUpdateMessage = WithPayload<WorkerMessageType.SETTINGS_UPDATE, ProxiedSettings>;
+type SpotlightAckMessage = WithPayload<WorkerMessageType.SPOTLIGHT_ACK, { message: SpotlightMessage }>;
+type SpotlightCheckMessage = WithPayload<WorkerMessageType.SPOTLIGHT_CHECK, { message: SpotlightMessage }>;
+type SpotlightRequestMessage = { type: WorkerMessageType.SPOTLIGHT_REQUEST };
+type StoreActionMessage = WithPayload<WorkerMessageType.STORE_DISPATCH, { action: string }>;
+type TelemetryEventMessage = WithPayload<WorkerMessageType.TELEMETRY_EVENT, TelemetryEventDTO>;
+type UnloadContentScriptMessage = { type: WorkerMessageType.UNLOAD_CONTENT_SCRIPT };
+type UpdateAvailableMessage = { type: WorkerMessageType.UPDATE_AVAILABLE };
+type VaultsQueryMessage = { type: WorkerMessageType.VAULTS_QUERY };
+type WebsiteRulesMessage = { type: WorkerMessageType.WEBSITE_RULES_REQUEST };
+type WorkerReloadMessage = { type: WorkerMessageType.WORKER_RELOAD };
+export type WorkerStateChangeMessage = WithPayload<WorkerMessageType.WORKER_STATE_CHANGE, { state: AppState }>;
+
+export type WorkerMessage =
+    | AccountAuthExtMessage
+    | AccountForkMessage
+    | AccountPassOnboardingMessage
+    | AccountProbeMessage
+    | AccountProbe2Message
+    | AliasCreateMessage
+    | AliasOptionsMessage
+    | AuthChangedMessage
+    | AuthCheckMessage
+    | AuthConfirmPasswordMessage
+    | AuthInitMessage
+    | AuthOfflineSwitchMessage
+    | AuthPullForkMessage
+    | AuthUnlockMessage
+    | AutofillActionMessage
+    | AutofillCCQueryMessage
+    | AutofillIdentityQueryMessage
+    | AutofillLoginQueryMessage
+    | AutofillOTPCheckMessage
+    | AutofillPasswordOptionsMessage
+    | AutofillSequenceMessage
+    | AutofillSyncMessage
+    | AutoSaveRequestMessage
+    | AutosuggestAliasMessage
+    | B2BEventMessage
+    | ClientInitMessage
+    | ClipboardAutoClearMessage
+    | ClipboardReadMessage
+    | ClipboardWriteMessage
+    | ConnectivityStatusMessage
+    | ConnectivitySyncMessage
+    | DebugMessage
+    | EndpointInitMessage
+    | FeatureFlagsUpdateMessage
+    | FetchAbortMessage
+    | FetchDomainImageMessage
+    | FileTransferErrorMessage
+    | FileTransferWriteMessage
+    | FormEntryCommitMessage
+    | FormEntryRequestMessage
+    | FormEntryStageMessage
+    | FormEntryStashMessage
+    | FormStatusMessage
+    | FrameDeferredInitMessage
+    | FrameFieldLockMessage
+    | FrameFormClusterMessage
+    | FrameFormsQueryMessage
+    | FrameQueryMessage
+    | FrameVisibilityMessage
+    | InlineDropdownAttachMessage
+    | InlineDropdownClosedMessage
+    | InlineDropdownCloseMessage
+    | InlineDropdownOpenedMessage
+    | InlineDropdownStateMessage
+    | InlineDropdownToggleMessage
+    | InlineIconAttachedMessage
+    | InlineIconShiftMessage
+    | InlineNotificationMessage
+    | LoadContentScriptMessage
+    | LocaleUpdatedMessage
+    | LogEventMessage
+    | LogRequestMessage
+    | ModelArtifactRequestMessage
+    | Monitor2FAsMessage
+    | MonitorWeakPasswordsMessage
+    | NotificationMessage
+    | OTPCodeGenerateMessage
+    | PassCoreRPCMessage
+    | PasskeyCreateMessage
+    | PasskeyGetMessage
+    | PasskeyInterceptMessage
+    | PasskeyQueryMessage
+    | PauseWebsiteMessage
+    | PermissionsUpdateMessage
+    | PingMessage
+    | PopupInitMessage
+    | PortFrameForwardingMessage
+    | PortUnauthorizedMessage
+    | RegisterElementsLegacyMessage
+    | RegisterElementsMessage
+    | ResolveExtensionKeyMessage
+    | ResolveUserDataMessage
+    | SentryCSEventMessage
+    | SettingsUpdateMessage
+    | SpotlightAckMessage
+    | SpotlightCheckMessage
+    | SpotlightRequestMessage
+    | StoreActionMessage
+    | TelemetryEventMessage
+    | UnloadContentScriptMessage
+    | UpdateAvailableMessage
+    | VaultsQueryMessage
+    | WebsiteRulesMessage
+    | WorkerReloadMessage
+    | WorkerStateChangeMessage;
+
+export type MessageFailure = { type: 'error'; error: string; critical?: boolean; payload?: string };
+export type MessageSuccess<T> = T extends { [key: string]: any } ? T & { type: 'success' } : { type: 'success' };
+export type MaybeMessage<T> = MessageSuccess<T> | MessageFailure;
+
+type WorkerMessageResponseMap = {
+    [WorkerMessageType.ACCOUNT_PROBE_2]: {
+        authenticated: boolean;
+        pinned: ToolbarPinState;
+        url: MaybeNull<string>;
+    };
+    [WorkerMessageType.ACCOUNT_FORK]: { payload: ExtensionForkResultPayload };
+    [WorkerMessageType.ALIAS_CREATE]: Result;
+    [WorkerMessageType.ALIAS_OPTIONS]: Result<AliasOptionsResult>;
+    [WorkerMessageType.AUTH_CHECK]: Result<{ locked: boolean }, {}>;
+    [WorkerMessageType.AUTH_CONFIRM_PASSWORD]: Result;
+    [WorkerMessageType.AUTH_INIT]: AppState;
+    [WorkerMessageType.AUTH_PULL_FORK]: Result<PullForkResponse>;
+    [WorkerMessageType.AUTH_UNLOCK]: Result<{}, { errorType?: NativeMessageErrorType }>;
+    [WorkerMessageType.AUTOFILL_CC_QUERY]: AutofillCCResult;
+    [WorkerMessageType.AUTOFILL_IDENTITY_QUERY]: AutofillIdentityResult;
+    [WorkerMessageType.AUTOFILL_LOGIN_QUERY]: AutofillLoginResult;
+    [WorkerMessageType.AUTOFILL_OTP_CHECK]: { shouldPrompt: false } | ({ shouldPrompt: true } & LoginItemPreview);
+    [WorkerMessageType.AUTOFILL_SEQUENCE]: AutofillResult;
+    [WorkerMessageType.AUTOSUGGEST_ALIAS]: { aliasCreationDisabled: boolean };
+    [WorkerMessageType.AUTOSUGGEST_PASSWORD]: PasswordAutosuggestOptions;
+    [WorkerMessageType.CLIENT_INIT]: ClientInitResult;
+    [WorkerMessageType.CLIPBOARD_OFFSCREEN_READ]: { content: string };
+    [WorkerMessageType.ENDPOINT_INIT]: EndpointContext;
+    [WorkerMessageType.FETCH_DOMAINIMAGE]: { result: Maybe<string> };
+    [WorkerMessageType.FORM_ENTRY_COMMIT]: { submission: MaybeNull<AutosaveFormEntry> };
+    [WorkerMessageType.FORM_ENTRY_REQUEST]: { submission: MaybeNull<AutosaveFormEntry> };
+    [WorkerMessageType.FORM_ENTRY_STAGE]: { submission: MaybeNull<AutosaveFormEntry> };
+    [WorkerMessageType.FRAME_FIELD_LOCK]: { wasFocused: boolean };
+    [WorkerMessageType.FRAME_FORM_CLUSTER]: ClusterFrame;
+    [WorkerMessageType.FRAME_FORMS_QUERY]: FrameFormsResult;
+    [WorkerMessageType.FRAME_QUERY]: FrameQueryResult;
+    [WorkerMessageType.FRAME_VISIBILITY]: FrameCheckResult;
+    [WorkerMessageType.INLINE_DROPDOWN_STATE]: DropdownStateDTO;
+    [WorkerMessageType.INLINE_ICON_SHIFT]: IconShiftResult;
+    [WorkerMessageType.LOG_REQUEST]: { logs: string[] };
+    [WorkerMessageType.MODEL_ARTIFACT_REQUEST]: { artifact: MaybeNull<ModelArtifact> };
+    [WorkerMessageType.MONITOR_2FAS]: { result: UniqueItem[] };
+    [WorkerMessageType.MONITOR_WEAK_PASSWORDS]: { result: UniqueItem[] };
+    [WorkerMessageType.OTP_CODE_GENERATE]: OtpCode;
+    [WorkerMessageType.PASS_CORE_RPC]: { result: PassCoreResult<PassCoreMethod> };
+    [WorkerMessageType.PASSKEY_CREATE]: PasskeyCreateResponse;
+    [WorkerMessageType.PASSKEY_GET]: PasskeyGetResponse;
+    [WorkerMessageType.PASSKEY_INTERCEPT]: { intercept: boolean };
+    [WorkerMessageType.PASSKEY_QUERY]: { passkeys: SelectedPasskey[] };
+    [WorkerMessageType.POPUP_INIT]: PopupInitialState;
+    [WorkerMessageType.REGISTER_ELEMENTS]: { hash: string; scriptFallback: boolean };
+    [WorkerMessageType.RESOLVE_EXTENSION_KEY]: { key: string };
+    [WorkerMessageType.RESOLVE_USER]: { user: MaybeNull<User> };
+    [WorkerMessageType.SPOTLIGHT_CHECK]: { enabled: boolean };
+    [WorkerMessageType.SPOTLIGHT_REQUEST]: { message: MaybeNull<SpotlightMessage> };
+    [WorkerMessageType.VAULTS_QUERY]: {
+        vaults: VaultShareItem[];
+        defaultShareId: ShareId;
+        folders: FoldersByShareId;
+        canUseFolders: boolean;
+    };
+    [WorkerMessageType.WEBSITE_RULES_REQUEST]: { rules: MaybeNull<DetectionRulesMatch> };
+};
+
+export type WorkerMessageResponse<MessageType> = MessageType extends keyof WorkerMessageResponseMap
+    ? WorkerMessageResponseMap[MessageType]
+    : boolean;
+
+export type WorkerResponse<T extends Maybe<WorkerMessage | WorkerMessageWithSender>> = T extends undefined
+    ? MessageFailure
+    : T extends WorkerMessage
+      ? T['type'] extends infer MessageType
+          ? MaybeMessage<WorkerMessageResponse<MessageType>>
+          : never
+      : never;
+
+export type SendTabResponse<T extends WorkerMessageType = WorkerMessageType> = (res: WorkerMessageResponse<T>) => void;

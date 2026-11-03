@@ -1,0 +1,55 @@
+import { hasBit } from '@proton/shared/lib/helpers/bitset';
+
+import type { ShareItem } from '../../store/reducers';
+import type { ShareGetResponse } from '../../types/api/pass';
+import type { ShareId } from '../../types/crypto/pass-types';
+import type { Share } from '../../types/data/shares';
+import { ShareFlags, ShareRole, ShareType } from '../../types/data/shares';
+
+/* overload for subtypes */
+export function isVaultShare(share: ShareItem): share is ShareItem<ShareType.Vault>;
+export function isVaultShare(share: Share): share is Share<ShareType.Vault> {
+    return share.targetType === ShareType.Vault;
+}
+
+export function isItemShare(share: Share): share is Share<ShareType.Item> {
+    return share.targetType === ShareType.Item;
+}
+
+export const isShareManageable = <T extends Share>(share: T) => share.owner || share.shareRoleId === ShareRole.MANAGER;
+export const isGroupManagedShare = <T extends Share>(share: T) => isShareManageable(share) && share.groupId !== null;
+export const isShareWritable = <T extends Share>({ shareRoleId }: T) => shareRoleId !== ShareRole.READ;
+
+export const isShareDeduped =
+    (shareIds: ShareId[]) =>
+    <T extends Share>({ shareId }: T) =>
+        shareIds.includes(shareId);
+export const isShareVisible = <T extends { flags: number }>(share: T) => !hasBit(share.flags, ShareFlags.HIDDEN);
+export const isShareHidingSensitiveContent = <T extends { flags: number }>(share: T) =>
+    hasBit(share.flags, ShareFlags.HIDE_SENSITIVE_CONTENT);
+export const isGroupShare = <T extends Share>(share: T): share is T & { groupId: string } => share.groupId !== null;
+
+/** If the `canAutofill` flag is not present on the share item, fallback to client
+ * side downgrade detection : only allow autofilling from writable shares. */
+export const isAutofillableShare = <T extends Share>(share: T, writableOnly: boolean) => {
+    const canAutofill = typeof share.canAutofill === 'boolean' ? share.canAutofill : true;
+    const writableMatch = writableOnly ? isShareWritable(share) : true;
+    return canAutofill && writableMatch;
+};
+
+/** These share property changes are not reflected in the
+ * share events endpoint. As such, compare manually when
+ * polling for all shares to detect potential updates.
+ * Keep inline with `ShareSyncKeys` */
+export const hasShareChanged = (current: Share, incoming: ShareGetResponse) =>
+    current.owner !== incoming.Owner ||
+    current.shareRoleId !== incoming.ShareRoleID ||
+    current.shared !== incoming.Shared ||
+    current.targetMembers !== incoming.TargetMembers ||
+    current.newUserInvitesReady !== incoming.NewUserInvitesReady ||
+    current.targetMaxMembers !== incoming.TargetMaxMembers ||
+    current.canAutofill !== incoming.CanAutoFill ||
+    current.flags !== incoming.Flags ||
+    current.addressId !== incoming.AddressID ||
+    current.groupId !== incoming.GroupID ||
+    current.permission !== incoming.Permission;

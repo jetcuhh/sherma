@@ -1,0 +1,54 @@
+import { memo, useEffect } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { Kbd } from '@proton/atoms/Kbd/Kbd';
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import { IcCheckmarkTriple } from '@proton/icons/icons/IcCheckmarkTriple';
+import { metaKey } from '@proton/shared/lib/helpers/browser';
+
+import { useBulkActions } from './BulkSelectionActions';
+import { useBulkEnabled } from './BulkSelectionState';
+
+type Props = { disabled?: boolean };
+
+export const BulkToggle = memo(({ disabled }: Props) => {
+    const bulk = useBulkActions();
+    const bulkEnabled = useBulkEnabled();
+
+    useEffect(() => {
+        if (disabled) bulk.disable();
+    }, [disabled]);
+
+    return (
+        <Tooltip
+            key="bulk-toggle"
+            openDelay={500}
+            isOpen={bulkEnabled ? false : undefined}
+            originalPlacement="bottom"
+            title={<Kbd shortcut={metaKey} />}
+        >
+            <Button
+                shape="solid"
+                size="small"
+                color="weak"
+                onClick={bulk[bulkEnabled ? 'disable' : 'enable']}
+                title={bulkEnabled ? c('Action').t`Cancel bulk selection` : c('Action').t`Bulk select items`}
+                disabled={disabled}
+                className="flex flex-nowrap gap-2 grow-0 text-sm text-semibold max-w-1/3"
+            >
+                {bulkEnabled ? (
+                    c('Action').t`Cancel`
+                ) : (
+                    <>
+                        <IcCheckmarkTriple className="shrink-0" />
+                        <span className="text-ellipsis hidden xl:block">{c('Action').t`Multiple select`}</span>
+                    </>
+                )}
+            </Button>
+        </Tooltip>
+    );
+});
+
+BulkToggle.displayName = 'BulkToggleMemo';

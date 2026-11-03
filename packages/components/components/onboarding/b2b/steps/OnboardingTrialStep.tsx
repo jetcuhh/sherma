@@ -1,0 +1,181 @@
+import { type ReactNode, useMemo } from 'react';
+
+import { c } from 'ttag';
+
+import { usePaymentMethods } from '@proton/account/paymentMethods/hooks';
+import { useSubscription } from '@proton/account/subscription/hooks';
+import { Button } from '@proton/atoms/Button/Button';
+import { Href } from '@proton/atoms/Href/Href';
+import { useTrialInfo } from '@proton/payments-ui/ui/hooks/useTrialInfo';
+import { getPlanTitle } from '@proton/payments/core/subscription/helpers';
+import chronometerSvg from '@proton/styles/assets/img/onboarding/b2b/img-b2b-chronometer.svg';
+import helpSvg from '@proton/styles/assets/img/onboarding/b2b/img-b2b-help.svg';
+import hourglassSvg from '@proton/styles/assets/img/onboarding/b2b/img-b2b-hourglass.svg';
+import paymentMethodSvg from '@proton/styles/assets/img/onboarding/b2b/img-b2b-payment-method.svg';
+import clsx from '@proton/utils/clsx';
+
+import useActiveBreakpoint from '../../../../hooks/useActiveBreakpoint';
+import ModalTwoContent from '../../../modalTwo/ModalContent';
+import ModalTwoFooter from '../../../modalTwo/ModalFooter';
+import ModalTwoHeader from '../../../modalTwo/ModalHeader';
+import Time from '../../../time/Time';
+
+interface Props {
+    onNext: () => void;
+}
+
+interface TrialElement {
+    id: string;
+    description: ReactNode;
+    img: string;
+}
+
+const getTrialElements = (
+    trialEndsOn: number | undefined,
+    planTitle: string | undefined,
+    hasPaymentMethod: boolean
+): TrialElement[] => {
+    if (!trialEndsOn || !planTitle) {
+        return [];
+    }
+
+    const cancelDate = <Time key="cancel-date">{trialEndsOn}</Time>;
+
+    const cancelAnytimeTitle = <b>{c('Onboarding Trial').jt`Cancel anytime before ${cancelDate}.`}</b>;
+    const cancelAnytimeDescription = c('Onboarding Trial')
+        .jt`You can use ${planTitle} until the trial ends, and you won’t be charged.`;
+    const cancelAnytimeArray = [cancelAnytimeTitle, ' ', cancelAnytimeDescription];
+
+    // translator: full sentence is: Add a payment method to keep using all of the features after your trial ends.
+    const addPaymentMethodTitle = <b>{c('Onboarding Trial').t`Add a payment method`}</b>;
+    // translator: full sentence is: Add a payment method to keep using all of the features after your trial ends.
+    const addPaymentMethodDescription = c('Onboarding Trial')
+        .t`to keep using all of the features after your trial ends.`;
+    const addPaymentMethodArray = [addPaymentMethodTitle, ' ', addPaymentMethodDescription];
+
+    // translator: full sentence is: Once your full subscription starts... You can still cancel within 30 days and get a pro-rata refund.
+    const refundTitle = <b>{c('Onboarding Trial').jt`Once your full subscription starts...`}</b>;
+
+    // translator: full sentence is: Once your full subscription starts... You can still cancel within 30 days and get a pro-rata refund.
+    const refundDescription = c('Onboarding Trial').t`You can still cancel within 30 days and get a pro-rata refund.`;
+    const refundArray = [refundTitle, ' ', refundDescription];
+
+    // translator: full sentence is: If you continue after your trial, you can cancel within 30 days and get a pro-rata refund.
+    const continueAfterTrialTitle = <b>{c('Onboarding Trial').t`If you continue after your trial,`}</b>;
+
+    // translator: full sentence is: If you continue after your trial, you can cancel within 30 days and get a pro-rata refund.
+    const continueAfterTrialDescription = c('Onboarding Trial')
+        .t`you can cancel within 30 days and get a pro-rata refund.`;
+    const continueAfterTrialArray = [continueAfterTrialTitle, ' ', continueAfterTrialDescription];
+
+    // translator: full sentence is: If you need help, visit our help center or contact our support team.
+    const helpCenterLink = (
+        <Href key="help-center-link" href="https://proton.me/support/business">{c('Onboarding Trial')
+            .t`help center`}</Href>
+    );
+
+    // translator: full sentence is: If you need help, visit our help center or contact our support team.
+    const contactSupportLink = (
+        <Href key="contact-support-link" href="https://proton.me/support/business">{c('Onboarding Trial')
+            .t`contact our support team`}</Href>
+    );
+
+    // translator: full sentence is: If you need help, visit our help center or contact our support team.
+    const helpTitle = <b>{c('Onboarding Trial').t`If you need help,`}</b>;
+    // translator: full sentence is: If you need help, visit our help center or contact our support team.
+    const helpDescription = c('Onboarding Trial').jt` visit our ${helpCenterLink} or ${contactSupportLink}.`;
+    const helpArray = [helpTitle, ' ', helpDescription];
+
+    return [
+        hasPaymentMethod
+            ? {
+                  id: 'cancelAnytime',
+                  description: cancelAnytimeArray,
+                  img: hourglassSvg,
+              }
+            : {
+                  id: 'addPaymentMethod',
+                  description: addPaymentMethodArray,
+                  img: paymentMethodSvg,
+              },
+        {
+            id: 'refund',
+            description: hasPaymentMethod ? refundArray : continueAfterTrialArray,
+            img: chronometerSvg,
+        },
+        {
+            id: 'help',
+            description: helpArray,
+            img: helpSvg,
+        },
+    ];
+};
+
+const TrialFeature = ({ description, imgSrc }: { description: ReactNode; imgSrc: string }) => {
+    const { viewportWidth } = useActiveBreakpoint();
+    const isSmallViewPort = viewportWidth['<=small'];
+    return (
+        <div className="flex flex-row gap-4 items-center">
+            <img
+                className={clsx('w-custom', isSmallViewPort && 'self-start')}
+                style={{ '--w-custom': isSmallViewPort ? '3rem' : '5rem' }}
+                src={imgSrc}
+                alt=""
+            />
+            <div className="flex-1 flex gap-0">
+                <p className="m-0 text-weak">{description}</p>
+            </div>
+        </div>
+    );
+};
+
+const OnboardingTrialStep = ({ onNext }: Props) => {
+    const [subscription] = useSubscription();
+
+    const { hasAtLeastOneB2BTrial } = useTrialInfo();
+    const [paymentMethods, loadingPaymentMethods] = usePaymentMethods();
+
+    const trialEndsOn = subscription?.PeriodEnd;
+    const planTitle = getPlanTitle(subscription);
+    const hasPaymentMethod = !!paymentMethods?.length;
+
+    const trialElements = useMemo(
+        () => getTrialElements(trialEndsOn, planTitle, hasPaymentMethod),
+        [trialEndsOn, planTitle, hasPaymentMethod]
+    );
+
+    if (!hasAtLeastOneB2BTrial || loadingPaymentMethods) {
+        return null;
+    }
+
+    const trialEndsOnFormatted = <Time key="trial-ends-on">{trialEndsOn}</Time>;
+
+    return (
+        <>
+            <ModalTwoHeader
+                title={c('Onboarding Trial').t`Your free trial has started`}
+                titleClassName="mb-2 text-2xl text-bold text-center"
+                subline={
+                    <>{c('Onboarding Trial')
+                        .jt`Enjoy free business security features until ${trialEndsOnFormatted}.`}</>
+                }
+                sublineClassName="text-center color-weak mb-6"
+                hasClose={false}
+            />
+            <ModalTwoContent className="mb-4">
+                <div className="flex flex-column gap-y-4 mt-12">
+                    {trialElements.map(({ id, description, img }) => (
+                        <TrialFeature key={id} imgSrc={img} description={description} />
+                    ))}
+                </div>
+            </ModalTwoContent>
+            <ModalTwoFooter>
+                <Button size="large" color="norm" fullWidth onClick={onNext}>
+                    {c('Onboarding Trial').t`Continue`}
+                </Button>
+            </ModalTwoFooter>
+        </>
+    );
+};
+
+export default OnboardingTrialStep;

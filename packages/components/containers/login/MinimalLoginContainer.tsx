@@ -1,0 +1,468 @@
+import type { ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { useFido2Action } from '@proton/account/fido/useFido2Action';
+import { useApi } from '@proton/app-context/useApi';
+import { useConfig } from '@proton/app-context/useConfig';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import type { TwoFactorCredentials } from '@proton/shared/lib/api/auth';
+import { PasswordError, TOTPError } from '@proton/shared/lib/authentication/error';
+import type { Fido2Data, Fido2Response } from '@proton/shared/lib/authentication/interface';
+import type { AuthTypes } from '@proton/shared/lib/authentication/twoFactor';
+import { requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import { getAuthentication } from '@proton/shared/lib/webauthn/get';
+import isTruthy from '@proton/utils/isTruthy';
+import noop from '@proton/utils/noop';
+
+import Checkbox from '../../components/input/Checkbox';
+import Label from '../../components/label/Label';
+import { Tabs } from '../../components/tabs/Tabs';
+import { InputField as InputFieldTwo } from '../../components/v2/field/InputField';
+import PasswordInputTwo from '../../components/v2/input/PasswordInput';
+import useFormErrors from '../../components/v2/useFormErrors';
+import useErrorHandler from '../../hooks/useErrorHandler';
+import useLocalState from '../../hooks/useLocalState';
+import AuthSecurityKeyContent from '../account/fido/AuthSecurityKeyContent';
+import { TotpInputField, TotpRecoveryCodeInputField } from '../account/totp/TotpInputs';
+import type { OnLoginCallback } from '../app/interface';
+import {
+    type AuthActionResponse,
+    type AuthCacheResult,
+    AuthStep,
+    handleFido2,
+    handleLogin,
+    handleNextLogin,
+    handleTotp,
+    handleUnlock,
+} from './loginActions';
+
+const UnlockForm = ({
+    onSubmit,
+    cancelButton,
+}: {
+    onSubmit: (totp: string) => Promise<void>;
+    cancelButton?: ReactNode;
+}) => {
+    const [loading, withLoading] = useLoading();
+    const [keyPassword, setKeyPassword] = useState('');
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    return (
+        <form
+            name="unlockForm"
+            onSubmit={(event) => {
+                event.preventDefault();
+                if (!onFormSubmit()) {
+                    return;
+                }
+                withLoading(onSubmit(keyPassword)).catch(noop);
+            }}
+            method="post"
+        >
+            <InputFieldTwo
+                as={PasswordInputTwo}
+                id="mailboxPassword"
+                bigger
+                label={c('Label').t`Second password`}
+                error={validator([requiredValidator(keyPassword)])}
+                disableChange={loading}
+                autoFocus
+                value={keyPassword}
+                onValue={setKeyPassword}
+                /**
+                 * Mark this field as ignored for Pass extension, to avoid Pass
+                 * prompting auto-save after submitting the form, which could make users
+                 * accidentally overwrite their first password with their mailbox password
+                 * (login items in Pass only support a single password field).
+                 * This will also prevent Pass from autofilling this field but we expect most users
+                 * to only put their first password and not mailbox password as their login password.
+                 */
+                data-protonpass-ignore={true}
+            />
+            <div className="flex justify-space-between">
+                <Button
+                    color="norm"
+                    size="large"
+                    fullWidth
+                    type="submit"
+                    loading={loading}
+                    data-cy-login="submit mailbox password"
+                >
+                    {c('Action').t`Submit`}
+                </Button>
+                {cancelButton}
+            </div>
+        </form>
+    );
+};
+
+const TOTPForm = ({
+    onSubmit,
+    cancelButton,
+}: {
+    onSubmit: (totp: string) => Promise<void>;
+    cancelButton?: ReactNode;
+}) => {
+    const [loading, withLoading] = useLoading();
+
+    const [code, setCode] = useState('');
+    const [type, setType] = useState<'totp' | 'recovery-code'>('totp');
+    const hasBeenAutoSubmitted = useRef(false);
+
+    const { validator, onFormSubmit, reset } = useFormErrors();
+
+    const safeCode = code.replaceAll(/\s+/g, '');
+    const requiredError = requiredValidator(safeCode);
+
+    useEffect(() => {
+        if (type !== 'totp' || loading || requiredError || hasBeenAutoSubmitted.current) {
+            return;
+        }
+        // Auto-submit the form once the user has entered the TOTP
+        if (safeCode.length === 6) {
+            // Do it just one time
+            hasBeenAutoSubmitted.current = true;
+            withLoading(onSubmit(safeCode)).catch(noop);
+        }
+    }, [safeCode]);
+
+    return (
+        <form
+            name="totpForm"
+            onSubmit={(event) => {
+                event.preventDefault();
+                if (!onFormSubmit()) {
+                    return;
+                }
+                withLoading(onSubmit(safeCode)).catch(noop);
+            }}
+            method="post"
+        >
+            {type === 'totp' ? (
+                <TotpInputField code={code} error={validator([requiredError])} loading={loading} setCode={setCode} />
+            ) : (
+                <TotpRecoveryCodeInputField
+                    code={code}
+                    error={validator([requiredError])}
+                    loading={loading}
+                    setCode={setCode}
+                    bigger
+                />
+            )}
+            <div className="flex justify-space-between">
+                <Button size="large" fullWidth color="norm" type="submit" loading={loading}>
+                    {c('Action').t`Submit`}
+                </Button>
+                <Button
+                    color="norm"
+                    shape="ghost"
+                    size="large"
+                    fullWidth
+                    className="mt-2"
+                    onClick={() => {
+                        if (loading) {
+                            return;
+                        }
+                        reset();
+                        setCode('');
+                        setType(type === 'totp' ? 'recovery-code' : 'totp');
+                    }}
+                >
+                    {type === 'totp' ? c('Action').t`Use recovery code` : c('Action').t`Use authentication code`}
+                </Button>
+                {cancelButton}
+            </div>
+        </form>
+    );
+};
+
+interface Fido2FormProps {
+    onSubmit: (data: Fido2Data) => Promise<void>;
+    fido2: Fido2Response;
+    cancelButton: ReactNode;
+}
+const Fido2Form = ({ onSubmit, fido2, cancelButton }: Fido2FormProps) => {
+    const [loading, withLoading] = useLoading(false);
+    const { fidoError, awaitingTouch, runFido2Action } = useFido2Action();
+
+    return (
+        <>
+            <AuthSecurityKeyContent awaitingTouch={awaitingTouch} error={fidoError} />
+            <div className="flex justify-space-between">
+                <Button
+                    autoFocus={true}
+                    size="large"
+                    color="norm"
+                    type="submit"
+                    fullWidth
+                    loading={loading}
+                    className="mt-6"
+                    onClick={() => {
+                        if (loading) {
+                            return;
+                        }
+                        const run = async () => {
+                            const authenticationCredentialsPayload = await runFido2Action(
+                                (signal) => getAuthentication(fido2.AuthenticationOptions, signal),
+                                'auth'
+                            );
+                            await onSubmit(authenticationCredentialsPayload);
+                        };
+                        withLoading(run()).catch(noop);
+                    }}
+                >
+                    {c('Action').t`Authenticate`}
+                </Button>
+                {cancelButton}
+            </div>
+        </>
+    );
+};
+
+interface TwoFactorStepProps {
+    onSubmit: (data: TwoFactorCredentials) => Promise<void>;
+    fido2?: Fido2Response | null;
+    authTypes: AuthTypes;
+    cancelButton: ReactNode;
+}
+
+const TwoFactorStep = ({ onSubmit, fido2, authTypes, cancelButton }: TwoFactorStepProps) => {
+    const [tabIndex, setTabIndex] = useState(0);
+    return (
+        <Tabs
+            fullWidth
+            value={tabIndex}
+            onChange={setTabIndex}
+            tabs={[
+                authTypes.twoFactor.fido2 &&
+                    fido2 && {
+                        title: c('fido2: Label').t`Security key`,
+                        content: (
+                            <Fido2Form
+                                onSubmit={(payload) => onSubmit({ type: 'fido2', payload })}
+                                fido2={fido2}
+                                cancelButton={cancelButton}
+                            />
+                        ),
+                    },
+                authTypes.twoFactor.totp && {
+                    title: c('Label').t`Authenticator app`,
+                    content: (
+                        <TOTPForm
+                            onSubmit={(payload) => onSubmit({ type: 'code', payload })}
+                            cancelButton={cancelButton}
+                        />
+                    ),
+                },
+            ].filter(isTruthy)}
+        />
+    );
+};
+
+const LoginForm = ({
+    onSubmit,
+}: {
+    onSubmit: (data: { username: string; password: string; persistent: boolean }) => Promise<void>;
+}) => {
+    const [loading, withLoading] = useLoading();
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [persistent, setPersistent] = useLocalState(true, 'default-persistent');
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    return (
+        <form
+            name="loginForm"
+            onSubmit={(event) => {
+                event.preventDefault();
+                if (!onFormSubmit()) {
+                    return;
+                }
+                withLoading(onSubmit({ username, password, persistent })).catch(noop);
+            }}
+            method="post"
+        >
+            <InputFieldTwo
+                id="username"
+                bigger
+                autoFocus
+                label={c('Label').t`Email or username`}
+                error={validator([requiredValidator(username)])}
+                autoComplete="username"
+                value={username}
+                onValue={setUsername}
+            />
+            <InputFieldTwo
+                id="password"
+                bigger
+                label={c('Label').t`Password`}
+                error={validator([requiredValidator(password)])}
+                as={PasswordInputTwo}
+                autoComplete="current-password"
+                value={password}
+                onValue={setPassword}
+                rootClassName="mt-2"
+            />
+            <div className="flex flex-row items-start align-center mb-2">
+                <Checkbox
+                    id="staySignedIn"
+                    className="mr-2"
+                    checked={persistent}
+                    onChange={() => setPersistent(!persistent)}
+                />
+                <Label htmlFor="staySignedIn" className="p-0 flex-1">
+                    {c('Label').t`Keep me signed in`}
+                </Label>
+            </div>
+            <Button
+                color="norm"
+                size="large"
+                type="submit"
+                fullWidth
+                loading={loading}
+                className="mt-4"
+                data-cy-login="submit"
+            >
+                {c('Action').t`Sign in`}
+            </Button>
+        </form>
+    );
+};
+
+interface Props {
+    onLogin: OnLoginCallback;
+    onStartAuth: () => Promise<void>;
+}
+
+/** A bare password sign-in for the standalone dev app. */
+const MinimalLoginContainer = ({ onLogin, onStartAuth }: Props) => {
+    const { APP_NAME } = useConfig();
+    const { createNotification } = useNotifications();
+
+    const normalApi = useApi();
+    const silentApi = <T,>(config: any) => normalApi<T>({ ...config, silence: true });
+    const errorHandler = useErrorHandler();
+
+    const cacheRef = useRef<AuthCacheResult | undefined>(undefined);
+    const [step, setStep] = useState(AuthStep.LOGIN);
+
+    const handleResult = async (result: AuthActionResponse) => {
+        if (result.to === AuthStep.DONE) {
+            await onLogin(result.session);
+            return;
+        }
+        cacheRef.current = result.cache;
+        setStep(result.to);
+    };
+
+    const handleCancel = () => {
+        cacheRef.current = undefined;
+        setStep(AuthStep.LOGIN);
+    };
+
+    const handleError = (e: any) => {
+        // A wrong code or password: stay on the step, so the user can try again
+        if (e instanceof TOTPError || e instanceof PasswordError) {
+            createNotification({ type: 'error', text: e.message });
+            return;
+        }
+        if (step === AuthStep.LOGIN || step === AuthStep.UNLOCK || step === AuthStep.TWO_FA) {
+            handleCancel();
+        }
+        errorHandler(e);
+    };
+
+    const cancelButton = (
+        <Button size="large" shape="ghost" type="button" fullWidth onClick={handleCancel} className="mt-2">
+            {c('Action').t`Cancel`}
+        </Button>
+    );
+
+    const cache = cacheRef.current;
+
+    return (
+        <>
+            {step === AuthStep.LOGIN && (
+                <LoginForm
+                    onSubmit={async ({ username, password, persistent }) => {
+                        try {
+                            await onStartAuth();
+                            const loginResult = await handleLogin({
+                                username,
+                                persistent,
+                                password,
+                                api: silentApi,
+                            });
+                            const result = await handleNextLogin({
+                                authResponse: loginResult.authResult.result,
+                                authVersion: loginResult.authResult.authVersion,
+                                appName: APP_NAME,
+                                productParam: APP_NAME,
+                                username,
+                                password,
+                                api: silentApi,
+                                persistent: false,
+                            });
+                            return await handleResult(result);
+                        } catch (e) {
+                            handleError(e);
+                        }
+                    }}
+                />
+            )}
+            {step === AuthStep.TWO_FA && cache && (
+                <TwoFactorStep
+                    fido2={cache.authResponse?.['2FA']?.FIDO2}
+                    authTypes={cache.authTypes}
+                    cancelButton={cancelButton}
+                    onSubmit={async (data) => {
+                        if (data.type === 'code') {
+                            try {
+                                const result = await handleTotp({
+                                    cache,
+                                    totp: data.payload,
+                                });
+                                await handleResult(result);
+                            } catch (e) {
+                                handleError(e);
+                            }
+                        }
+
+                        if (data.type === 'fido2') {
+                            try {
+                                const result = await handleFido2({
+                                    cache,
+                                    payload: data.payload,
+                                });
+                                await handleResult(result);
+                            } catch (e) {
+                                handleError(e);
+                            }
+                        }
+                    }}
+                />
+            )}
+            {step === AuthStep.UNLOCK && cache && (
+                <UnlockForm
+                    cancelButton={cancelButton}
+                    onSubmit={(keyPassword) => {
+                        return handleUnlock({
+                            cache,
+                            clearKeyPassword: keyPassword,
+                        })
+                            .then(handleResult)
+                            .catch(handleError);
+                    }}
+                />
+            )}
+        </>
+    );
+};
+
+export default MinimalLoginContainer;

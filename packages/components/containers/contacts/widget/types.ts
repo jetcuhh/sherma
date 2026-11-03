@@ -1,0 +1,33 @@
+import type { ReactNode } from 'react';
+
+import type { Recipient } from '@proton/shared/lib/interfaces/Address';
+import type { ContactEmail } from '@proton/shared/lib/interfaces/contacts/Contact';
+import type { SimpleMap } from '@proton/shared/lib/interfaces/utils';
+
+import type useContactList from '../hooks/useContactList';
+
+export enum CONTACT_WIDGET_TABS {
+    CONTACTS = 0,
+    GROUPS = 1,
+}
+
+export interface CustomActionRenderProps {
+    onClose?: () => void;
+    noSelection: boolean;
+    selected: string[];
+    contactList?: ReturnType<typeof useContactList>;
+    groupsEmailsMap?: SimpleMap<ContactEmail[]>;
+    recipients?: Recipient[];
+}
+
+export interface CustomAction {
+    render: ({
+        onClose,
+        noSelection,
+        selected,
+        contactList,
+        groupsEmailsMap,
+        recipients,
+    }: CustomActionRenderProps) => ReactNode;
+    tabs: CONTACT_WIDGET_TABS[];
+}

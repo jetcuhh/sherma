@@ -1,0 +1,39 @@
+import type { FC, ReactNode } from 'react';
+
+import { Avatar } from '@proton/atoms/Avatar/Avatar';
+import clsx from '@proton/utils/clsx';
+
+import { isPaidPlan } from '../../lib/user/user.predicates';
+import type { UserPassPlan } from '../../types/api/plan';
+
+type Props = {
+    actions?: ReactNode;
+    email: string;
+    name: string;
+    organization?: string;
+    plan?: UserPassPlan;
+    planName?: string;
+};
+
+export const UserPanel: FC<Props> = ({ actions, email, name, organization, plan, planName }) => {
+    const emailOnly = planName !== undefined;
+    const avatar = (name || email)?.toUpperCase()?.[0];
+
+    return (
+        <div className={clsx('flex flex-nowrap gap-2 items-center text-sm', plan && isPaidPlan(plan) && 'ui-orange')}>
+            <Avatar className="shrink-0">{avatar}</Avatar>
+            <div className="text-left flex-1">
+                <span className="color-norm block text-ellipsis">{emailOnly ? email : name}</span>
+                {!emailOnly && <span className="color-weak block text-ellipsis">{email}</span>}
+
+                {planName && (
+                    <div className="color-weak block text-ellipsis">
+                        {`(${planName}${organization ? ` · ${organization}` : ''})`}
+                    </div>
+                )}
+            </div>
+
+            {actions && <div className="shrink-0">{actions}</div>}
+        </div>
+    );
+};

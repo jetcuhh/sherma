@@ -1,0 +1,110 @@
+import { runSaga } from 'redux-saga';
+
+import * as processor from '../../../../lib/sync/v2/user-events.processor';
+import * as requests from '../../../../lib/sync/v2/user-events.requests';
+import * as sync from '../../../../lib/sync/v2/user-events.sync';
+import type { Api } from '../../../../types/api/api';
+import type { SyncEventListOutput } from '../../../../types/api/pass';
+import type { MaybeNull } from '../../../../types/utils';
+import { sagaReturn, sagaSetup } from '../../../../utils/tests/saga';
+import { forcePollV2 } from '../../../actions/creators/polling';
+import { setUserEventID } from '../../../actions/creators/user';
+import type { RootSagaOptions } from '../../../types';
+import { userEventsChannel } from './channel.user-events';
+
+jest.mock('@proton/pass/lib/sync/v2/user-events.requests', () => ({
+    ...jest.requireActual('@proton/pass/lib/sync/v2/user-events.requests'),
+    getUserEventsSince: jest.fn(),
+}));
+jest.mock('@proton/pass/lib/sync/v2/user-events.processor', () => ({
+    ...jest.requireActual('@proton/pass/lib/sync/v2/user-events.processor'),
+    processUserEvents: jest.fn(),
+}));
+jest.mock('@proton/pass/lib/sync/v2/user-events.sync', () => ({
+    ...jest.requireActual('@proton/pass/lib/sync/v2/user-events.sync'),
+    processFullRefresh: jest.fn(),
+}));
+
+const getUserEventsSince = jest.mocked(requests.getUserEventsSince);
+const processUserEvents = jest.mocked(processor.processUserEvents);
+const processFullRefresh = jest.mocked(sync.processFullRefresh);
+
+const createEvents = (data: Partial<SyncEventListOutput> = {}) =>
+    ({
+        LastEventID: 'event-2',
+        EventsPending: false,
+        FullRefresh: false,
+        ...data,
+    }) as SyncEventListOutput;
+
+const options = { getPollingInterval: () => 60_000 } as RootSagaOptions;
+
+const run = async (userEventId: MaybeNull<string> = 'event-1') => {
+    const setup = sagaSetup({ user: { userEventId } });
+    const task = runSaga(setup.options, userEventsChannel, {} as Api, options);
+    await setup.nextTick();
+    return { ...setup, task };
+};
+
+beforeEach(() => {
+    jest.clearAllMocks();
+    getUserEventsSince.mockResolvedValue(createEvents());
+    processUserEvents.mockImplementation(sagaReturn(true));
+    processFullRefresh.mockImplementation(sagaReturn(true));
+});
+
+describe('`userEventsChannel`', () => {
+    test('polls since the latest `userEventID` and updates it once processed', async () => {
+        const { dispatched, task } = await run();
+        expect(getUserEventsSince).toHaveBeenCalledWith('event-1');
+        expect(dispatched).toContainEqual(setUserEventID('event-2'));
+        task.cancel();
+    });
+
+    test('does not update `userEventID` when processing fails', async () => {
+        processUserEvents.mockImplementation(sagaReturn(false));
+        const { dispatched, task } = await run();
+        expect(dispatched).not.toContainEqual(setUserEventID('event-2'));
+        task.cancel();
+    });
+
+    test('does not update `userEventID` on full refresh events [delegates to underlying `syncV2` call]', async () => {
+        getUserEventsSince.mockResolvedValue(createEvents({ FullRefresh: true }));
+        const { dispatched, task } = await run();
+        expect(dispatched).not.toContainEqual(setUserEventID('event-2'));
+        task.cancel();
+    });
+
+    test('runs a full sync to get a new `userEventID` if missing', async () => {
+        const { task } = await run(null);
+        expect(getUserEventsSince).not.toHaveBeenCalled();
+        expect(processFullRefresh).toHaveBeenCalled();
+        task.cancel();
+    });
+
+    test('polls immediately while events are pending', async () => {
+        getUserEventsSince.mockResolvedValueOnce(createEvents({ EventsPending: true }));
+        const { nextTick, task } = await run();
+        await nextTick();
+        expect(getUserEventsSince).toHaveBeenCalledTimes(2);
+        task.cancel();
+    });
+
+    test('`forcePollV2` short-circuits the poll delay', async () => {
+        const { options: sagaOptions, nextTick, task } = await run();
+        expect(getUserEventsSince).toHaveBeenCalledTimes(1);
+        sagaOptions.dispatch(forcePollV2());
+        await nextTick();
+        expect(getUserEventsSince).toHaveBeenCalledTimes(2);
+        task.cancel();
+    });
+
+    test('survives poll errors and keeps the channel alive', async () => {
+        getUserEventsSince.mockRejectedValueOnce(new Error('network'));
+        const { options: sagaOptions, dispatched, nextTick, task } = await run();
+        sagaOptions.dispatch(forcePollV2());
+        await nextTick();
+        expect(dispatched).toContainEqual(setUserEventID('event-2'));
+        task.cancel();
+    });
+});

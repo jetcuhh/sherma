@@ -1,0 +1,310 @@
+import { c } from 'ttag';
+
+import { useEntitlementCatalog } from '@proton/account/entitlementCatalog/hooks';
+import { Button } from '@proton/atoms/Button/Button';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { Href } from '@proton/atoms/Href/Href';
+import { Pill } from '@proton/atoms/Pill/Pill';
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import type { ADDON_NAMES } from '@proton/payments/core/constants';
+import type { FreeSubscription } from '@proton/payments/core/interface';
+import {
+    canModify,
+    getAddons,
+    getHasPassB2BPlan,
+    getIsB2BAudienceFromSubscription,
+    getSubscriptionPlanTitle,
+    hasCustomCycle,
+    hasFree,
+    hasVPNPassBundle,
+    isAutoRenewTrial,
+    isManagedExternally,
+    isTrial,
+    isTrialRenewing,
+    subscriptionExpires,
+    willTrialExpireInLessThan1Week,
+} from '@proton/payments/core/subscription/helpers';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { getTrialInfoForSingleSubscription } from '@proton/payments/core/trials';
+import { isPaidSubscription } from '@proton/payments/core/type-guards';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import { APPS } from '@proton/shared/lib/constants';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { Organization } from '@proton/shared/lib/interfaces/Organization';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+import { MailFeatureFlag } from '@proton/unleash/Flags';
+import { useFlag } from '@proton/unleash/useFlag';
+import isTruthy from '@proton/utils/isTruthy';
+
+import SettingsLink from '../../../../components/link/SettingsLink';
+import useSettingsLink from '../../../../components/link/useSettingsLink';
+import useDashboardPaymentFlow from '../../../../hooks/useDashboardPaymentFlow';
+import { useTrialOnlyPaymentMethods } from '../../../../hooks/useTrialOnlyPaymentMethods';
+import { useSubscriptionModal } from '../SubscriptionModalProvider';
+import { REACTIVATE_SOURCE } from '../cancellationFlow/useCancellationTelemetry';
+import { getReactivateSubscriptionAction } from '../helpers/subscriptionExpires';
+import { getSubscriptionPanelText } from '../helpers/subscriptionPanelHelpers';
+import {
+    BillingDateSection,
+    FreeMeetFeatures,
+    FreeVPNFeatures,
+    FreeVaultFeatures,
+    ServersSection,
+    UsersSection,
+} from './PlanFeatureSections';
+import { PlanIcon } from './PlanIcon';
+import PlanIconName from './PlanIconName';
+import {
+    getAddonDashboardTitle,
+    getBillingCycleText,
+    getPassLifetimeAddonDashboardTitle,
+    getPlanTitlePlusMaybeBrand,
+} from './helpers';
+import { StorageSection } from './storage/StorageSection';
+
+interface CurrentPlanInfoSectionProps {
+    app: APP_NAMES;
+    user: UserModel;
+    subscription: Subscription | FreeSubscription;
+    organization: Organization | undefined;
+    addresses: Address[] | undefined;
+    editBillingCycle?: boolean;
+}
+
+const AddonSection = ({
+    subscription,
+    user,
+    maxMembers,
+}: {
+    user: UserModel;
+    subscription: Subscription | FreeSubscription;
+    maxMembers: number;
+}) => {
+    const scribeToLumo = useFlag(MailFeatureFlag.ScribeToLumo);
+    const addons = isPaidSubscription(subscription) ? getAddons(subscription) : [];
+
+    const addonTitles = addons.map((addon) =>
+        getAddonDashboardTitle(addon.Name as ADDON_NAMES, addon.Quantity, maxMembers, scribeToLumo)
+    );
+    const passLifeTimeAddon = getPassLifetimeAddonDashboardTitle(user);
+    const mergedAddonTitles = [...addonTitles, passLifeTimeAddon].filter(isTruthy).join(', ');
+
+    if (mergedAddonTitles.length > 0 && !hasFree(subscription)) {
+        return (
+            <Tooltip
+                title={c('Tooltip').t`Added to your plan: ${mergedAddonTitles}`}
+                className="max-w-custom color-weak text-ellipsis"
+                style={{ '--max-w-custom': '25rem' }}
+            >
+                <div>+ {mergedAddonTitles}</div>
+            </Tooltip>
+        );
+    }
+
+    return null;
+};
+
+const TrialInfoBadge = ({ subscription }: { subscription: Subscription | FreeSubscription }) => {
+    if (!isTrial(subscription)) {
+        return null;
+    }
+
+    return (
+        <Pill className="text-semibold" backgroundColor="#C9EBFF" color="#023856" rounded="rounded-sm">{c('Info')
+            .t`Free trial`}</Pill>
+    );
+};
+
+const PlanNameSection = ({
+    app,
+    user,
+    subscription,
+    maxMembers,
+}: {
+    app: APP_NAMES;
+    user: UserModel;
+    subscription: Subscription | FreeSubscription;
+    maxMembers: number;
+}) => {
+    const { planTitle, planName } = getSubscriptionPlanTitle(user, subscription);
+
+    const billingCycleElement = subscription.Cycle && !isTrial(subscription) && (
+        <>
+            <span className="color-weak mx-1">·</span>
+            <span className="color-weak">{getBillingCycleText(subscription.Cycle)}</span>
+        </>
+    );
+
+    const topLine = (
+        <>
+            <span>{getPlanTitlePlusMaybeBrand(planTitle, planName)}</span>
+            <span className="text-normal mr-2">{billingCycleElement}</span>
+            <TrialInfoBadge subscription={subscription} />
+        </>
+    );
+
+    return (
+        <PlanIconName
+            logo={<PlanIcon app={app} user={user} subscription={subscription} />}
+            topLine={topLine}
+            bottomLine={<AddonSection user={user} subscription={subscription} maxMembers={maxMembers} />}
+        />
+    );
+};
+export const CurrentPlanInfoSection = ({
+    app,
+    user,
+    subscription,
+    organization,
+    addresses,
+    editBillingCycle = false,
+}: CurrentPlanInfoSectionProps) => {
+    const [openSubscriptionModal] = useSubscriptionModal();
+    const [entitlementCatalog] = useEntitlementCatalog();
+    const { isFree, canPay, isMember } = user;
+    const telemetryFlow = useDashboardPaymentFlow(app);
+    const goToSettings = useSettingsLink();
+
+    const { MaxMembers = 1 } = organization || {};
+    const scribeToLumo = useFlag(MailFeatureFlag.ScribeToLumo);
+
+    const { userText } = getSubscriptionPanelText(user, organization, addresses, scribeToLumo);
+
+    const showCustomizePlan = user.isPaid && user.canPay && getIsB2BAudienceFromSubscription(subscription);
+
+    const showManageSubscriptionButton = canPay && !isMember && !isFree;
+
+    const showEditBillingDetails =
+        user.isPaid &&
+        user.canPay &&
+        !getHasPassB2BPlan(subscription) &&
+        !hasCustomCycle(subscription) &&
+        !hasVPNPassBundle(subscription) &&
+        !showCustomizePlan &&
+        editBillingCycle &&
+        !isManagedExternally(subscription);
+
+    const showExploreOtherPlans = user.isPaid && user.canPay && canModify(subscription);
+
+    const handleExplorePlans = () => {
+        openSubscriptionModal({
+            step: SUBSCRIPTION_STEPS.PLAN_SELECTION,
+            telemetryFlow,
+        });
+    };
+
+    const handleEditPayment = (step = SUBSCRIPTION_STEPS.CHECKOUT) =>
+        openSubscriptionModal({
+            step,
+            disablePlanSelection: true,
+            telemetryFlow,
+        });
+
+    const handleCancelSubscription = () => {
+        goToSettings('/dashboard#cancel-subscription');
+    };
+
+    const reactivateLinkData = getReactivateSubscriptionAction(subscription, REACTIVATE_SOURCE.default);
+
+    const reactivateLink =
+        reactivateLinkData.type === 'internal' ? (
+            <ButtonLike
+                as={SettingsLink}
+                data-testid="reactivate-link"
+                key="reactivate-subscription-internal"
+                path={reactivateLinkData.path}
+            >{c('Link').t`Reactivate now`}</ButtonLike>
+        ) : (
+            <ButtonLike
+                as={Href}
+                data-testid="reactivate-link"
+                key="reactivate-subscription-external"
+                href={reactivateLinkData.href}
+            >{c('Link').t`Reactivate now`}</ButtonLike>
+        );
+
+    const { subscriptionExpiresSoon } = subscriptionExpires(subscription);
+
+    const hasTrialPaymentMethods = useTrialOnlyPaymentMethods();
+
+    const cta = (() => {
+        if (
+            (!isAutoRenewTrial(subscription) &&
+                isPaidSubscription(subscription) &&
+                willTrialExpireInLessThan1Week(subscription) &&
+                subscriptionExpiresSoon) ||
+            (getTrialInfoForSingleSubscription(entitlementCatalog, subscription).isFamilyTrial &&
+                !hasTrialPaymentMethods)
+        ) {
+            return (
+                <Button onClick={() => handleEditPayment(SUBSCRIPTION_STEPS.CHECKOUT)} data-testid="subscribe">
+                    {c('Action').t`Subscribe`}
+                </Button>
+            );
+        }
+
+        if (isAutoRenewTrial(subscription) && isTrialRenewing(subscription)) {
+            return (
+                <Button onClick={handleCancelSubscription} data-testid="edit-billing-details-trial-cancel-subscription">
+                    {c('Action').t`Cancel subscription`}
+                </Button>
+            );
+        }
+
+        if (showEditBillingDetails && isAutoRenewTrial(subscription) && !isTrialRenewing(subscription)) {
+            return reactivateLink;
+        }
+
+        if (showEditBillingDetails && editBillingCycle) {
+            return (
+                <Button onClick={() => handleEditPayment()} data-testid="edit-billing-details">{c('Action')
+                    .t`Edit billing cycle`}</Button>
+            );
+        }
+
+        if (showManageSubscriptionButton && !editBillingCycle) {
+            return (
+                <ButtonLike as={SettingsLink} shape="outline" path="/subscription">
+                    {c('Action').t`Manage subscription`}
+                </ButtonLike>
+            );
+        }
+
+        if (showExploreOtherPlans) {
+            return (
+                <Button
+                    onClick={() => handleEditPayment(SUBSCRIPTION_STEPS.PLAN_SELECTION)}
+                    data-testid="explore-other-plans"
+                >
+                    {c('Action').t`Explore other plans`}
+                </Button>
+            );
+        }
+
+        if (isFree && ([APPS.PROTONMAIL, APPS.PROTONDRIVE, APPS.PROTONCALENDAR] as APP_NAMES[]).includes(app)) {
+            return <Button onClick={handleExplorePlans}>{c('Action').t`Get more storage`}</Button>;
+        }
+
+        return null;
+    })();
+
+    return (
+        <div
+            className="flex flex-column gap-4 lg:gap-8 xl:gap-12 md:justify-space-between md:flex-wrap md:flex-row"
+            data-testid="current-plan"
+        >
+            <PlanNameSection app={app} user={user} subscription={subscription} maxMembers={MaxMembers} />
+            <div className="flex flex-column md:flex-row gap-4 lg:gap-8 xl:gap-12 xl:ml-auto">
+                <UsersSection MaxMembers={MaxMembers} userText={userText} />
+                <StorageSection app={app} organization={organization} subscription={subscription} user={user} />
+                <BillingDateSection subscription={subscription} />
+                <ServersSection app={app} organization={organization} />
+                <FreeVPNFeatures app={app} isFreeUser={isFree} />
+                <FreeVaultFeatures app={app} isFreeUser={isFree} user={user} />
+                <FreeMeetFeatures app={app} isFreeUser={isFree} />
+            </div>
+            {cta && <div className="flex items-center w-full xl:w-auto">{cta}</div>}
+        </div>
+    );
+};

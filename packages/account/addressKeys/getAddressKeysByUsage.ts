@@ -1,0 +1,52 @@
+import type { PrivateKeyReference } from '@protontech/crypto';
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import type { GetAddressKeysByUsageOptions } from '@proton/shared/lib/interfaces/hooks/GetAddressKeysByUsage';
+import { getActiveAddressKeys } from '@proton/shared/lib/keys/getActiveKeys';
+import {
+    type PrimaryAddressKeyForEncryption,
+    type PrimaryAddressKeysForSigning,
+    getPrimaryActiveAddressKeyForEncryption,
+    getPrimaryAddressKeysForSigning,
+} from '@proton/shared/lib/keys/getPrimaryKey';
+
+import type { KtState } from '../kt';
+import { type AddressKeysState, addressKeysThunk } from './index';
+
+export interface AddressKeysByUsage {
+    decryptionKeys: PrivateKeyReference[];
+    encryptionKey: PrimaryAddressKeyForEncryption;
+    signingKeys: PrimaryAddressKeysForSigning;
+    // verificationKeys can be added if there is a use-case for them
+}
+
+export const getAddressKeysByUsageThunk = ({
+    withV6SupportForEncryption,
+    withV6SupportForSigning,
+    AddressID,
+}: GetAddressKeysByUsageOptions): ThunkAction<
+    Promise<AddressKeysByUsage>,
+    AddressKeysState & KtState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, _) => {
+        const decryptedKeys = await dispatch(addressKeysThunk({ addressID: AddressID }));
+        const activeKeysByVersion = await getActiveAddressKeys(null, decryptedKeys);
+        const signingKeys = getPrimaryAddressKeysForSigning(activeKeysByVersion, withV6SupportForSigning);
+        const encryptionKey = getPrimaryActiveAddressKeyForEncryption(
+            activeKeysByVersion,
+            withV6SupportForEncryption
+        ).privateKey;
+        // on decryption, key version order does not matter
+        const decryptionKeys = [...activeKeysByVersion.v6, ...activeKeysByVersion.v4].map(
+            (activeKey) => activeKey.privateKey
+        );
+        return {
+            encryptionKey,
+            signingKeys,
+            decryptionKeys,
+        };
+    };
+};

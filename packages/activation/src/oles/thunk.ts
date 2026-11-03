@@ -1,0 +1,546 @@
+import { createAsyncThunk } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import { type AddressKeysState, addressKeysThunk } from '@proton/account/addressKeys';
+import { createAddressKeysThunk, getCreateAddressKeysPayload } from '@proton/account/addressKeys/createAddressKeys';
+import type { useGetAddressKeys } from '@proton/account/addressKeys/hooks';
+import { orderAddresses } from '@proton/account/addresses/actions';
+import type { KtState } from '@proton/account/kt';
+import { getKTActivation } from '@proton/account/kt/actions';
+import type { MemberState } from '@proton/account/member';
+import { type MembersState, getMemberAddresses, membersThunk } from '@proton/account/members';
+import { createMember } from '@proton/account/members/actions';
+import UnavailableAddressesError from '@proton/account/members/errors/UnavailableAddressesError';
+import { decryptTemporaryPassword, encryptTemporaryPassword } from '@proton/account/orgJoiningLink/helpers';
+import { organizationThunk } from '@proton/account/organization';
+import { type OrganizationKeyState, organizationKeyThunk } from '@proton/account/organizationKey';
+import type { OrganizationRolesState } from '@proton/account/organizationRoles';
+import type { ProtonDomainsState } from '@proton/account/protonDomains';
+import type { UserInvitationsState } from '@proton/account/userInvitations';
+import type { UserSettingsState } from '@proton/account/userSettings';
+import { type CalendarsState, calendarsThunk } from '@proton/calendar/calendars';
+import { createKTVerifier } from '@proton/key-transparency/helpers/createKTVerifier';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { CacheType } from '@proton/redux-utilities/interface';
+import { revoke } from '@proton/shared/lib/api/auth';
+import { createCalendar, updateCalendarUserSettings } from '@proton/shared/lib/api/calendars';
+import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { getUIDApi } from '@proton/shared/lib/api/helpers/customConfig';
+import { authMember, createMemberAddress, updateQuota } from '@proton/shared/lib/api/members';
+import { unlockPasswordChanges } from '@proton/shared/lib/api/user';
+import { getUser } from '@proton/shared/lib/authentication/getUser';
+import { getIsOwnedCalendar } from '@proton/shared/lib/calendar/calendar';
+import { DEFAULT_CALENDAR } from '@proton/shared/lib/calendar/constants';
+import { setupCalendarKey } from '@proton/shared/lib/calendar/crypto/keys/setupCalendarKeys';
+import { ADDRESS_FLAGS, MEMBER_PRIVATE, MEMBER_ROLE } from '@proton/shared/lib/constants';
+import { hasBit } from '@proton/shared/lib/helpers/bitset';
+import { getEmailParts } from '@proton/shared/lib/helpers/email';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import type { Domain } from '@proton/shared/lib/interfaces/Domain';
+import type { KeyPair } from '@proton/shared/lib/interfaces/Key';
+import type { KeyTransparencyVerify } from '@proton/shared/lib/interfaces/KeyTransparency';
+import { CreateMemberMode, type Member } from '@proton/shared/lib/interfaces/Member';
+import type { Calendar } from '@proton/shared/lib/interfaces/calendar/Calendar';
+import { setAddressFlagsHelper } from '@proton/shared/lib/keys/addressFlagsHelper';
+import { getDecryptedAddressKeys } from '@proton/shared/lib/keys/getDecryptedAddressKeys';
+import { getDecryptedUserKeys } from '@proton/shared/lib/keys/getDecryptedUserKeys';
+import getRandomString from '@proton/utils/getRandomString';
+import noop from '@proton/utils/noop';
+
+import { createJoiningLink, createOrganizationImporter, patchOrganizationImporter } from '../api/api';
+import {
+    type ApiImporterOrganization,
+    ApiImporterOrganizationState,
+    type ApiImporterOrganizationUser,
+    type ApiJoiningLinkData,
+} from '../api/api.interface';
+import type { OAuthToken } from '../logic/oauthToken';
+import { areEquivalentEmails, isRelevantAddress, shouldCreateUserPredicate } from './helpers';
+import { resolveMigrationCandidates, submitMigrations } from './migrationSubmission';
+import type { JoiningLink, MigrationConfiguration } from './types';
+
+type RequiredState = KtState &
+    OrganizationKeyState &
+    ProtonDomainsState &
+    UserSettingsState &
+    UserInvitationsState &
+    CalendarsState &
+    AddressKeysState &
+    MembersState &
+    MemberState &
+    OrganizationRolesState;
+
+type ThunkApi<T> = { state: T; extra: ProtonThunkArguments };
+
+const createDefaultCalendar = async (
+    uidApi: Api,
+    getAddressKeys: ReturnType<typeof useGetAddressKeys>,
+    addressID: string
+) => {
+    const { Calendar } = await uidApi<{ Calendar: Calendar }>(
+        createCalendar({
+            Name: DEFAULT_CALENDAR.name,
+            Description: DEFAULT_CALENDAR.description,
+            Color: DEFAULT_CALENDAR.color,
+            AddressID: addressID,
+            Display: 1,
+            IsImport: 1,
+        })
+    );
+
+    await setupCalendarKey({ api: uidApi, calendarID: Calendar.ID, addressID, getAddressKeys });
+
+    await uidApi(updateCalendarUserSettings({ DefaultCalendarID: Calendar.ID }));
+
+    return Calendar;
+};
+
+const getMemberApi = async (api: Api, member: Member) => {
+    const { UID } = await api<{ UID: string; LocalID: number }>(authMember(member.ID, { Unlock: true }));
+    return getUIDApi(UID, api);
+};
+
+const getMemberAddressKeys = async (memberApi: Api, address: Address, orgKey: KeyPair) => {
+    const apiUser = await getUser(memberApi);
+    const userKeys = await getDecryptedUserKeys(apiUser.Keys, '', orgKey);
+    return getDecryptedAddressKeys(address.Keys, userKeys, '', orgKey);
+};
+
+type CreateMigrationBatchParams = {
+    importerOrganizationId: string;
+    providerUsers: ApiImporterOrganizationUser[];
+    selectedUsers: string[];
+    oauthToken: OAuthToken;
+    domain: Domain;
+    password: string;
+};
+
+export const parseJoiningLinkData = createAsyncThunk<JoiningLink, ApiJoiningLinkData, ThunkApi<OrganizationKeyState>>(
+    'oles/parseJoiningLinkData',
+    async (joiningLinkData, { dispatch }) => {
+        const orgKey = await dispatch(organizationKeyThunk());
+        if (!orgKey.publicKey) {
+            throw new Error('Missing organization public key');
+        }
+        return {
+            token: joiningLinkData.Token,
+            password: await decryptTemporaryPassword(joiningLinkData.EncryptedTempPassword, orgKey.privateKey),
+            expirationTime: joiningLinkData.TokenExpirationTime,
+        };
+    }
+);
+
+export const setupJoiningLink = createAsyncThunk<JoiningLink, string, ThunkApi<OrganizationKeyState>>(
+    'oles/setupJoiningLink',
+    async (importerOganizationId, { dispatch, extra: { api } }) => {
+        const orgKey = await dispatch(organizationKeyThunk());
+        if (!orgKey.publicKey) {
+            throw new Error('Missing organization public key');
+        }
+        const password = getRandomString(24);
+        const EncryptedTempPassword = await encryptTemporaryPassword(password, orgKey.publicKey);
+        const { JoiningLinkData } = await api<{ JoiningLinkData: ApiJoiningLinkData }>(
+            createJoiningLink(importerOganizationId, {
+                EncryptedTempPassword,
+            })
+        );
+        return {
+            token: JoiningLinkData.Token,
+            expirationTime: JoiningLinkData.TokenExpirationTime,
+            password,
+        };
+    }
+);
+
+export const setupMigration = createAsyncThunk<
+    MigrationConfiguration,
+    MigrationConfiguration,
+    ThunkApi<OrganizationKeyState>
+>('oles/setupMigration', async (payload, { dispatch, extra: { api } }) => {
+    const { ImporterOrganizationID, DomainName, State } = await api<ApiImporterOrganization>(
+        createOrganizationImporter({
+            Provider: payload.provider.apiProvider,
+            Products: payload.selectedProducts,
+            ImportOrganizationSettings: payload.importOrganizationSettings,
+            DomainName: payload.domainName,
+        })
+    );
+
+    const joiningLink = await dispatch(setupJoiningLink(ImporterOrganizationID)).unwrap();
+
+    return {
+        ...payload,
+        joiningLink,
+        domainName: DomainName,
+        importerOrganizationId: ImporterOrganizationID,
+        state: State,
+    };
+});
+
+export type CreateMigrationBatchError = {
+    metadata: { user: ApiImporterOrganizationUser };
+    error: { code?: any; name?: string; message?: string };
+};
+
+const toSerializableUserError = (user: ApiImporterOrganizationUser, err: any): CreateMigrationBatchError => {
+    const error = (() => {
+        if (err instanceof UnavailableAddressesError) {
+            return {
+                code: 2500,
+                name: 'UnavailableAddressesError',
+                message: c('Error')
+                    .t`Address is already used by a user outside of your organization. Please contact customer support to resolve this`,
+            };
+        }
+
+        const apiError = getApiError(err);
+        return {
+            code: apiError.code || err?.Code || err?.code,
+            message: apiError.message || err?.Message || err?.message,
+            name: err?.Name || err?.name,
+        };
+    })();
+
+    return {
+        metadata: { user },
+        error,
+    };
+};
+
+type CreateMigrationBatchResult = {
+    errors: CreateMigrationBatchError[];
+    results: Address[];
+};
+
+const getPersistedApi = (api: Api) => {
+    return <T>(config: any) =>
+        api<T>({
+            ...config,
+            data: config.data ? { ...config.data, PersistPasswordScope: true } : undefined,
+            silence: true,
+        });
+};
+
+export const createMigrationBatch = createAsyncThunk<
+    CreateMigrationBatchResult,
+    CreateMigrationBatchParams,
+    ThunkApi<RequiredState>
+>(
+    'oles/createMigrationBatch',
+    async (
+        { importerOrganizationId, domain, providerUsers, selectedUsers, oauthToken, password },
+        { dispatch, extra, rejectWithValue }
+    ) => {
+        const api = getPersistedApi(extra.api);
+
+        try {
+            await api(unlockPasswordChanges());
+        } catch (err) {
+            return rejectWithValue(getApiError(err));
+        }
+
+        extra.eventManager.stop();
+
+        try {
+            const errors: CreateMigrationBatchResult['errors'] = [];
+
+            const [organization, members, orgKey] = await Promise.all([
+                dispatch(organizationThunk()),
+                dispatch(membersThunk()),
+                dispatch(organizationKeyThunk()),
+            ]);
+
+            if (!orgKey.privateKey) {
+                throw new Error(c('Error').t`Missing organization private key`);
+            }
+
+            if (!orgKey.publicKey) {
+                throw new Error(c('Error').t`Missing organization public key`);
+            }
+
+            const membersAddresses: Record<string, Address[]> = {};
+            for (const member of members) {
+                const addresses = await dispatch(getMemberAddresses({ member, cache: CacheType.None }));
+                membersAddresses[member.ID] = addresses;
+            }
+
+            const getKnownAddresses = () => Object.values(membersAddresses).flat().filter(isRelevantAddress);
+            const isSelf = (email: string) => areEquivalentEmails(email, oauthToken.Account);
+
+            const users = providerUsers.filter((u) => selectedUsers.includes(u.ID));
+            const shouldCreateUser = shouldCreateUserPredicate(
+                oauthToken.Account,
+                getKnownAddresses().map((a) => a.Email)
+            );
+
+            const usersToCreate = users.filter(shouldCreateUser);
+            const availableSeats = organization.MaxMembers - organization.UsedMembers;
+            if (usersToCreate.length > availableSeats) {
+                throw { name: 'SeatsError', message: c('Error').t`Organization does not have enough seats available` };
+            }
+
+            const selfMember = members.find((m) => m.Self)!;
+            let allocatableStorage = organization.MaxSpace - organization.AssignedSpace;
+
+            // Drop some quota from the admin if safe to do so
+            if (selfMember.MaxSpace === organization.MaxSpace && organization.MaxMembers > 1 && usersToCreate.length) {
+                const newQuota = Math.floor(organization.MaxSpace / organization.MaxMembers);
+                try {
+                    await api(updateQuota(selfMember.ID, newQuota));
+                } catch (err) {
+                    return rejectWithValue(getApiError(err));
+                }
+                allocatableStorage = organization.MaxSpace - newQuota;
+            }
+
+            const existingUsers = providerUsers.filter((u) => !shouldCreateUser(u));
+            const userQuota = Math.floor(allocatableStorage / (providerUsers.length - existingUsers.length));
+            const totalStorageRequired = usersToCreate.length * userQuota;
+            if ((usersToCreate.length > 1 && userQuota < 1) || totalStorageRequired > allocatableStorage) {
+                throw {
+                    name: 'QuotaError',
+                    message: c('Error').t`Organization does not have enough storage available`,
+                };
+            }
+
+            const migratingSelf = users.find((u) => isSelf(u.Email));
+            if (migratingSelf) {
+                try {
+                    const selfMember = members.find((m) => !!m.Self)!;
+
+                    let selfAddress = membersAddresses[selfMember.ID].find(
+                        (a) => isRelevantAddress(a) && isSelf(a.Email)
+                    );
+                    if (!selfAddress) {
+                        const addressKeyCreationPayload = await dispatch(
+                            getCreateAddressKeysPayload({ member: selfMember })
+                        );
+
+                        const [Local, Domain] = getEmailParts(oauthToken.Account);
+                        const { Address: address } = await api<{ Address: Address }>(
+                            createMemberAddress(selfMember.ID, {
+                                Local,
+                                Domain,
+                                DisableE2EE: true,
+                            })
+                        );
+
+                        await dispatch(
+                            createAddressKeysThunk({ addressKeyCreationPayload, addressesToGenerate: [address] })
+                        );
+
+                        await dispatch(
+                            orderAddresses({
+                                member: selfMember,
+                                addresses: [address, ...membersAddresses[selfMember.ID]],
+                            })
+                        );
+
+                        await dispatch(getMemberAddresses({ member: selfMember, cache: CacheType.None, retry: true }));
+
+                        selfAddress = address;
+                        membersAddresses[selfMember.ID] = [address];
+                    }
+
+                    const calendars = (await dispatch(calendarsThunk())).filter(
+                        (calendar) =>
+                            getIsOwnedCalendar(calendar) &&
+                            areEquivalentEmails(calendar.Owner.Email, oauthToken.Account)
+                    );
+
+                    if (!calendars.length) {
+                        const getAddressKeys = (addressID: string) =>
+                            dispatch(addressKeysThunk({ addressID, cache: CacheType.None }));
+                        await createDefaultCalendar(api, getAddressKeys, selfAddress.ID);
+                    }
+                } catch (err: any) {
+                    errors.push(toSerializableUserError(migratingSelf, err));
+                }
+            }
+
+            for (const user of usersToCreate) {
+                try {
+                    const [Local, Domain] = getEmailParts(user.Email);
+                    const member = await dispatch(
+                        createMember({
+                            api,
+                            single: false,
+                            member: {
+                                name: user.AdminSetName,
+                                addresses: [
+                                    {
+                                        Domain,
+                                        Local,
+                                        DisableE2EE: true,
+                                    } as { Domain: string; Local: string }, // DisableE2EE not exposed in the createMember API
+                                ],
+                                invitationEmail: '',
+                                private: MEMBER_PRIVATE.READABLE,
+                                password,
+                                role: MEMBER_ROLE.ORGANIZATION_MEMBER,
+                                numAI: false,
+                                lumo: false,
+                                storage: userQuota,
+                                mode: CreateMemberMode.LoginLink,
+                            },
+                            verifiedDomains: [domain],
+                            // Disabled because we're doing bulk member creation,
+                            // and will handle these errors on an entire-migration basis
+                            validationOptions: {
+                                disableAddressValidation: true,
+                                disableDomainValidation: true,
+                                disableStorageValidation: true,
+                            },
+                        })
+                    );
+
+                    // Allow a bit of time for addresses to catch up
+                    await new Promise((resolve) => setTimeout(resolve, 250));
+
+                    const [address] = await dispatch(getMemberAddresses({ member, cache: CacheType.None }));
+                    if (!address) {
+                        throw new Error(
+                            c('Error').t`Member address not found. Please contact customer support to resolve this`
+                        );
+                    }
+
+                    const memberApi = await getMemberApi(api, member);
+                    const getAddressKeys = () =>
+                        getMemberAddressKeys(memberApi, address, {
+                            publicKey: orgKey.publicKey,
+                            privateKey: orgKey.privateKey,
+                        });
+
+                    await createDefaultCalendar(memberApi, getAddressKeys, address.ID);
+                    await memberApi(revoke()).catch(noop);
+
+                    membersAddresses[member.ID] = [address];
+                } catch (err: any) {
+                    errors.push(toSerializableUserError(user, err));
+                }
+            }
+
+            if (usersToCreate.length) {
+                // Creating users affects organization storage and members, so they need to be refetched
+                void Promise.all([
+                    dispatch(organizationThunk({ cache: CacheType.None })).catch(noop),
+                    dispatch(membersThunk({ cache: CacheType.None })).catch(noop),
+                ]);
+            }
+
+            const migrationCandidates = resolveMigrationCandidates(users, getKnownAddresses());
+
+            const { submitted, failed } = await submitMigrations(api, importerOrganizationId, migrationCandidates);
+            errors.push(...failed.map(({ candidate, error }) => toSerializableUserError(candidate.user, error)));
+
+            return {
+                errors,
+                results: submitted.map(({ address }) => address),
+            };
+        } finally {
+            extra.eventManager.start();
+        }
+    }
+);
+
+const enableAddressE2EE = async ({
+    api,
+    address,
+    getAddressKeys,
+    keyTransparencyVerify,
+}: {
+    api: Api;
+    address: Address;
+    getAddressKeys: ReturnType<typeof useGetAddressKeys>;
+    keyTransparencyVerify: KeyTransparencyVerify;
+}) => {
+    const addressKeys = await getAddressKeys(address.ID);
+
+    return setAddressFlagsHelper({
+        encryptionDisabled: false,
+        expectSignatureDisabled: false,
+        addressKeys,
+        address,
+        keyTransparencyVerify,
+        api,
+    });
+};
+
+export const completeMigration = createAsyncThunk<
+    ApiImporterOrganization,
+    { importerOrganizationId: string; providerUsers: ApiImporterOrganizationUser[] },
+    ThunkApi<KtState & OrganizationKeyState>
+>('oles/completeMigration', async ({ providerUsers, importerOrganizationId }, { dispatch, extra, rejectWithValue }) => {
+    const api = getPersistedApi(extra.api);
+
+    try {
+        await api(unlockPasswordChanges());
+    } catch (err) {
+        return rejectWithValue(getApiError(err));
+    }
+
+    const [members, orgKey] = await Promise.all([dispatch(membersThunk()), dispatch(organizationKeyThunk())]);
+
+    if (!orgKey.privateKey) {
+        throw new Error(c('Error').t`Missing organization private key`);
+    }
+
+    if (!orgKey.publicKey) {
+        throw new Error(c('Error').t`Missing organization public key`);
+    }
+
+    const { keyTransparencyVerify } = createKTVerifier({
+        api,
+        ktActivation: dispatch(getKTActivation()),
+        config: extra.config,
+    });
+
+    const migratedUsers = providerUsers.filter((u) => u.ImporterOrganizationUser);
+
+    const membersWithAddresses = await Promise.all(
+        members.map(async (member) => ({
+            member,
+            address: await dispatch(getMemberAddresses({ member, cache: CacheType.None })).then((addresses) =>
+                addresses.find((a) => hasBit(a.Flags, ADDRESS_FLAGS.FLAG_DISABLE_E2EE))
+            ),
+        }))
+    );
+
+    const selfMigration = membersWithAddresses.find(({ member }) => member.Self);
+
+    if (selfMigration?.member && selfMigration?.address) {
+        await enableAddressE2EE({
+            api,
+            address: selfMigration.address,
+            getAddressKeys: (addressID) => dispatch(addressKeysThunk({ addressID })),
+            keyTransparencyVerify,
+        });
+    }
+
+    for (const user of migratedUsers) {
+        const { member, address } =
+            membersWithAddresses.find((m) => areEquivalentEmails(m.address?.Email, user.Email)) ?? {};
+
+        if (!member || !address || member.Self) {
+            continue;
+        }
+
+        const memberApi = await getMemberApi(api, member);
+
+        await enableAddressE2EE({
+            getAddressKeys: () => getMemberAddressKeys(memberApi, address, orgKey),
+            api: memberApi,
+            address,
+            keyTransparencyVerify,
+        });
+
+        await memberApi(revoke()).catch(noop);
+    }
+
+    return api<ApiImporterOrganization>(
+        patchOrganizationImporter(importerOrganizationId!, {
+            State: ApiImporterOrganizationState.COMPLETED,
+        })
+    );
+});

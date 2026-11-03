@@ -1,0 +1,46 @@
+# sherma build guide
+
+Repository root: /home/jet/dev/sherma
+
+## Requirements
+
+- Node 22 (or newer)
+- pnpm: `npm install -g pnpm`
+
+## Build
+
+1. Install dependencies from repo root:
+   pnpm install
+
+2. Build the browser extension:
+   cd applications/pass-extension
+   pnpm run build:extension
+
+   Firefox:
+   BUILD_TARGET=firefox pnpm run build:extension
+
+   Release-quality with sourcemaps stripped:
+   RELEASE=true pnpm run build:extension
+
+Output:
+- applications/pass-extension/dist/
+
+## Load in Chrome
+
+1. Open chrome://extensions.
+2. Enable Developer mode.
+3. Remove any previously loaded build so Chrome assigns a fresh extension ID.
+4. Load unpacked: applications/pass-extension/dist/.
+
+## Expected limitations
+
+- The built manifest has no Proton production `key`, so this build has a different
+  extension ID than official Proton Pass.
+- "Sign in with Proton" in the extension popup may show:
+  "Oops, something went wrong... check that the extension is properly installed and enabled."
+  This is expected backend/identity behavior, not a build failure.
+
+## Notes
+
+- Do not add a `key` field to the built manifest.
+- Do not run tools/build-all.sh or set_manifest_key.

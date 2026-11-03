@@ -1,0 +1,57 @@
+import { c } from 'ttag';
+
+import { MeetingType, WaitingRoomState } from '@proton/shared/lib/interfaces/Meet';
+
+import type { CreateMeetingParams } from '../types/types';
+import { getMeetingLink } from '../utils/getMeetingLink';
+import { useGetMeetingDependencies } from './useGetMeetingDependencies';
+import { useSaveMeeting } from './useSaveMeeting';
+import { useIsWaitingRoomCreationEnabled } from './useWaitingRoomFlags';
+
+export const useCreateMeeting = () => {
+    const isWaitingRoomCreationEnabled = useIsWaitingRoomCreationEnabled();
+
+    const saveMeeting = useSaveMeeting();
+
+    const getMeetingDependencies = useGetMeetingDependencies();
+
+    const createMeeting = async ({
+        meetingName,
+        startTime = null,
+        endTime = null,
+        recurrence = null,
+        timeZone = null,
+        type = MeetingType.INSTANT,
+        protonCalendar = false,
+        waitingRoom = WaitingRoomState.DISABLED,
+    }: CreateMeetingParams) => {
+        const { privateKey, addressId } = await getMeetingDependencies();
+
+        try {
+            const { response, passwordBase } = await saveMeeting({
+                params: {
+                    protonCalendar,
+                    meetingName,
+                    startTime,
+                    endTime,
+                    recurrence,
+                    timeZone,
+                    type,
+                    ...(isWaitingRoomCreationEnabled ? { waitingRoom } : {}),
+                },
+                privateKey,
+                addressId,
+            });
+
+            return {
+                meetingLink: getMeetingLink(response.Meeting.MeetingLinkName, passwordBase),
+                id: response.Meeting.MeetingLinkName,
+                meeting: response.Meeting,
+            };
+        } catch (error) {
+            throw new Error(c('Error').t`Failed to create meeting`);
+        }
+    };
+
+    return { createMeeting };
+};

@@ -1,0 +1,90 @@
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { CacheType } from '@proton/redux-utilities/interface';
+import { getSilentApi } from '@proton/shared/lib/api/helpers/customConfig';
+import { DelegatedAccessStateEnum } from '@proton/shared/lib/interfaces/DelegatedAccess';
+import type { KeyGenConfig, KeyGenConfigV6 } from '@proton/shared/lib/interfaces/KeyGenConfig';
+import { addUserKeysProcess } from '@proton/shared/lib/keys/add/addKeysProcess';
+import { getIsDeviceRecoveryEnabled } from '@proton/shared/lib/recoveryFile/deviceRecovery';
+import { getIsRecoveryFileAvailable } from '@proton/shared/lib/recoveryFile/recoveryFile';
+
+import { type AddressesState, addressesThunk } from '../addresses';
+import type { DelegatedAccessState } from '../delegatedAccess';
+import { getHasAccountKeyChangeBlockingDelegatedAccess } from '../delegatedAccess/accountKeyChangeBlocking';
+import { listOutgoingDelegatedAccess, updateDelegatedAccess } from '../delegatedAccess/outgoingActions';
+import type { KtState } from '../kt';
+import { type OrganizationKeyState, organizationKeyThunk } from '../organizationKey';
+import { userThunk } from '../user';
+import { type UserKeysState, userKeysThunk } from '../userKeys';
+import { type UserSettingsState, userSettingsThunk } from '../userSettings';
+
+export const addUserKeyAction = ({
+    keyGenConfig,
+}: {
+    keyGenConfig: KeyGenConfig | KeyGenConfigV6;
+}): ThunkAction<
+    Promise<{ fingerprint: string }>,
+    UserKeysState & AddressesState & UserSettingsState & OrganizationKeyState & KtState & DelegatedAccessState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, _, extra) => {
+        try {
+            extra.eventManager.stop();
+            const api = getSilentApi(extra.api);
+            const [user, userSettings, userKeys, addresses, organizationKey] = await Promise.all([
+                dispatch(userThunk()),
+                dispatch(userSettingsThunk()),
+                dispatch(userKeysThunk()),
+                dispatch(addressesThunk()),
+                dispatch(organizationKeyThunk()),
+            ]);
+
+            const isDeviceRecoveryAvailable = getIsRecoveryFileAvailable({
+                user,
+                addresses,
+                userKeys,
+            });
+            const isDeviceRecoveryEnabled = getIsDeviceRecoveryEnabled(userSettings, extra.authentication);
+            if (await dispatch(getHasAccountKeyChangeBlockingDelegatedAccess())) {
+                throw new Error(
+                    c('Error')
+                        .t`A delegated access recovery or emergency-access process has been initiated: generating a new key is not allowed to avoid disrupting it`
+                );
+            }
+            const previouslyEnabledDelegatedAccesses = (await dispatch(listOutgoingDelegatedAccess())).filter(
+                (delegatedAccess) => delegatedAccess.State === DelegatedAccessStateEnum.Enabled
+            );
+
+            const newKey = await addUserKeysProcess({
+                api,
+                user,
+                organizationKey,
+                isDeviceRecoveryAvailable,
+                isDeviceRecoveryEnabled,
+                keyGenConfig,
+                userKeys,
+                addresses,
+                passphrase: extra.authentication.getPassword(),
+            });
+            await dispatch(userThunk({ cache: CacheType.None }));
+
+            // re-enable delegated access recovery
+            await Promise.all(
+                previouslyEnabledDelegatedAccesses.map((delegatedAccess) => {
+                    return dispatch(
+                        updateDelegatedAccess({
+                            delegatedAccess,
+                            api: getSilentApi(extra.api),
+                        })
+                    );
+                })
+            );
+            return { fingerprint: newKey.getFingerprint() };
+        } finally {
+            extra.eventManager.start();
+        }
+    };
+};

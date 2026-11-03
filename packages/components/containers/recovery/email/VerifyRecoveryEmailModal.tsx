@@ -1,0 +1,67 @@
+import { useState } from 'react';
+
+import { c } from 'ttag';
+
+import { useApi } from '@proton/app-context/useApi';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { postVerifySend } from '@proton/shared/lib/api/verify';
+import { API_CUSTOM_ERROR_CODES } from '@proton/shared/lib/errors';
+
+import type { ModalProps } from '../../../components/modalTwo/Modal';
+import Prompt from '../../../components/prompt/Prompt';
+
+export const getVerificationSentText = (address: string) => {
+    return c('Email verification').t`Verification email sent to ${address}`;
+};
+
+interface Props extends ModalProps {
+    email: string;
+}
+
+const VerifyRecoveryEmailModal = ({ email, onClose, ...rest }: Props) => {
+    const [loading, setLoading] = useState(false);
+    const api = useApi();
+    const { createNotification } = useNotifications();
+
+    const handleSendVerificationEmailClick = async () => {
+        setLoading(true);
+        try {
+            await api(postVerifySend({ Type: 'recovery_email' }));
+
+            createNotification({
+                type: 'success',
+                text: getVerificationSentText(email),
+            });
+
+            onClose?.();
+        } catch (error) {
+            const { code } = getApiError(error);
+
+            if (code === API_CUSTOM_ERROR_CODES.BANNED) {
+                onClose?.();
+            } else {
+                throw error;
+            }
+        }
+    };
+    return (
+        <Prompt
+            title={c('Recovery Email').t`Verify recovery email?`}
+            buttons={[
+                <Button loading={loading} shape="solid" color="norm" onClick={handleSendVerificationEmailClick}>{c(
+                    'Recovery Email'
+                ).t`Verify with email`}</Button>,
+                <Button onClick={onClose} disabled={loading}>{c('Recovery Email').t`Cancel`}</Button>,
+            ]}
+            onClose={onClose}
+            {...rest}
+        >
+            {c('Recovery Email')
+                .t`Verifying your email address increases your account security and allows additional options for recovery.`}
+        </Prompt>
+    );
+};
+
+export default VerifyRecoveryEmailModal;

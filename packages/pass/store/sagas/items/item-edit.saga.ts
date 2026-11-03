@@ -1,0 +1,105 @@
+import { call, put, select, takeEvery } from 'redux-saga/effects';
+
+import { syncAliasMailboxes, syncAliasName, syncAliasSLNote } from '../../../lib/alias/alias.requests';
+import { hasAttachments, hasHadAttachments } from '../../../lib/items/item.predicates';
+import { editItem } from '../../../lib/items/item.requests';
+import { createTelemetryEvent } from '../../../lib/telemetry/utils';
+import type { ItemRevision } from '../../../types/data/items';
+import type { ItemEditIntent } from '../../../types/data/items.dto';
+import { TelemetryEventName, TelemetryItemType } from '../../../types/data/telemetry';
+import type { Maybe } from '../../../types/utils';
+import { prop } from '../../../utils/fp/lens';
+import { or, truthy } from '../../../utils/fp/predicates';
+import { deobfuscate } from '../../../utils/obfuscate/xor';
+import { isEqual } from '../../../utils/set/is-equal';
+import { aliasDetailsSync } from '../../actions/creators/alias';
+import { filesResolve } from '../../actions/creators/files';
+import { itemEdit, itemEditDismiss } from '../../actions/creators/item';
+import type { AliasDetailsState, AliasState } from '../../reducers';
+import { withRevalidate } from '../../request/enhancers';
+import { selectAliasDetails, selectAliasOptions, selectMailboxesForAlias } from '../../selectors/alias';
+import { SelectorError } from '../../selectors/errors';
+import { selectItem, selectItemOrThrow } from '../../selectors/items';
+import type { RootSagaOptions } from '../../types';
+import { itemLinkPendingFiles } from './item-files.sagas';
+
+function* aliasEditWorker(aliasEditIntent: ItemEditIntent<'alias'>) {
+    if (!aliasEditIntent.extraData) return;
+
+    const { itemId, shareId } = aliasEditIntent;
+
+    const item: Maybe<ItemRevision<'alias'>> = yield select(selectItem(shareId, itemId));
+    if (!item || !item.aliasEmail) throw new Error('Invalid item');
+
+    const mailboxesForAlias: string[] = yield select(selectMailboxesForAlias(item.aliasEmail));
+    const aliasOptions: AliasState['aliasOptions'] = yield select(selectAliasOptions);
+    const aliasDetails: Maybe<AliasDetailsState> = yield select(selectAliasDetails(item.aliasEmail));
+
+    const currentMailboxIds = new Set(
+        mailboxesForAlias.map((mailbox) => aliasOptions?.mailboxes.find(({ email }) => email === mailbox)?.id).filter(truthy)
+    );
+
+    const nextSlNote = aliasEditIntent.extraData.slNote;
+    const nextMailboxes = aliasEditIntent.extraData.mailboxes;
+    const nextMailboxIds = new Set(nextMailboxes.map(prop('id')));
+    const nextDisplayName = aliasEditIntent.extraData.displayName;
+
+    const nameChanged = aliasDetails?.name !== nextDisplayName;
+    const mailboxesChanged = !isEqual(currentMailboxIds, nextMailboxIds);
+    const slNoteChanged = aliasDetails?.slNote !== nextSlNote;
+
+    if (mailboxesChanged) yield syncAliasMailboxes(item, Array.from(nextMailboxIds.values()));
+    if (nameChanged) yield syncAliasName(item, nextDisplayName);
+    if (slNoteChanged) yield syncAliasSLNote(item, nextSlNote);
+
+    if (mailboxesChanged || nameChanged || slNoteChanged) {
+        yield put(
+            aliasDetailsSync({
+                aliasEmail: item.aliasEmail,
+                ...aliasDetails,
+                mailboxes: nextMailboxes,
+                name: nextDisplayName,
+                slNote: nextSlNote,
+            })
+        );
+    }
+}
+
+function* itemEditWorker(options: RootSagaOptions, { payload: editIntent, meta }: ReturnType<typeof itemEdit.intent>) {
+    const { itemId, shareId, lastRevision, files } = editIntent;
+    const { getTelemetry } = options;
+    const telemetry = getTelemetry();
+    const itemName = editIntent.metadata.name;
+
+    try {
+        /** assert item exists */
+        const currentItem: ItemRevision = yield select(selectItemOrThrow(shareId, itemId));
+
+        if (editIntent.type === 'alias' && editIntent.extraData?.aliasOwner) yield call(aliasEditWorker, editIntent);
+
+        let item: ItemRevision = yield editItem(editIntent, lastRevision, currentItem.folderId);
+        const shouldLink = files.toAdd.length || files.toRemove.length || files.toRestore?.length;
+        if (shouldLink) item = yield itemLinkPendingFiles(item, files, options);
+
+        yield put(itemEdit.success(meta.request.id, { item, itemId, shareId }));
+        if (or(hasAttachments, hasHadAttachments)(item)) yield put(withRevalidate(filesResolve.intent(item)));
+
+        void telemetry?.push(createTelemetryEvent(TelemetryEventName.ItemUpdate, {}, { type: TelemetryItemType[item.data.type] }));
+
+        if (item.data.type === 'login' && editIntent.type === 'login') {
+            const prevTotp = deobfuscate(editIntent.content.totpUri);
+            const nextTotp = deobfuscate(item.data.content.totpUri);
+
+            if (nextTotp && prevTotp !== nextTotp) {
+                void telemetry?.push(createTelemetryEvent(TelemetryEventName.TwoFAUpdate, {}, {}));
+            }
+        }
+    } catch (error) {
+        if (error instanceof SelectorError) yield put(itemEditDismiss({ itemId, shareId, itemName }));
+        yield put(itemEdit.failure(meta.request.id, error, { itemId, shareId }));
+    }
+}
+
+export default function* watcher(options: RootSagaOptions) {
+    yield takeEvery(itemEdit.intent.match, itemEditWorker, options);
+}

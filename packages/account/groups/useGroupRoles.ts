@@ -1,0 +1,44 @@
+import { useEffect } from 'react';
+
+import { type Action, type ThunkDispatch, createSelector } from '@reduxjs/toolkit';
+
+import { baseUseDispatch, baseUseSelector } from '@proton/react-redux-store/ProtonStoreContext';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import type { EnhancedGroup } from '@proton/shared/lib/interfaces/Group';
+import type { RoleAssignment } from '@proton/shared/lib/interfaces/OrganizationRole';
+import noop from '@proton/utils/noop';
+
+import { AdminRolesUIState, useAdminRolesUI } from '../userPermissions/hooks';
+import { type GroupsState, getGroupRoles, selectGroups } from './index';
+
+type Result = {
+    [key: string]: RoleAssignment[] | undefined;
+};
+
+const selector = createSelector([(state: GroupsState) => selectGroups(state)], (groupsState): Result => {
+    const groups = groupsState.value || [];
+    return Object.fromEntries(
+        groups.map((group) => {
+            return [group.ID, group.GroupOrganizationRoles];
+        })
+    );
+});
+
+export const useGroupRoles = ({ groups }: { groups: EnhancedGroup[] | undefined }) => {
+    const dispatch = baseUseDispatch<ThunkDispatch<GroupsState, ProtonThunkArguments, Action>>();
+    const value = baseUseSelector<GroupsState, Result>(selector);
+    const [adminRolesUIState] = useAdminRolesUI();
+
+    useEffect(() => {
+        if (adminRolesUIState === AdminRolesUIState.Hidden || !groups) {
+            return;
+        }
+        groups.forEach((group) => {
+            if (group.roleState === 'initial' || group.roleState === 'stale') {
+                dispatch(getGroupRoles({ group })).catch(noop);
+            }
+        });
+    }, [groups, adminRolesUIState]);
+
+    return { value };
+};

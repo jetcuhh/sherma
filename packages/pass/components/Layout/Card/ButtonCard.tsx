@@ -1,0 +1,61 @@
+import type { FC } from 'react';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { IcChevronRight } from '@proton/icons/icons/IcChevronRight';
+import clsx from '@proton/utils/clsx';
+
+import { CardContent, type CardContentProps } from './CardContent';
+import { type CardType, getCardTheme } from './utils';
+
+import './ButtonCard.scss';
+
+export type ButtonCardProps = CardContentProps & {
+    disabled?: boolean;
+    type?: CardType;
+    onClick?: () => void;
+};
+
+export const ButtonCard: FC<ButtonCardProps> = ({ actions, disabled, title, subtitle, icon, type, onClick }) => (
+    <div
+        className={clsx(
+            getCardTheme(type),
+            'pass-button-card',
+            type && `pass-button-card:${type}`,
+            disabled && 'pointer-events-none'
+        )}
+    >
+        <Button
+            shape="solid"
+            fullWidth
+            size="medium"
+            className={clsx(
+                'border-weak flex justify-space-between flex-nowrap items-center rounded-lg button-fluid',
+                !onClick && 'cursor-default',
+                !type && 'bg-weak'
+            )}
+            onClick={onClick}
+        >
+            <CardContent
+                className="p-1"
+                icon={
+                    icon ? (
+                        <div className="w-custom shrink-0" style={{ '--w-custom': '1.5em' }}>
+                            {icon}
+                        </div>
+                    ) : undefined
+                }
+                title={title}
+                titleClassname="text-semibold"
+                subtitle={subtitle}
+                actions={
+                    <div className="flex shrink-0 gap-1">
+                        {actions}
+                        {onClick && !disabled && (
+                            <IcChevronRight size={5} className={type ? 'color-strong' : 'color-weak'} />
+                        )}
+                    </div>
+                }
+            />
+        </Button>
+    </div>
+);

@@ -1,0 +1,76 @@
+import { getValidatedProtonProtocol } from '../../lib/authentication/fork/getValidatedProtonProtocol';
+import { APPS, type APP_NAMES } from '../../lib/constants';
+
+describe('getValidatedProtonProtocol', () => {
+    [
+        {
+            name: 'should return undefined for invalid protocol',
+            input: { app: APPS.PROTONMAIL, protocol: '/\\\\foo.bar://' },
+            output: undefined,
+        },
+        {
+            name: 'should return undefined non-proton protocol',
+            input: { app: APPS.PROTONMAIL, protocol: 'foo.bar://' },
+            output: undefined,
+        },
+        {
+            name: 'should return undefined for invalid non-proton protocol',
+            input: { app: APPS.PROTONMAIL, protocol: '/\\\\proton-mail://' },
+            output: undefined,
+        },
+        {
+            name: 'should return undefined for mismatching app',
+            input: { app: 'proton-foo' as unknown as APP_NAMES, protocol: 'proton-bar://' },
+            output: undefined,
+        },
+        {
+            name: 'should return proton-mail for proton-mail protocol',
+            input: { app: APPS.PROTONMAIL, protocol: 'proton-mail://' },
+            output: 'proton-mail:',
+        },
+        {
+            name: 'should return proton for proton protocol',
+            input: { app: APPS.PROTONMAIL, protocol: 'proton://' },
+            output: 'proton:',
+        },
+        {
+            name: 'should return protonmail for protonmail protocol',
+            input: { app: APPS.PROTONMAIL, protocol: 'protonmail://' },
+            output: 'protonmail:',
+        },
+        {
+            name: 'should return proton-calendar for proton-calendar protocol',
+            input: { app: APPS.PROTONMAIL, protocol: 'proton-calendar://' },
+            output: 'proton-calendar:',
+        },
+        {
+            name: 'should return protoncalendar for protoncalendar protocol',
+            input: { app: APPS.PROTONCALENDAR, protocol: 'protoncalendar://' },
+            output: 'protoncalendar:',
+        },
+        {
+            name: 'should return undefined for an app name protocol outside the list',
+            input: { app: 'proton-foo' as unknown as APP_NAMES, protocol: 'proton-foo://' },
+            output: undefined,
+        },
+        {
+            name: 'should return proton-spaces for proton-spaces protocol',
+            input: { app: APPS.PROTONSPACES, protocol: 'proton-spaces://' },
+            output: 'proton-spaces:',
+        },
+        {
+            name: 'should return undefined for proton-docs protocol',
+            input: { app: APPS.PROTONDOCS, protocol: 'proton-docs://' },
+            output: undefined,
+        },
+        {
+            name: 'should return undefined for proton-account protocol',
+            input: { app: APPS.PROTONACCOUNT, protocol: 'proton-account://' },
+            output: undefined,
+        },
+    ].forEach(({ name, input, output }) => {
+        it(name, () => {
+            expect(getValidatedProtonProtocol(input.app, input.protocol)).toBe(output);
+        });
+    });
+});

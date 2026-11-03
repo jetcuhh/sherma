@@ -1,0 +1,122 @@
+import { render } from '@testing-library/react';
+
+import { getOptimisticCheckResult } from '@proton/payments/core/checkout';
+import { CYCLE, PLANS } from '@proton/payments/core/constants';
+import { PLANS_MAP } from '@proton/payments/testing/data-plans';
+
+import type { Props } from './SubscriptionCycleSelector';
+import SubscriptionCycleSelector from './SubscriptionCycleSelector';
+
+let props: Props;
+
+beforeEach(() => {
+    props = {
+        onChangeCycle: jest.fn(),
+        mode: 'buttons',
+        currency: 'CHF',
+        cycle: CYCLE.TWO_YEARS,
+        planIDs: {
+            [PLANS.MAIL]: 1,
+        },
+        plansMap: PLANS_MAP,
+        additionalCheckResults: [],
+        allowedCycles: [CYCLE.MONTHLY, CYCLE.YEARLY, CYCLE.TWO_YEARS],
+        checkResult: undefined,
+    };
+});
+
+it('should render', () => {
+    const { container } = render(<SubscriptionCycleSelector {...props} />);
+
+    expect(container).not.toBeEmptyDOMElement();
+});
+
+it('should correctly display price per month', () => {
+    const { queryByTestId } = render(<SubscriptionCycleSelector {...props} />);
+
+    expect(queryByTestId('price-per-user-per-month-1')).toHaveTextContent('CHF 4.99/month');
+    expect(queryByTestId('price-per-user-per-month-12')).toHaveTextContent('CHF 3.99/month');
+    expect(queryByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 3.49/month');
+});
+
+it('should correctly display price per user per month', () => {
+    const planIDs = {
+        mailpro2022: 1,
+        '1member-mailpro2022': 3,
+    };
+
+    const { queryByTestId } = render(<SubscriptionCycleSelector {...props} plansMap={PLANS_MAP} planIDs={planIDs} />);
+
+    expect(queryByTestId('price-per-user-per-month-1')).toHaveTextContent('CHF 7.99/user per month');
+    expect(queryByTestId('price-per-user-per-month-12')).toHaveTextContent('CHF 6.99/user per month');
+    expect(queryByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 6.49/user per month');
+});
+
+it('should correctly display price per user per month when there are non-user addons', () => {
+    const planIDs = {
+        bundlepro2022: 1,
+        '1domain-bundlepro2022': 12,
+        '1member-bundlepro2022': 8,
+    };
+
+    props = {
+        ...props,
+        planIDs,
+        plansMap: PLANS_MAP,
+    };
+
+    const { queryByTestId } = render(<SubscriptionCycleSelector {...props} />);
+
+    expect(queryByTestId('price-per-user-per-month-1')).toHaveTextContent('CHF 12.99/user per month');
+    expect(queryByTestId('price-per-user-per-month-12')).toHaveTextContent('CHF 10.99/user per month');
+    expect(queryByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 9.99/user per month');
+});
+
+it('should display the prices correctly for VPN Plus', () => {
+    const planIDs = {
+        vpn2024: 1,
+    };
+
+    props = {
+        ...props,
+        planIDs,
+        plansMap: PLANS_MAP,
+    };
+
+    const { queryByTestId } = render(<SubscriptionCycleSelector {...props} />);
+
+    expect(queryByTestId('price-per-user-per-month-1')).toHaveTextContent('CHF 9.99/month');
+    expect(queryByTestId('price-per-user-per-month-12')).toHaveTextContent('CHF 6.66/month');
+    expect(queryByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 4.99/month');
+});
+
+it('should ignore estimations made for other addons', () => {
+    const planIDs = { mailpro2022: 1 };
+    const staleEstimation = getOptimisticCheckResult({
+        planIDs: { mailpro2022: 1, '1member-mailpro2022': 3 },
+        plansMap: PLANS_MAP,
+        currency: 'CHF',
+        cycle: CYCLE.TWO_YEARS,
+    });
+
+    const { getByTestId } = render(
+        <SubscriptionCycleSelector {...props} planIDs={planIDs} additionalCheckResults={[staleEstimation]} />
+    );
+
+    expect(getByTestId('cycle-24')).not.toHaveTextContent('Save -');
+    expect(getByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 6.49/user per month');
+});
+
+it('should ignore estimations made in another currency', () => {
+    const planIDs = { mailpro2022: 1 };
+    const otherCurrencyEstimation = {
+        ...getOptimisticCheckResult({ planIDs, plansMap: PLANS_MAP, currency: 'USD', cycle: CYCLE.TWO_YEARS }),
+        Amount: 100,
+    };
+
+    const { getByTestId } = render(
+        <SubscriptionCycleSelector {...props} planIDs={planIDs} additionalCheckResults={[otherCurrencyEstimation]} />
+    );
+
+    expect(getByTestId('price-per-user-per-month-24')).toHaveTextContent('CHF 6.49/user per month');
+});

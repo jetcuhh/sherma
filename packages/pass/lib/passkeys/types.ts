@@ -1,0 +1,25 @@
+import type {
+    WasmGeneratePasskeyResponse,
+    WasmResolvePasskeyChallengeResponse,
+} from '@protontech/pass-rust-core/worker';
+
+import type { SelectedItem } from '../../types/data/items';
+import type { Passkey } from '../../types/protobuf/item-v1';
+import type { SanitizedBuffers } from '../../utils/buffer/sanitization';
+
+export type SanitizedPublicKeyCreate = SanitizedBuffers<PublicKeyCredentialCreationOptions, number[]>;
+export type SanitizedPublicKeyRequest = SanitizedBuffers<PublicKeyCredentialRequestOptions, number[]>;
+export type SanitizedPasskey = SanitizedBuffers<Passkey, string>;
+export type SelectedPasskey = SelectedItem & { name: string; username: string; credentialId: string };
+
+type WebAuthnIntercept<T> = { intercept: false } | { intercept: true; response: T };
+
+export type PasskeyQueryPayload = { credentialIds: number[][]; domain: string };
+
+export type PasskeyCreatePayload = { domain?: string; request: string };
+export type PasskeyCreateResponse = WebAuthnIntercept<WasmGeneratePasskeyResponse>;
+export type PasskeyCreateBridgePayload = Pick<WasmGeneratePasskeyResponse, 'credential'>;
+export type PasskeyCreateBridgeResponse = WebAuthnIntercept<PasskeyCreateBridgePayload>;
+
+export type PasskeyGetPayload = { domain?: string; request: string; passkey?: SelectedPasskey };
+export type PasskeyGetResponse = WebAuthnIntercept<WasmResolvePasskeyChallengeResponse>;

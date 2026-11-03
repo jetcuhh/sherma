@@ -1,0 +1,654 @@
+import { useMemo, useRef, useState } from 'react';
+
+import { useConfig } from '@proton/app-context/useConfig';
+import { type PaymentsVersion, buyCredit, payInvoice, setPaymentMethodV5 } from '@proton/payments/core/api/api';
+import { createPaymentSubscription } from '@proton/payments/core/api/createPaymentSubscription';
+import type { BillingAddress } from '@proton/payments/core/billing-address/billing-address';
+import { type ADDON_NAMES, PAYMENT_METHOD_TYPES, type PLANS } from '@proton/payments/core/constants';
+import type { PaymentVerificatorV5 } from '@proton/payments/core/createPaymentToken';
+import type {
+    AmountAndCurrency,
+    AvailablePaymentMethod,
+    ChargeablePaymentParameters,
+    ChargebeeIframeEvents,
+    ChargebeeIframeHandles,
+    Currency,
+    Cycle,
+    FreeSubscription,
+    PaymentMethodFlow,
+    PaymentMethodType,
+    PaymentStatus,
+    PlainPaymentMethodType,
+    PlanIDs,
+    SavedPaymentMethod,
+} from '@proton/payments/core/interface';
+import type { PaymentMethodFlags } from '@proton/payments/core/payment-methods/paymentMethodAvailability';
+import type { PaymentProcessorType } from '@proton/payments/core/payment-processors/interface';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { isExistingPaymentMethod } from '@proton/payments/core/type-guards';
+import type { PaymentTelemetryContext } from '@proton/payments/telemetry/helpers';
+import type { ProductParam } from '@proton/shared/lib/apps/product';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import type { User } from '@proton/shared/lib/interfaces/User';
+import { useFlag } from '@proton/unleash/useFlag';
+
+import { useCurrencyOverride } from '../payment-methods/useCurrencyOverride';
+import { type ApplePayModalHandles, useApplePay } from '../payment-processors/useApplePay';
+import { useApplePay as useApplePayLegacy } from '../payment-processors/useApplePayLegacy';
+import { type ChargebeePaypalModalHandles, useChargebeePaypal } from '../payment-processors/useChargebeePaypal';
+import { type GooglePayModalHandles, useGooglePay } from '../payment-processors/useGooglePay';
+import { useGooglePay as useGooglePayLegacy } from '../payment-processors/useGooglePayLegacy';
+import useBitcoin from './useBitcoin';
+import { useChargebeeCard } from './useChargebeeCard';
+import { type ChargebeeIdealModalHandles, useChargebeeIdeal } from './useChargebeeIdeal';
+import { useChargebeePaypal as useChargebeePaypalLegacy } from './useChargebeePaypalLegacy';
+import type { OnMethodChangedHandler } from './useMethods';
+import { useMethods } from './useMethods';
+import { useSavedChargebeeMethod } from './useSavedChargebeeMethod';
+import { useSepaDirectDebit } from './useSepaDirectDebit';
+
+export interface OperationsSubscriptionData {
+    Plans: PlanIDs;
+    Cycle: Cycle;
+    Codes?: string[];
+    product: ProductParam;
+    taxBillingAddress: BillingAddress;
+    StartTrial?: boolean;
+    vatNumber?: string;
+}
+
+interface OperationsInvoiceData {
+    invoiceId: string;
+}
+
+export interface OperationsData {
+    subscription?: OperationsSubscriptionData;
+    invoice?: OperationsInvoiceData;
+}
+
+/**
+ * Common operations that can be performed with a chargeable payment token. The operations are ment to be available in
+ * onChargeable callback.
+ */
+export interface Operations {
+    buyCredit: () => Promise<unknown>;
+    payInvoice: (invoiceId: string, paymentsVersion: PaymentsVersion) => Promise<unknown>;
+    subscribe: (operationsDataParam?: OperationsSubscriptionData) => Promise<unknown>;
+    savePaymentMethod: () => Promise<unknown>;
+}
+
+function getOperations(
+    api: Api,
+    params: ChargeablePaymentParameters,
+    operationsData: OperationsData,
+    {
+        afterOperation,
+        paymentMethodValue,
+        userCurrency,
+        subscription,
+        build,
+        telemetryContext,
+    }: {
+        afterOperation?: () => void;
+        paymentMethodValue: PaymentMethodType;
+        userCurrency: Currency | undefined;
+        subscription: Subscription | FreeSubscription | undefined;
+        build: APP_NAMES;
+        telemetryContext: PaymentTelemetryContext;
+    }
+): Operations {
+    const wrappedAfterOperation = <T>(result: T) => {
+        afterOperation?.();
+        return result;
+    };
+
+    return {
+        buyCredit: async () => {
+            return api(buyCredit(params)).then(wrappedAfterOperation);
+        },
+        payInvoice: async (invoiceId: string, version: PaymentsVersion) => {
+            return api(payInvoice(invoiceId, params, version)).then(wrappedAfterOperation);
+        },
+        subscribe: async (operationsDataParam?: OperationsSubscriptionData) => {
+            if (!operationsData?.subscription && !operationsDataParam) {
+                throw new Error('The operations data for subscription must be provided in the facade');
+            }
+
+            const { product, taxBillingAddress, vatNumber, ...data } = (operationsData.subscription ??
+                operationsDataParam) as OperationsSubscriptionData;
+
+            const BillingAddress: BillingAddress = {
+                State: taxBillingAddress.State,
+                CountryCode: taxBillingAddress.CountryCode,
+                ZipCode: taxBillingAddress.ZipCode,
+            };
+
+            return createPaymentSubscription(
+                api,
+                {
+                    PaymentToken: params.PaymentToken,
+                    BillingAddress,
+                    VatId: vatNumber,
+                    ...params,
+                    ...data,
+                },
+                {
+                    product,
+                    paymentMethodType: params.type,
+                    paymentMethodValue,
+                    userCurrency,
+                    subscription,
+                    build,
+                    telemetryContext,
+                }
+            ).then(wrappedAfterOperation);
+        },
+        savePaymentMethod: async () => {
+            const PaymentToken = params.PaymentToken;
+            if (!PaymentToken) {
+                throw new Error('Could not save payment method without a payment token');
+            }
+
+            return api(
+                setPaymentMethodV5({
+                    PaymentToken,
+                    v: 5,
+                })
+            );
+        },
+    };
+}
+
+/**
+ * Stores the data for operations. That's meant to bypass React's rendering cycle.
+ * Perhaps will be changed in the future.
+ */
+const usePaymentContext = () => {
+    const subscriptionData = useRef<OperationsSubscriptionData>();
+
+    return {
+        setSubscriptionData: (data: OperationsSubscriptionData | undefined) => {
+            subscriptionData.current = data;
+        },
+        getSubscriptionData: () => {
+            return subscriptionData.current;
+        },
+        getOperationsData: (): OperationsData => {
+            return {
+                subscription: subscriptionData.current,
+            };
+        },
+    };
+};
+
+/**
+ * The idea of this hook is gather together all the payment methods and their implementation and provide some
+ * meaningful default configurations. This facade might be reused in other apps (like static) in the future.
+ * The implementation attempts to avoid dependencies on the monorepo's client-specific code. There are still some
+ * leftovers that might be removed later.
+ */
+export const usePaymentFacade = (
+    {
+        amount,
+        currency,
+        onChargeable,
+        coupon,
+        flow,
+        onMethodChanged,
+        paymentMethods,
+        paymentStatus,
+        selectedPlanName,
+        billingAddress,
+        user,
+        onBeforeSepaPayment,
+        planIDs,
+        subscription,
+        isTrial,
+        canUseApplePay,
+        paymentMethodFlags,
+        onDeclined,
+        onValidationFailed,
+        telemetryContext,
+        sortNewMethods,
+    }: {
+        amount: number;
+        currency: Currency;
+        onChargeable: (
+            operations: Operations,
+            data: {
+                chargeablePaymentParameters: ChargeablePaymentParameters;
+                source: PaymentMethodType;
+                sourceType: PlainPaymentMethodType;
+                context: OperationsData;
+                paymentProcessorType: PaymentProcessorType;
+            }
+        ) => Promise<unknown>;
+        coupon?: string;
+        flow: PaymentMethodFlow;
+        onMethodChanged?: OnMethodChangedHandler;
+        paymentMethods?: SavedPaymentMethod[];
+        paymentStatus?: PaymentStatus;
+        selectedPlanName: PLANS | ADDON_NAMES | undefined;
+        billingAddress?: BillingAddress;
+        user: User | undefined;
+        onBeforeSepaPayment?: () => Promise<boolean>;
+        planIDs?: PlanIDs;
+        subscription?: Subscription | FreeSubscription;
+        isTrial?: boolean;
+        canUseApplePay?: boolean;
+        paymentMethodFlags: PaymentMethodFlags;
+        telemetryContext: PaymentTelemetryContext;
+        onDeclined: ({
+            selectedMethodType,
+            selectedMethodValue,
+        }: {
+            selectedMethodType: PlainPaymentMethodType;
+            selectedMethodValue: PaymentMethodType;
+        }) => void;
+        onValidationFailed: ({
+            selectedMethodType,
+            selectedMethodValue,
+        }: {
+            selectedMethodType: PlainPaymentMethodType;
+            selectedMethodValue: PaymentMethodType;
+        }) => void;
+        sortNewMethods?: (methods: AvailablePaymentMethod[]) => AvailablePaymentMethod[];
+    },
+    {
+        api,
+        isAuthenticated,
+        verifyPaymentChargebeeCard,
+        chargebeeHandles,
+        chargebeeEvents,
+        chargebeePaypalModalHandles,
+        chargebeeIdealModalHandles,
+        applePayModalHandles,
+        googlePayModalHandles,
+    }: {
+        api: Api;
+        isAuthenticated: boolean;
+        verifyPaymentChargebeeCard: PaymentVerificatorV5;
+        chargebeeHandles: ChargebeeIframeHandles;
+        chargebeeEvents: ChargebeeIframeEvents;
+        chargebeePaypalModalHandles?: ChargebeePaypalModalHandles;
+        chargebeeIdealModalHandles?: ChargebeeIdealModalHandles;
+        applePayModalHandles?: ApplePayModalHandles;
+        googlePayModalHandles?: GooglePayModalHandles;
+    }
+) => {
+    const { APP_NAME } = useConfig();
+
+    const amountAndCurrency: AmountAndCurrency = useMemo(
+        () => ({
+            Amount: amount,
+            Currency: currency,
+        }),
+        [amount, currency]
+    );
+
+    const paymentContext = usePaymentContext();
+
+    const methods = useMethods(
+        {
+            amount,
+            currency,
+            coupon: coupon ?? '',
+            flow,
+            onMethodChanged,
+            paymentMethods,
+            paymentStatus,
+            selectedPlanName,
+            billingAddress,
+            user,
+            planIDs,
+            subscription,
+            canUseApplePay,
+            isTrial,
+            paymentMethodFlags,
+            sortNewMethods,
+        },
+        {
+            api,
+            isAuthenticated,
+        }
+    );
+
+    const operationProps = {
+        userCurrency: user?.Currency,
+        subscription,
+        build: APP_NAME,
+        telemetryContext,
+    };
+
+    const savedChargebeeMethod = useSavedChargebeeMethod(
+        {
+            amountAndCurrency,
+            savedMethod: methods.savedSelectedMethod,
+            onBeforeSepaPayment,
+            onChargeable: (params, paymentMethodId) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: paymentMethodId,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: paymentMethodId,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: savedChargebeeMethod.meta.type,
+                    }
+                ),
+            onDeclined,
+        },
+        {
+            api,
+            verifyPayment: verifyPaymentChargebeeCard,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+        }
+    );
+
+    const chargebeeCard = useChargebeeCard(
+        {
+            amountAndCurrency,
+            onChargeable: (params) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: chargebeeCard.meta.type,
+                    }
+                ),
+            verifyOnly: flow === 'add-card' || isTrial,
+            paymentStatus,
+            onDeclined,
+            onValidationFailed,
+        },
+        {
+            api,
+            verifyPayment: verifyPaymentChargebeeCard,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+        }
+    );
+
+    const refactoredProcessorsFlag = useFlag('PaymentProcessorsRefactor');
+    // pinned per mount: swapping hook implementations mid-lifecycle would break React's hook order
+    const [refactoredProcessorsEnabled] = useState(refactoredProcessorsFlag);
+    // legacy types declare a required abort signal and a wider meta; the runtime shapes match and every caller passes a signal
+    const useChargebeePaypalProcessor = (
+        refactoredProcessorsEnabled ? useChargebeePaypal : useChargebeePaypalLegacy
+    ) as (...args: Parameters<typeof useChargebeePaypalLegacy>) => ReturnType<typeof useChargebeePaypal>;
+    const useApplePayProcessor = (refactoredProcessorsEnabled ? useApplePay : useApplePayLegacy) as typeof useApplePay;
+    const useGooglePayProcessor = (
+        refactoredProcessorsEnabled ? useGooglePay : useGooglePayLegacy
+    ) as typeof useGooglePay;
+
+    const chargebeePaypal = useChargebeePaypalProcessor(
+        {
+            amountAndCurrency,
+            onChargeable: (params) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.CHARGEBEE_PAYPAL,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.CHARGEBEE_PAYPAL,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: chargebeePaypal.meta.type,
+                    }
+                ),
+        },
+        {
+            api,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+            chargebeePaypalModalHandles,
+            verifyPayment: verifyPaymentChargebeeCard,
+        }
+    );
+
+    const chargebeeIdeal = useChargebeeIdeal(
+        {
+            amountAndCurrency,
+            onChargeable: (params) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+                        paymentProcessorType: chargebeeIdeal.meta.type,
+                    }
+                ),
+        },
+        {
+            api,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+            chargebeeIdealModalHandles,
+        }
+    );
+
+    const paymentMethodValue: PaymentMethodType | undefined = methods.selectedMethod?.value;
+    const bitcoinChargebee = useBitcoin({
+        api,
+        Amount: amount,
+        Currency: currency,
+        enablePolling: paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_BITCOIN,
+        billingAddress,
+        onTokenValidated: (params: ChargeablePaymentParameters) => {
+            return onChargeable(
+                getOperations(api, params, paymentContext.getOperationsData(), {
+                    paymentMethodValue: PAYMENT_METHOD_TYPES.CHARGEBEE_BITCOIN,
+                    ...operationProps,
+                }),
+                {
+                    chargeablePaymentParameters: params,
+                    source: PAYMENT_METHOD_TYPES.CHARGEBEE_BITCOIN,
+                    sourceType: params.type,
+                    context: paymentContext.getOperationsData(),
+
+                    paymentProcessorType: bitcoinChargebee.meta.type,
+                }
+            );
+        },
+    });
+
+    const directDebit = useSepaDirectDebit(
+        {
+            amountAndCurrency,
+            selectedPlanName,
+            onBeforeSepaPayment,
+            onChargeable: (params) => {
+                return onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT,
+                    }
+                );
+            },
+            onValidationFailed,
+        },
+        {
+            api,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+            verifyPayment: verifyPaymentChargebeeCard,
+        }
+    );
+
+    const applePay = useApplePayProcessor(
+        {
+            amountAndCurrency,
+            onChargeable: (params) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.APPLE_PAY,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.APPLE_PAY,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: applePay.meta.type,
+                    }
+                ),
+        },
+        {
+            api,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+            applePayModalHandles,
+        }
+    );
+
+    const googlePay = useGooglePayProcessor(
+        {
+            amountAndCurrency,
+            onChargeable: (params) =>
+                onChargeable(
+                    getOperations(api, params, paymentContext.getOperationsData(), {
+                        paymentMethodValue: PAYMENT_METHOD_TYPES.GOOGLE_PAY,
+                        ...operationProps,
+                    }),
+                    {
+                        chargeablePaymentParameters: params,
+                        source: PAYMENT_METHOD_TYPES.GOOGLE_PAY,
+                        sourceType: params.type,
+                        context: paymentContext.getOperationsData(),
+
+                        paymentProcessorType: googlePay.meta.type,
+                    }
+                ),
+        },
+        {
+            api,
+            handles: chargebeeHandles,
+            events: chargebeeEvents,
+            googlePayModalHandles,
+            verifyPayment: verifyPaymentChargebeeCard,
+        }
+    );
+
+    const paymentMethodType: PlainPaymentMethodType | undefined = methods.selectedMethod?.type;
+    const selectedProcessor = useMemo(() => {
+        if (isExistingPaymentMethod(paymentMethodValue)) {
+            if (
+                paymentMethodType === PAYMENT_METHOD_TYPES.CHARGEBEE_CARD ||
+                paymentMethodType === PAYMENT_METHOD_TYPES.CHARGEBEE_PAYPAL ||
+                paymentMethodType === PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL ||
+                paymentMethodType === PAYMENT_METHOD_TYPES.APPLE_PAY ||
+                paymentMethodType === PAYMENT_METHOD_TYPES.GOOGLE_PAY ||
+                paymentMethodType === PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT
+            ) {
+                return savedChargebeeMethod;
+            }
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_CARD) {
+            return chargebeeCard;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_PAYPAL) {
+            return chargebeePaypal;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_BITCOIN) {
+            return bitcoinChargebee;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT) {
+            return directDebit;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.APPLE_PAY) {
+            return applePay;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.GOOGLE_PAY) {
+            return googlePay;
+        }
+
+        if (paymentMethodValue === PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL) {
+            return chargebeeIdeal;
+        }
+    }, [
+        paymentMethodValue,
+        paymentMethodType,
+        savedChargebeeMethod,
+        chargebeeCard,
+        chargebeePaypal,
+        chargebeeIdeal,
+        applePay,
+        googlePay,
+    ]);
+
+    const initialized = !methods.loading;
+
+    const reset = () => {
+        [
+            savedChargebeeMethod,
+            chargebeeCard,
+            chargebeePaypal,
+            chargebeeIdeal,
+            bitcoinChargebee,
+            directDebit,
+            applePay,
+            googlePay,
+        ].forEach((paymentProcessor) => paymentProcessor.reset());
+    };
+
+    const currencyOverride = useCurrencyOverride({
+        currentCurrency: currency,
+        currentSelectedMethodType: paymentMethodType,
+        methods: methods.allMethods,
+    });
+
+    return {
+        methods,
+        chargebeeCard,
+        chargebeePaypal,
+        chargebeeIdeal,
+        applePay,
+        googlePay,
+        bitcoinChargebee,
+        selectedProcessor,
+        flow,
+        amount,
+        currency,
+        paymentContext,
+        directDebit,
+        initialized,
+        reset,
+        currencyOverride,
+    };
+};

@@ -1,0 +1,296 @@
+import type { ProtonDriveClient } from '@protontech/drive-sdk';
+import isDeepEqual from 'lodash/isEqual';
+import { c } from 'ttag';
+
+import { createCalendar, updateCalendarUserSettings } from '@proton/shared/lib/api/calendars';
+import { setupCalendarKey } from '@proton/shared/lib/calendar/crypto/keys/setupCalendarKeys';
+import { getRandomAccentColor } from '@proton/shared/lib/colors';
+import { getTimezone } from '@proton/shared/lib/date/timezone';
+import { captureMessage, traceError } from '@proton/shared/lib/helpers/sentry';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import type { Calendar } from '@proton/shared/lib/interfaces/calendar/Calendar';
+import type { GetAddressKeys } from '@proton/shared/lib/interfaces/hooks/GetAddressKeys';
+import { getPrimaryKey } from '@proton/shared/lib/keys/getPrimaryKey';
+import isTruthy from '@proton/utils/isTruthy';
+
+import { startImportTask } from '../../../../api/api';
+import type { CalendarImportMapping, ImportProvider, LaunchImportPayload } from '../../../../interface';
+import { ImportType, IsCustomCalendarMapping } from '../../../../interface';
+import { changeOAuthStep, resetOauthDraft } from '../../../../logic/draft/oauthDraft/oauthDraft.actions';
+import type { ImporterCalendar, ImporterData } from '../../../../logic/draft/oauthDraft/oauthDraft.interface';
+import {
+    trackAccountImportEasySwitchError,
+    trackAccountImportEasySwitchFinished,
+} from '../../../../telemetry/accountImportFlow';
+import { formatPrepareStepPayload } from '../../Imap/ImapMailModal/StepPrepareImap/StepPrepareImap.helpers';
+import { startDriveImportTask } from '../Drive/driveImportTask';
+
+interface StartImporterProps {
+    api: Api;
+    provider: ImportProvider | undefined;
+    isLabelMapping: boolean;
+    products: ImportType[];
+    importerData: ImporterData;
+    getAddressKeys: GetAddressKeys;
+    availableAddresses: Address[];
+    calendars: Calendar[];
+    driveClient: ProtonDriveClient | undefined;
+    call: () => Promise<void>;
+    dispatch: (val: any) => void;
+    errorHandler: (error: unknown, options?: { trace?: boolean }) => void;
+    setIsCreatingCalendar: (val: boolean) => void;
+    setIsCreatingImportTask: (val: boolean) => void;
+    setCalendarsToBeCreated: (val: number) => void;
+    increaseCalendarCount: () => void;
+}
+
+interface CreatedCalendarType extends ImporterCalendar {
+    destination: string;
+}
+
+interface CreateCalendarProps {
+    api: Api;
+    calendars: ImporterCalendar[];
+    hasNoCalendar: boolean;
+    getAddressKeys: GetAddressKeys;
+    increaseCreatedCalendarCount: () => void;
+    activeAddresses?: Address[];
+}
+
+const createCalendars = async ({
+    api,
+    calendars,
+    hasNoCalendar,
+    getAddressKeys,
+    activeAddresses,
+    increaseCreatedCalendarCount,
+}: CreateCalendarProps): Promise<CreatedCalendarType[]> => {
+    if (!activeAddresses || !activeAddresses.length) {
+        throw new Error(c('Error').t`No valid address found`);
+    }
+
+    const [{ ID: addressID }] = activeAddresses;
+    const { privateKey: primaryAddressKey } = getPrimaryKey(await getAddressKeys(addressID)) || {};
+
+    if (!primaryAddressKey) {
+        throw new Error(c('Error').t`Primary address key is not decrypted.`);
+    }
+
+    const tempCalendars = await Promise.all(
+        calendars.map(async (calendar) => {
+            increaseCreatedCalendarCount();
+
+            const { Calendar } = await api(
+                createCalendar({
+                    Name: calendar.source,
+                    Color: getRandomAccentColor(),
+                    Description: calendar.description,
+                    Display: 1,
+                    AddressID: addressID,
+                    IsImport: 1,
+                })
+            );
+
+            await setupCalendarKey({ api, calendarID: Calendar.ID, addressID, getAddressKeys });
+            return { ...calendar, destination: Calendar.ID };
+        })
+    );
+
+    if (hasNoCalendar) {
+        await api(updateCalendarUserSettings({ PrimaryTimezone: getTimezone(), AutoDetectPrimaryTimezone: 1 }));
+    }
+
+    return tempCalendars;
+};
+
+export const createImporterTask = async ({
+    provider,
+    isLabelMapping,
+    products,
+    importerData,
+    api,
+    driveClient,
+    getAddressKeys,
+    dispatch,
+    availableAddresses,
+    calendars,
+    call,
+    errorHandler,
+    setIsCreatingCalendar,
+    setIsCreatingImportTask,
+    setCalendarsToBeCreated,
+    increaseCalendarCount,
+}: StartImporterProps) => {
+    if (!importerData || !products) {
+        trackAccountImportEasySwitchError({ provider, products, errorStep: 'import_payload' });
+        throw new Error('Importer data and products should be defined');
+    }
+
+    let createdCalendars: CreatedCalendarType[] = [];
+    const importPayload: LaunchImportPayload = {
+        ImporterID: importerData.importerId,
+    };
+
+    if (products.includes(ImportType.CALENDAR)) {
+        setIsCreatingCalendar(true);
+
+        const importerCalendar = importerData.calendars?.calendars;
+        const initialCalendars = importerData.calendars?.initialFields;
+
+        const calendarToCreate = importerCalendar?.filter((item) => item.checked && !item.mergedTo) ?? [];
+        const calendarToBeMerged = importerCalendar?.filter((item) => item.mergedTo) ?? [];
+        setCalendarsToBeCreated(calendarToCreate?.length);
+
+        try {
+            createdCalendars = await createCalendars({
+                api,
+                calendars: calendarToCreate,
+                hasNoCalendar: !calendars.length,
+                getAddressKeys,
+                activeAddresses: availableAddresses,
+                increaseCreatedCalendarCount: () => {
+                    increaseCalendarCount();
+                },
+            });
+
+            //Merge the mapping between created calendars and merged calendar before starting import task
+            const mapping: CalendarImportMapping[] = [
+                ...createdCalendars.map((calendar) => {
+                    return {
+                        Source: calendar.id,
+                        Destination: calendar.destination,
+                        NewCalendar: 1,
+                    };
+                }),
+                ...calendarToBeMerged.map((calendar) => {
+                    if (calendar.mergedTo?.ID) {
+                        return {
+                            Source: calendar.id,
+                            Destination: calendar.mergedTo.ID,
+                        };
+                    }
+                    return null;
+                }),
+            ].filter(isTruthy);
+
+            const formattedInitial = initialCalendars?.map((item) => {
+                return {
+                    source: item.source,
+                    description: item.description,
+                    id: item.id,
+                    checked: item.checked,
+                };
+            });
+            const formattedCalendars = importerCalendar?.map((item) => {
+                return {
+                    source: item.source,
+                    description: item.description,
+                    id: item.id,
+                    checked: item.checked,
+                };
+            });
+
+            const CustomCalendarMapping = !isDeepEqual(formattedInitial, formattedCalendars)
+                ? IsCustomCalendarMapping.TRUE
+                : IsCustomCalendarMapping.FALSE;
+
+            importPayload.Calendar = {
+                Mapping: mapping,
+                CustomCalendarMapping,
+            };
+            setIsCreatingCalendar(false);
+        } catch (e) {
+            trackAccountImportEasySwitchError({ provider, products, errorStep: 'calendar_creation' });
+            //Rollback to previous state if an error occurred during calendar creation
+            dispatch(changeOAuthStep('prepare-import'));
+            captureMessage('Error while creating calendars', {
+                extra: { message: e, importerID: importerData.importerId },
+            });
+            return;
+        }
+    }
+
+    try {
+        if (products.includes(ImportType.MAIL)) {
+            const emailsFields = importerData.emails?.fields!;
+            const emailsInitialFields = importerData.emails?.initialFields!;
+
+            const isCustomPeriod = emailsInitialFields.importPeriod !== emailsFields?.importPeriod;
+            const isCustomLabel = !isDeepEqual(emailsInitialFields?.importLabel, emailsFields?.importLabel);
+            const isCustomMapping = !isDeepEqual(emailsInitialFields?.mapping, emailsFields?.mapping);
+
+            const payload = formatPrepareStepPayload({
+                isLabelMapping,
+                data: {
+                    email: importerData.importedEmail,
+                    importerID: importerData.importerId,
+                },
+                fields: emailsFields,
+                updatedFields: {
+                    updatedPeriod: isCustomPeriod,
+                    updatedLabel: isCustomLabel,
+                    updatedMapping: isCustomMapping,
+                },
+            });
+
+            importPayload.Mail = payload.Mail;
+        }
+
+        if (products.includes(ImportType.CONTACTS)) {
+            importPayload.Contacts = {};
+        }
+    } catch (error) {
+        trackAccountImportEasySwitchError({ provider, products, errorStep: 'import_payload' });
+        throw error;
+    }
+
+    let isErrorReported = false;
+    let isImporterCreated = false;
+    try {
+        setIsCreatingImportTask(true);
+
+        if (driveClient && products.includes(ImportType.DRIVE)) {
+            await startDriveImportTask({
+                api,
+                drive: driveClient,
+                importPayload,
+                importedEmail: importerData.importedEmail,
+                onPrepareFolderError: (e) => {
+                    traceError(e, {
+                        tags: { component: 'drive-sdk' },
+                        extra: {
+                            context: 'Error while preparing Drive import folder',
+                            importerID: importerData.importerId,
+                        },
+                    });
+                    isErrorReported = true;
+                },
+            });
+        } else {
+            await api(startImportTask(importPayload));
+        }
+
+        // The import is running: it is created even if refreshing the events fails below
+        isImporterCreated = true;
+        trackAccountImportEasySwitchFinished({
+            provider,
+            products,
+            importPeriod: products.includes(ImportType.MAIL) ? importerData.emails?.fields?.importPeriod : undefined,
+        });
+        await call();
+        setIsCreatingImportTask(false);
+
+        dispatch(changeOAuthStep('success'));
+    } catch (error) {
+        if (createdCalendars) {
+            await call();
+        }
+        if (!isImporterCreated) {
+            trackAccountImportEasySwitchError({ provider, products, errorStep: 'import_start' });
+        }
+        // Already reported to Sentry with context --> only notify the user
+        errorHandler(error, { trace: !isErrorReported });
+        dispatch(resetOauthDraft());
+    }
+};

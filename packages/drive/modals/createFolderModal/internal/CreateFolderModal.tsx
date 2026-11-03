@@ -1,0 +1,15 @@
+import { useModalTwoStatic } from '@proton/components/components/modalTwo/useModalTwo';
+
+import { withHoc } from '../../../internal/withHoc';
+import { CreateFolderModalView, type CreateFolderModalViewProps } from './CreateFolderModalView';
+import { type UseCreateFolderModalStateProps, useCreateFolderModalState } from './useCreateFolderModalState';
+
+const CreateFolderModal = withHoc<UseCreateFolderModalStateProps, CreateFolderModalViewProps>(
+    useCreateFolderModalState,
+    CreateFolderModalView
+);
+
+export const useCreateFolderModal = () => {
+    const [createFolderModal, showCreateFolderModal] = useModalTwoStatic(CreateFolderModal);
+    return { createFolderModal, showCreateFolderModal };
+};

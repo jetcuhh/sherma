@@ -1,0 +1,21 @@
+import type { EncodedItemKeyRotation } from '../../../../types/api/pass';
+import type { ItemKey, RotationKey } from '../../../../types/crypto/pass-types';
+import { PassEncryptionTag } from '../../../../types/crypto/pass-types';
+import { decryptData, importSymmetricKey } from '../../utils/crypto-helpers';
+
+type OpenItemKeyProcessParams = {
+    encryptedItemKey: EncodedItemKeyRotation;
+    /** VaultKey for root items, FolderKey for items inside a folder */
+    shareKey: RotationKey;
+};
+
+export const openItemKey = async ({
+    encryptedItemKey: { Key, KeyRotation },
+    shareKey,
+}: OpenItemKeyProcessParams): Promise<ItemKey> => {
+    const data = Uint8Array.fromBase64(Key);
+    const itemKey = await decryptData(shareKey.key, data, PassEncryptionTag.ItemKey);
+    const key = await importSymmetricKey(itemKey);
+
+    return { raw: itemKey, key, rotation: KeyRotation };
+};

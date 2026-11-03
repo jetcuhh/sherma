@@ -1,0 +1,115 @@
+import type { FC } from 'react';
+
+import type { FieldArrayRenderProps } from 'formik';
+import { FieldArray, type FormikContextType } from 'formik';
+import { c } from 'ttag';
+
+import { UpsellRef } from '../../../constants';
+import type { ExtraSectionsError } from '../../../lib/validation/custom-item';
+import type { DeobfuscatedItemExtraField } from '../../../types/data/items';
+import type { CustomItemFormValues } from '../../../types/forms/item';
+import type { ExtraFieldType } from '../../../types/protobuf';
+import type { Maybe } from '../../../types/utils';
+import { autofocusInput } from '../../../utils/dom/input';
+import { AddExtraFieldDropdown } from '../../Form/Field/ExtraFieldGroup/AddExtraFieldDropdown';
+import { DeleteButton, ExtraFieldComponent } from '../../Form/Field/ExtraFieldGroup/ExtraField';
+import { createExtraField } from '../../Form/Field/ExtraFieldGroup/ExtraField.utils';
+import { Field } from '../../Form/Field/Field';
+import { FieldsetCluster } from '../../Form/Field/Layout/FieldsetCluster';
+import { BaseTextField } from '../../Form/Field/TextField';
+import { CollapsibleSection } from '../../Layout/Collapsible/CollapsibleSection';
+import { CustomNewSection } from './Custom.sections.new';
+
+type Props = { form: FormikContextType<CustomItemFormValues> };
+
+const getSectionFieldProps = (
+    form: FormikContextType<CustomItemFormValues>,
+    sectionIndex: number,
+    fieldIndex: number
+) => {
+    const touched = Boolean(form.touched.sections?.[sectionIndex]?.sectionFields?.[fieldIndex]);
+    const sectionErrors = form.errors?.sections?.[sectionIndex] as Maybe<ExtraSectionsError>;
+    const fieldErrors = sectionErrors?.sectionFields?.[fieldIndex];
+    return { touched, error: fieldErrors };
+};
+
+export const CustomFormSections: FC<Props> = ({ form }) => {
+    const createCustomField = (helpers: FieldArrayRenderProps, focusIndex: number) => {
+        return (type: ExtraFieldType) => {
+            helpers.push<DeobfuscatedItemExtraField>(createExtraField(type));
+            autofocusInput(`${helpers.name}[${focusIndex}]`);
+        };
+    };
+
+    return (
+        <FieldArray
+            name="sections"
+            render={(extraSectionsHelpers) => (
+                <>
+                    {form.values.sections.map(({ sectionName, sectionFields }, sectionIndex) => {
+                        const sectionKey = `sections[${sectionIndex}]`;
+                        const sectionErrors = form.errors?.sections?.[sectionIndex] as Maybe<ExtraSectionsError>;
+
+                        return (
+                            <CollapsibleSection
+                                key={sectionKey}
+                                label={
+                                    <Field
+                                        name={`${sectionKey}.sectionName`}
+                                        component={BaseTextField}
+                                        onClick={(evt) => evt.stopPropagation()}
+                                        placeholder={c('Action').t`Section name`}
+                                        error={sectionErrors?.sectionName}
+                                        dense
+                                        inputClassName={
+                                            sectionErrors?.sectionName ? 'placeholder-danger' : 'color-weak'
+                                        }
+                                    />
+                                }
+                                expanded
+                                suffix={<DeleteButton onDelete={() => extraSectionsHelpers.remove(sectionIndex)} />}
+                            >
+                                <FieldArray
+                                    name={`${sectionKey}.sectionFields`}
+                                    render={(helpers) => (
+                                        <>
+                                            <FieldsetCluster>
+                                                {sectionFields.map(({ type }, index) => (
+                                                    <Field
+                                                        {...getSectionFieldProps(form, sectionIndex, index)}
+                                                        key={`${sectionName}::${index}`}
+                                                        component={ExtraFieldComponent}
+                                                        type={type}
+                                                        name={`${sectionKey}.sectionFields[${index}]`}
+                                                        onDelete={() => helpers.remove(index)}
+                                                        hideIcon
+                                                    />
+                                                ))}
+                                            </FieldsetCluster>
+
+                                            <AddExtraFieldDropdown
+                                                onAdd={createCustomField(helpers, sectionFields.length)}
+                                            />
+                                        </>
+                                    )}
+                                />
+                            </CollapsibleSection>
+                        );
+                    })}
+
+                    <CustomNewSection
+                        upsellRef={UpsellRef.CUSTOM_ITEMS}
+                        onAdd={(sectionName: string) =>
+                            extraSectionsHelpers.push({
+                                sectionName,
+                                sectionFields: [],
+                            })
+                        }
+                    />
+
+                    <hr className="my-4" />
+                </>
+            )}
+        />
+    );
+};

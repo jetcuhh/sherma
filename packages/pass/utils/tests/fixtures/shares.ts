@@ -1,0 +1,51 @@
+import { ApiError } from '@proton/shared/lib/fetch/ApiError';
+
+import { PassErrorCode } from '../../../lib/api/errors';
+import type { Share } from '../../../types/data/shares';
+import { ShareRole, ShareType } from '../../../types/data/shares';
+import { uniqueId } from '../../string/unique-id';
+
+export const createTestShare = (overrides: Partial<Share> = {}): Share => ({
+    shareId: 'share',
+    vaultId: 'v',
+    targetId: '1',
+    targetType: ShareType.Vault,
+    shareRoleId: ShareRole.READ,
+    permission: 0,
+    flags: 0,
+    addressId: undefined,
+    content: { name: 'Test', description: '', display: {} },
+    createTime: 0,
+    canAutofill: undefined,
+    newUserInvitesReady: 0,
+    owner: false,
+    shared: false,
+    targetMaxMembers: 10,
+    targetMembers: 1,
+    eventId: 'event-1',
+    groupId: null,
+    ...overrides,
+});
+
+export type TestVaultInit = { name: string } & Partial<Share<ShareType.Vault>>;
+
+export const createTestVault = ({ name, ...overrides }: TestVaultInit): Share<ShareType.Vault> => {
+    const shareId = overrides.shareId ?? uniqueId();
+
+    return createTestShare({
+        shareId,
+        vaultId: `vault-${shareId}`,
+        shareRoleId: ShareRole.MANAGER,
+        owner: true,
+        canAutofill: true,
+        content: { name, description: '', display: {} },
+        ...overrides,
+    }) as Share<ShareType.Vault>;
+};
+
+export const createShareRemovedError = (code: PassErrorCode = PassErrorCode.NOT_EXIST_SHARE) => {
+    const data = { Code: code, Error: '[TEST] Share Removed' };
+    const err = new ApiError(data.Error, 422, 'StatusCodeError');
+    err.data = data;
+    return err;
+};

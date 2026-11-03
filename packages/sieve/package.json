@@ -1,0 +1,40 @@
+{
+    "name": "@proton/sieve",
+    "description": "Proton sieve",
+    "license": "GPL-3.0",
+    "author": "ProtonMail",
+    "sideEffects": false,
+    "exports": {
+        "./filterModel": "./src/filterModel.ts",
+        "./fromSieveTree": "./src/fromSieve/fromSieveTree.ts",
+        "./toSieveTree": "./src/toSieve/toSieveTree.ts",
+        "./types": "./src/interface.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "pretty": "prettier --write $(find src fixtures -type f -name '*.ts')",
+        "test": "jest",
+        "test:ci": "pnpm run test",
+        "test:watch": "jest --watch --coverage=false --watchAll"
+    },
+    "dependencies": {
+        "@proton/utils": "workspace:^",
+        "lodash": "catalog:"
+    },
+    "devDependencies": {
+        "@proton/jest-env": "workspace:^",
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@types/jest": "catalog:",
+        "@types/lodash": "catalog:",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "jest": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "prettier": "catalog:",
+        "typescript": "catalog:"
+    }
+}

@@ -1,0 +1,78 @@
+{
+    "name": "@proton/pack",
+    "description": "Setup boilerplate for webpack",
+    "license": "MIT",
+    "author": "Proton AG",
+    "bin": {
+        "proton-pack": "./bin/protonPack.js"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "pretty": "prettier --write  cli bin"
+    },
+    "dependencies": {
+        "@babel/core": "^7.29.7",
+        "@babel/plugin-transform-class-properties": "^7.29.7",
+        "@babel/plugin-transform-runtime": "^7.29.7",
+        "@babel/preset-env": "^7.29.7",
+        "@babel/preset-react": "^7.29.7",
+        "@babel/preset-typescript": "^7.29.7",
+        "@babel/runtime": "^7.29.7",
+        "@pmmmwh/react-refresh-webpack-plugin": "catalog:",
+        "@proton/shared": "workspace:^",
+        "@sentry/webpack-plugin": "^1.21.0",
+        "@swc/core": "^1.16.18",
+        "autoprefixer": "^10.6.1",
+        "babel-loader": "^10.1.1",
+        "babel-plugin-transform-react-remove-prop-types": "^0.4.24",
+        "browserslist": "catalog:",
+        "commander": "catalog:",
+        "copy-webpack-plugin": "catalog:",
+        "core-js": "catalog:",
+        "css-loader": "catalog:",
+        "esbuild-loader": "^4.5.0",
+        "eslint-webpack-plugin": "^6.0.0",
+        "execa": "^5.1.1",
+        "favicons": "^7.3.1",
+        "favicons-webpack-plugin": "^6.0.1",
+        "fork-ts-checker-webpack-plugin": "catalog:",
+        "html-webpack-plugin": "catalog:",
+        "mini-css-extract-plugin": "catalog:",
+        "portfinder": "^1.0.38",
+        "postcss": "catalog:",
+        "postcss-color-functional-notation": "^6.0.14",
+        "postcss-loader": "^8.2.1",
+        "postcss-logical": "^8.1.0",
+        "react-refresh": "^0.19.0",
+        "sass": "catalog:",
+        "sass-loader": "^17.0.1",
+        "swc-loader": "^0.2.7",
+        "terser-webpack-plugin": "^5.6.1",
+        "webpack": "catalog:",
+        "webpack-bundle-analyzer": "^5.4.0",
+        "webpack-cli": "^7.2.3",
+        "webpack-dev-server": "catalog:",
+        "webpack-retry-chunk-load-plugin": "^3.1.1",
+        "webpack-subresource-integrity": "^5.1.0"
+    },
+    "devDependencies": {
+        "@proton/oxlint-config": "workspace:^",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "eslint": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "prettier": "catalog:",
+        "typescript": "catalog:"
+    },
+    "peerDependencies": {
+        "@proton/collect-metrics": "workspace:^"
+    },
+    "peerDependenciesMeta": {
+        "@proton/collect-metrics": {
+            "optional": true
+        }
+    }
+}

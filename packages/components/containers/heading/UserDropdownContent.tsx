@@ -1,0 +1,339 @@
+import type { MouseEvent } from 'react';
+import { useContext, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { useConfig } from '@proton/app-context/useConfig';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import { IcChevronRight } from '@proton/icons/icons/IcChevronRight';
+import { IcPassShieldOk } from '@proton/icons/icons/IcPassShieldOk';
+import { IcPlus } from '@proton/icons/icons/IcPlus';
+import { ForkType } from '@proton/shared/lib/authentication/fork/constants';
+import { APPS, APPS_CONFIGURATION } from '@proton/shared/lib/constants';
+import { textToClipboard } from '@proton/shared/lib/helpers/browser';
+import clsx from '@proton/utils/clsx';
+import generateUID from '@proton/utils/generateUID';
+
+import Dropdown from '../../components/dropdown/Dropdown';
+import { DropdownSizeUnit } from '../../components/dropdown/utils';
+import AppLink from '../../components/link/AppLink';
+import SettingsLink from '../../components/link/SettingsLink';
+import useActiveBreakpoint from '../../hooks/useActiveBreakpoint';
+import { useTheme } from '../themes/ThemeProvider';
+import AccountSessionsSwitcher from './AccountSessionsSwitcher';
+import { AppSwitcher } from './AppSwitcher';
+import { SecurityCheckup } from './SecurityCheckup';
+import { UserDropdownContext, type UserDropdownValue } from './UserDropdownContext';
+import { UserDropdownFooter } from './UserDropdownFooter';
+
+import './UserDropdown.scss';
+
+const UserSection = ({ info, upgrade }: { info: UserDropdownValue['info']; upgrade: UserDropdownValue['upgrade'] }) => {
+    const { createNotification } = useNotifications();
+    const { viewportWidth } = useActiveBreakpoint();
+    const currentTheme = useTheme();
+    const { dark } = currentTheme.information;
+
+    const handleCopyEmail = () => {
+        textToClipboard(info.email);
+        createNotification({
+            type: 'success',
+            text: c('Success').t`Email address copied to clipboard`,
+        });
+    };
+
+    if (viewportWidth['<=small']) {
+        return (
+            <div className="p-4 flex justify-space-between">
+                {info.planNames.map((planName) => (
+                    <span
+                        className="inline-block py-px px-1 text-sm rounded-sm userDropdown-planname"
+                        data-testid="userdropdown:label:plan-name"
+                        key={planName}
+                    >
+                        {planName}
+                    </span>
+                ))}
+
+                {info.organizationName ? (
+                    <span
+                        className="text-ellipsis py-px px-1 text-sm block"
+                        title={info.organizationName}
+                        data-testid="userdropdown:label:org-name"
+                    >
+                        {info.organizationName}
+                    </span>
+                ) : null}
+
+                {upgrade.display ? (
+                    <SettingsLink
+                        className="text-ellipsis text-sm py-px px-1 link link-focus"
+                        path={upgrade.url}
+                        title={c('specialoffer: Link').t`Go to subscription plans`}
+                    >{c('specialoffer: Link').t`Upgrade`}</SettingsLink>
+                ) : null}
+            </div>
+        );
+    }
+
+    return (
+        <div className={clsx('p-4', dark && 'userDropdown-theme-dark')}>
+            <div className="flex justify-center items-center flex-column">
+                <span
+                    className="my-auto mb-2 text-sm rounded-xl border inline-block relative flex shrink-0 user-initials user-initials-active w-custom ratio-square text-2xl"
+                    style={{ '--w-custom': '3.4rem' }}
+                    aria-hidden="true"
+                >
+                    <span className="m-auto">{info.initials}</span>
+                </span>
+                <div className="text-center mb-2 w-full">
+                    {info.name ? (
+                        <div className="text-ellipsis" title={info.name} data-testid="userdropdown:label:display-name">
+                            {info.name}
+                        </div>
+                    ) : null}
+
+                    {info.email ? (
+                        <div className="flex flex-nowrap justify-center items-center">
+                            <Tooltip title={c('Action').t`Copy address`} openDelay={250}>
+                                <button
+                                    type="button"
+                                    className={clsx([
+                                        'user-select relative interactive-pseudo-protrude interactive--no-background',
+                                        info.name || info.organizationName ? 'color-weak' : 'text-bold',
+                                    ])}
+                                    title={info.email}
+                                    data-testid="userdropdown:label:email"
+                                    onClick={handleCopyEmail}
+                                >
+                                    <span className="text-ellipsis block color-weak hover:color-norm">
+                                        {info.email}
+                                    </span>
+                                </button>
+                            </Tooltip>
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+            <div className="flex flex-column gap-1 text-center empty:hidden">
+                {info.organizationName ? (
+                    <span
+                        className="text-ellipsis w-full text-sm block"
+                        title={info.organizationName}
+                        data-testid="userdropdown:label:org-name"
+                    >
+                        {info.organizationName}
+                    </span>
+                ) : null}
+
+                <div className="flex justify-center gap-2 empty:hidden">
+                    {info.planNames.map((planName) => (
+                        <span
+                            className="inline-block py-px px-1 text-sm rounded-sm userDropdown-planname"
+                            data-testid="userdropdown:label:plan-name"
+                            key={planName}
+                        >
+                            {planName}
+                        </span>
+                    ))}
+
+                    {upgrade.display ? (
+                        <SettingsLink
+                            className="text-ellipsis text-sm py-px px-1 link link-focus"
+                            path={upgrade.url}
+                            title={c('specialoffer: Link').t`Go to subscription plans`}
+                        >{c('specialoffer: Link').t`Upgrade`}</SettingsLink>
+                    ) : null}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const AddAccountButton = ({
+    showAsButton = false,
+    className,
+    cta,
+}: {
+    showAsButton?: boolean;
+    className?: string;
+    cta?: string;
+}) => {
+    const { loginHref, onSwitchAccount } = useContext(UserDropdownContext);
+
+    const commonProps = {
+        href: loginHref,
+        target: '_self',
+        onClick: (event: MouseEvent<HTMLAnchorElement>) => onSwitchAccount(event, ForkType.LOGIN),
+        'data-testid': 'userdropdown:button:add-account',
+    };
+
+    const copy = cta || c('Action').t`Add account`;
+
+    if (showAsButton) {
+        return (
+            <ButtonLike as="a" shape="outline" color="weak" fullWidth className={clsx(className)} {...commonProps}>
+                {copy}
+            </ButtonLike>
+        );
+    }
+
+    return (
+        <a
+            className={clsx(
+                'text-no-decoration w-full relative',
+                'interactive-pseudo-inset py-2',
+                'hover:color-norm inline-flex items-center',
+                className
+            )}
+            {...commonProps}
+        >
+            <IcPlus className="shrink-0" />
+            {copy}
+        </a>
+    );
+};
+
+const SwitchAccountButton = () => {
+    const { switchHref, onSwitchAccount } = useContext(UserDropdownContext);
+    return (
+        <ButtonLike
+            as="a"
+            href={switchHref}
+            target="_self"
+            shape="outline"
+            color="weak"
+            fullWidth
+            onClick={(event: MouseEvent<HTMLAnchorElement>) => onSwitchAccount(event, ForkType.SWITCH)}
+            data-testid="userdropdown:button:switch-account"
+        >
+            {c('Action').t`Switch or add account`}
+        </ButtonLike>
+    );
+};
+
+const UserDropdownContent = () => {
+    const { APP_NAME } = useConfig();
+    const [uid] = useState(generateUID('dropdown'));
+    const { viewportWidth } = useActiveBreakpoint();
+    const {
+        info,
+        closeUserDropdown,
+        onSignOut,
+        onOpenSignoutAll,
+        isOpen,
+        app,
+        anchorRef,
+        accountSessions,
+        hasAppLinks,
+        showSwitchAccountButton,
+        sessionOptions,
+        upgrade,
+    } = useContext(UserDropdownContext);
+
+    const showSettingsButton =
+        (viewportWidth['<=small'] && APP_NAME !== APPS.PROTONACCOUNT && APP_NAME !== APPS.PROTONVPN_SETTINGS) ||
+        APP_NAME === APPS.PROTONDOCS ||
+        APP_NAME === APPS.PROTONMEET;
+
+    return (
+        <Dropdown
+            id={uid}
+            className="userDropdown rounded-lg overflow-hidden"
+            isOpen={isOpen}
+            anchorRef={anchorRef}
+            autoClose={false}
+            onClose={closeUserDropdown}
+            originalPlacement="bottom-end"
+            adaptiveForTouchScreens={false}
+            size={{
+                height: DropdownSizeUnit.Dynamic,
+                maxHeight: DropdownSizeUnit.Viewport,
+                width: '17.25rem',
+                maxWidth: '20rem',
+            }}
+        >
+            <SecurityCheckup>
+                {(props) => {
+                    return (
+                        <AppLink
+                            {...props}
+                            className={clsx(
+                                'recommended-actions',
+                                'interactive-pseudo-inset',
+                                'relative p-2 flex flex-nowrap items-center justify-center gap-2 text-sm'
+                            )}
+                        >
+                            <IcPassShieldOk className="shrink-0" size={6} />
+                            <div>{c('Safety review').t`Review account safety`}</div>
+                            <IcChevronRight className="shrink-0 rtl:mirror" size={4} />
+                        </AppLink>
+                    );
+                }}
+            </SecurityCheckup>
+
+            <div className="pb-4">
+                <UserSection info={info} upgrade={upgrade} />
+
+                <div className="mb-4 px-4 flex flex-column gap-2">
+                    {showSettingsButton ? (
+                        <ButtonLike
+                            as={SettingsLink}
+                            shape="outline"
+                            color="weak"
+                            fullWidth
+                            path={APPS_CONFIGURATION[APP_NAME].publicPath}
+                            data-testid="userdropdown:button:settings"
+                        >{c('Action').t`Settings`}</ButtonLike>
+                    ) : undefined}
+
+                    {showSwitchAccountButton &&
+                        !accountSessions.hasList &&
+                        (accountSessions.hasAddAccount ? (
+                            <AddAccountButton showAsButton cta={c('Action').t`Add another account`} />
+                        ) : (
+                            <SwitchAccountButton />
+                        ))}
+
+                    <Button
+                        shape="outline"
+                        color={
+                            (showSwitchAccountButton && !accountSessions.hasList) || showSettingsButton
+                                ? 'norm'
+                                : 'weak'
+                        }
+                        fullWidth
+                        onClick={onSignOut}
+                        data-testid="userdropdown:button:logout"
+                    >
+                        {c('Action').t`Sign out`}
+                    </Button>
+                </div>
+
+                {showSwitchAccountButton && accountSessions.hasList && (
+                    <div className={clsx('mb-4', !viewportWidth['<=small'] && 'pb-4 border-bottom')}>
+                        <AccountSessionsSwitcher
+                            sessionOptions={sessionOptions}
+                            sessions={accountSessions.state.value}
+                            onSignOut={() => {
+                                closeUserDropdown();
+                                onOpenSignoutAll();
+                            }}
+                            addAccountButton={<AddAccountButton className="pl-5 pr-4 gap-4" />}
+                            addAccountButtonDropdown={<AddAccountButton className="px-4 gap-2" />}
+                        />
+                    </div>
+                )}
+
+                {hasAppLinks && <AppSwitcher app={app} hasBorder={accountSessions.hasList} />}
+
+                <UserDropdownFooter />
+            </div>
+        </Dropdown>
+    );
+};
+
+export default UserDropdownContent;

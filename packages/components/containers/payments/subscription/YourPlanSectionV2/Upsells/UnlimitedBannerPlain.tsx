@@ -1,0 +1,75 @@
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { PLANS, PLAN_NAMES } from '@proton/payments/core/constants';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { VPN_SHORT_APP_NAME } from '@proton/shared/lib/constants';
+
+import { getSimplePriceString } from '../../../../../components/price/helper';
+import getBoldFormattedText from '../../../../../helpers/getBoldFormattedText';
+import useDashboardPaymentFlow from '../../../../../hooks/useDashboardPaymentFlow';
+import { useSubscriptionModal } from '../../SubscriptionModalProvider';
+import { PlanIcon } from '../PlanIcon';
+import PlanIconName from '../PlanIconName';
+import type { UpsellSectionBaseProps } from '../YourPlanUpsellsSectionV2';
+import UpsellMultiBox from './UpsellMultiBox';
+import { useSubscriptionPriceComparison } from './helper';
+
+interface Props extends UpsellSectionBaseProps {
+    subscription: Subscription;
+}
+
+const UnlimitedBannerPlain = ({ app, subscription }: Props) => {
+    const [openSubscriptionModal, loadingSubscriptionModal] = useSubscriptionModal();
+    const telemetryFlow = useDashboardPaymentFlow(app);
+
+    const plan = PLANS.BUNDLE;
+    const { priceDifference, priceFallbackPerMonth, showPriceDifference } = useSubscriptionPriceComparison(
+        app,
+        subscription,
+        plan
+    );
+
+    const handleGetPlan = () => {
+        void openSubscriptionModal({
+            step: SUBSCRIPTION_STEPS.PLAN_SELECTION,
+            plan: plan,
+            telemetryFlow,
+        });
+    };
+
+    const priceString = getSimplePriceString(subscription.Currency, priceDifference);
+    const fallBackString = getSimplePriceString(subscription.Currency, priceFallbackPerMonth);
+
+    const planName = PLAN_NAMES[plan];
+
+    return (
+        <UpsellMultiBox
+            header={
+                <PlanIconName
+                    logo={<PlanIcon planName={plan} />}
+                    topLine={planName}
+                    bottomLine={
+                        showPriceDifference
+                            ? getBoldFormattedText(
+                                  c('Upsell')
+                                      .t`Privacy suite with secure email, ${VPN_SHORT_APP_NAME}, cloud storage, and password manager in one bundle. Only **${priceString}** more each month.`,
+                                  'color-primary'
+                              )
+                            : c('Upsell')
+                                  .t`Privacy suite with secure email, ${VPN_SHORT_APP_NAME}, cloud storage, and password manager in one bundle. From only ${fallBackString} per month`
+                    }
+                />
+            }
+            headerActionArea={
+                <Button color="norm" shape="outline" loading={loadingSubscriptionModal} onClick={handleGetPlan}>
+                    {c('Action').t`Discover ${planName}`}
+                </Button>
+            }
+            style="promotionGradient"
+        />
+    );
+};
+
+export default UnlimitedBannerPlain;

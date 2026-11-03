@@ -1,0 +1,202 @@
+import {
+    type PayloadAction,
+    type ThunkAction,
+    type UnknownAction,
+    createSlice,
+    miniSerializeError,
+    original,
+} from '@reduxjs/toolkit';
+
+import { formatSubscription, getSubscription } from '@proton/payments/core/api/api';
+import { FREE_SUBSCRIPTION } from '@proton/payments/core/constants';
+import type { FreeSubscription } from '@proton/payments/core/interface';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { previousSelector } from '@proton/redux-utilities/creator';
+import { getFetchedAt, getFetchedEphemeral } from '@proton/redux-utilities/fetchedAt';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import type { CacheType } from '@proton/redux-utilities/interface';
+import { cacheHelper, createPromiseStore } from '@proton/redux-utilities/promiseStore';
+import updateObject from '@proton/shared/lib/helpers/updateObject';
+import type { User } from '@proton/shared/lib/interfaces/User';
+import { isAdmin, isPaid } from '@proton/shared/lib/user/helpers';
+
+import { serverEvent } from '../eventLoop';
+import { initEvent } from '../init';
+import { type UserState, userFulfilled, userThunk } from '../user';
+
+const name = 'subscription' as const;
+
+enum ValueType {
+    dummy = 0,
+    complete = 1,
+}
+
+export interface SubscriptionState extends UserState {
+    [name]: ModelState<Subscription | FreeSubscription> & { meta: { type: ValueType } };
+}
+
+type SliceState = SubscriptionState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+export const selectSubscription = (state: SubscriptionState) => state[name];
+
+const freeSubscription = FREE_SUBSCRIPTION as unknown as Subscription;
+
+const canFetch = (user: User) => {
+    return isAdmin(user) && isPaid(user);
+};
+
+const initialState: SliceState = {
+    value: undefined,
+    error: undefined,
+    meta: {
+        type: ValueType.dummy,
+        fetchedAt: 0,
+        fetchedEphemeral: undefined,
+    },
+};
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {
+        pending: (state) => {
+            state.error = undefined;
+        },
+        fulfilled: (state, action: PayloadAction<{ value: Model; type: ValueType }>) => {
+            state.value = action.payload.value;
+            state.error = undefined;
+            state.meta.type = action.payload.type;
+            state.meta.fetchedAt = getFetchedAt();
+            state.meta.fetchedEphemeral = getFetchedEphemeral();
+        },
+        rejected: (state, action) => {
+            state.error = action.payload;
+            state.meta.fetchedAt = getFetchedAt();
+            state.meta.fetchedEphemeral = getFetchedEphemeral();
+        },
+    },
+    extraReducers: (builder) => {
+        const handleUserUpdate = (state: SubscriptionState['subscription'], user: User | undefined) => {
+            if (!state.value || !user) {
+                return;
+            }
+
+            const isFreeSubscription = original(state)?.meta?.type === ValueType.dummy;
+
+            // User who downgrades does not receive a subscription update, so this resets it to free.
+            if (!isFreeSubscription && user && !canFetch(user)) {
+                state.value = freeSubscription;
+                state.error = undefined;
+                state.meta.type = ValueType.dummy;
+                state.meta.fetchedEphemeral = undefined;
+                state.meta.fetchedAt = 0;
+            }
+
+            // Otherwise, if there was no subscription update received, but the user became an admin, we reset the value so that it gets re-fetched. Typically happens for members who get promoted.
+            if (isFreeSubscription && user && canFetch(user)) {
+                state.error = undefined;
+                state.meta.type = ValueType.complete;
+                state.meta.fetchedEphemeral = undefined;
+                state.meta.fetchedAt = 0;
+            }
+        };
+
+        builder.addCase(initEvent, (state, action) => {
+            handleUserUpdate(state, action.payload.User);
+        });
+        builder.addCase(userFulfilled, (state, action) => {
+            handleUserUpdate(state, action.payload);
+        });
+
+        builder.addCase(serverEvent, (state, action) => {
+            if (!state.value) {
+                return;
+            }
+
+            if (action.payload.Subscription) {
+                // When a Subscription event is received, the value is always a real Subscription (not free)
+                const currentValue = state.value as unknown as Subscription;
+
+                const events = action.payload.Subscription;
+                const eventsSubscription = updateObject(currentValue, events);
+
+                /**
+                 * There are two possible cases in the events: UpcomingSubscription created and UpcomingSubscription deleted.
+                 * This branch handles the deletion case, whereas {@link updateObject()} above handles the creation case.
+                 */
+                if (events.UpcomingSubscription === undefined && eventsSubscription) {
+                    delete eventsSubscription.UpcomingSubscription;
+                }
+
+                /**
+                 * In contrast to {@link getSubscription()}, events have a different structure for the
+                 * UpcomingSubscription. For example, {@link getSubscription()} endpoint returns the both properties on the top
+                 * level: { Subscription: { ... }, UpcomingSubscription: { ... }} Events make the upcoming subscription nested:
+                 * { Subscription: { UpcomingSubscription: { ... }, ...} }
+                 */
+                state.value = formatSubscription(
+                    eventsSubscription,
+                    eventsSubscription.UpcomingSubscription || undefined,
+                    currentValue.SecondarySubscriptions
+                );
+                state.error = undefined;
+                state.meta.type = ValueType.complete;
+            } else {
+                handleUserUpdate(state, action.payload.User);
+            }
+        });
+    },
+});
+
+const promiseStore = createPromiseStore<Model>();
+const previous = previousSelector(selectSubscription);
+
+const modelThunk = (options?: {
+    cache?: CacheType;
+}): ThunkAction<Promise<Model>, SubscriptionState, ProtonThunkArguments, UnknownAction> => {
+    return (dispatch, getState, extraArgument) => {
+        const select = () => {
+            return previous({ dispatch, getState, extraArgument, options });
+        };
+        const getPayload = async () => {
+            const user = await dispatch(userThunk());
+            const defaultValue = {
+                value: freeSubscription,
+                type: ValueType.dummy,
+            };
+            if (!canFetch(user)) {
+                return defaultValue;
+            }
+            try {
+                const subscription = await getSubscription(extraArgument.api, user);
+
+                return {
+                    value: subscription,
+                    type: ValueType.complete,
+                };
+            } catch (e: any) {
+                // We'll be doing this for all failures, 4xx, 5xx, offline. We think that's ok because there are several
+                // other routes that will fail in hard-failure scenarios. We're primarily interested in making
+                // subscription reads survive since there are several places in the app where this is being used.
+                return defaultValue;
+            }
+        };
+        const cb = async () => {
+            try {
+                dispatch(slice.actions.pending());
+                const payload = await getPayload();
+                dispatch(slice.actions.fulfilled(payload));
+                return payload.value;
+            } catch (error) {
+                dispatch(slice.actions.rejected(miniSerializeError(error)));
+                throw error;
+            }
+        };
+        return cacheHelper({ store: promiseStore, select, cb, cache: options?.cache });
+    };
+};
+
+export const subscriptionReducer = { [name]: slice.reducer };
+export const subscriptionThunk = modelThunk;
+export * from './startListeningToPlanNameChange';

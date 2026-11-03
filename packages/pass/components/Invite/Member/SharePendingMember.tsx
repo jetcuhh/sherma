@@ -1,0 +1,193 @@
+import type { FC, ReactNode } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { Tooltip } from '@proton/atoms/Tooltip/Tooltip';
+import Info from '@proton/components/components/link/Info';
+import { IcCircleSlash } from '@proton/icons/icons/IcCircleSlash';
+import { IcPaperPlane } from '@proton/icons/icons/IcPaperPlane';
+import clsx from '@proton/utils/clsx';
+
+import { useActionRequest } from '../../../hooks/useRequest';
+import type { AccessDTO } from '../../../lib/access/types';
+import {
+    inviteRemoveIntent,
+    inviteResendIntent,
+    newUserInvitePromoteIntent,
+    newUserInviteRemoveIntent,
+} from '../../../store/actions/creators/invite';
+import { NewUserInviteState } from '../../../types/data/invites';
+import { useMaybeGroup } from '../../Groups/GroupsProvider';
+import { MaybeGroupName } from '../../Groups/MaybeGroupName';
+import { DropdownMenuButton } from '../../Layout/Dropdown/DropdownMenuButton';
+import { QuickActionsDropdown } from '../../Layout/Dropdown/QuickActionsDropdown';
+import { ButtonIfNeeded } from '../../Utils/ButtonIfNeeded';
+import { ShareMemberAvatar } from './ShareMemberAvatar';
+
+type PendingMemberBase = AccessDTO & { canManage: boolean; email: string; isGroup: boolean; className?: string };
+type PendingExistingMemberProps = PendingMemberBase & { inviteId: string };
+type PendingNewMemberProps = PendingMemberBase & { newUserInviteId: string; state: NewUserInviteState };
+
+type SharePendingMemberProps = {
+    actions?: ReactNode[];
+    email: string;
+    isGroup: boolean;
+    extra?: ReactNode;
+    loading: boolean;
+    className?: string;
+};
+
+const SharePendingMember: FC<SharePendingMemberProps> = ({
+    actions,
+    email,
+    isGroup: isGroupInput,
+    extra,
+    loading,
+    className,
+}) => {
+    const { name, maybeGroupProps, isGroup: isGroupComputed, onShowMembers } = useMaybeGroup(email);
+    // An invite to a group address is not known as a group invite
+    // But we may still match the group address with the user groups
+    const isGroup = isGroupInput || isGroupComputed;
+
+    return (
+        <div className={clsx('border border-weak rounded-xl px-4 py-3 max-w-full', className)}>
+            <div className="flex flex-nowrap items-center w-full">
+                <ButtonIfNeeded onClick={onShowMembers}>
+                    <ShareMemberAvatar email={email} isGroup={isGroup} loading={loading} />
+                </ButtonIfNeeded>
+
+                <div className="flex-1">
+                    <Tooltip openDelay={100} originalPlacement="bottom-start" title={name}>
+                        <ButtonIfNeeded onClick={onShowMembers}>
+                            <MaybeGroupName {...maybeGroupProps} />
+                        </ButtonIfNeeded>
+                    </Tooltip>
+                    <div className="flex items-center gap-1">
+                        <span className="color-weak text-sm">{c('Info').t`Invitation sent`}</span>
+                        <Info
+                            title={c('Info').t`The user did not accept the invitation yet.`}
+                            className="color-weak"
+                            questionMark
+                        />
+                    </div>
+                </div>
+
+                {actions && (
+                    <QuickActionsDropdown color="weak" shape="ghost">
+                        {actions}
+                    </QuickActionsDropdown>
+                )}
+            </div>
+            {extra}
+        </div>
+    );
+};
+
+export const PendingExistingMember: FC<PendingExistingMemberProps> = ({
+    canManage,
+    className,
+    email,
+    isGroup,
+    inviteId,
+    itemId,
+    shareId,
+    target,
+}) => {
+    const resendInvite = useActionRequest(inviteResendIntent);
+    const removeInvite = useActionRequest(inviteRemoveIntent);
+
+    const resend = () => resendInvite.dispatch({ shareId, itemId, inviteId, target });
+    const remove = () => removeInvite.dispatch({ shareId, itemId, inviteId, target });
+    const loading = resendInvite.loading || removeInvite.loading;
+
+    return (
+        <SharePendingMember
+            email={email}
+            isGroup={isGroup}
+            loading={loading}
+            actions={
+                canManage
+                    ? [
+                          <DropdownMenuButton
+                              key="resend"
+                              label={c('Action').t`Resend invitation`}
+                              icon={IcPaperPlane}
+                              onClick={resend}
+                              disabled={loading}
+                          />,
+
+                          <DropdownMenuButton
+                              key="remove"
+                              label={c('Action').t`Remove access`}
+                              icon={IcCircleSlash}
+                              danger
+                              onClick={remove}
+                              disabled={loading}
+                          />,
+                      ]
+                    : undefined
+            }
+            className={className}
+        />
+    );
+};
+
+export const PendingNewMember: FC<PendingNewMemberProps> = ({
+    canManage,
+    email,
+    isGroup,
+    shareId,
+    itemId,
+    state,
+    newUserInviteId,
+    className,
+    target,
+}) => {
+    const promoteInvite = useActionRequest(newUserInvitePromoteIntent);
+    const removeInvite = useActionRequest(newUserInviteRemoveIntent);
+
+    const promote = () => promoteInvite.dispatch({ shareId, itemId, newUserInviteId, target });
+    const remove = () => removeInvite.dispatch({ shareId, itemId, newUserInviteId, target });
+    const loading = promoteInvite.loading || removeInvite.loading;
+
+    return (
+        <SharePendingMember
+            email={email}
+            isGroup={isGroup}
+            loading={loading}
+            actions={
+                canManage
+                    ? [
+                          <DropdownMenuButton
+                              key="remove"
+                              label={c('Action').t`Remove access`}
+                              icon={IcCircleSlash}
+                              danger
+                              onClick={remove}
+                              disabled={loading}
+                          />,
+                      ]
+                    : undefined
+            }
+            extra={
+                canManage && state === NewUserInviteState.READY ? (
+                    <Button
+                        pill
+                        shape="solid"
+                        color="weak"
+                        size="small"
+                        className="w-full text-sm mt-2"
+                        disabled={loading}
+                        loading={promoteInvite.loading}
+                        onClick={promote}
+                    >
+                        {c('Action').t`Confirm access`}
+                    </Button>
+                ) : undefined
+            }
+            className={className}
+        />
+    );
+};

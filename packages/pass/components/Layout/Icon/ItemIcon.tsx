@@ -1,0 +1,182 @@
+import type { ReactNode } from 'react';
+import { type FC, useCallback, useState } from 'react';
+import { useSelector } from 'react-redux';
+
+import { CircleLoader } from '@proton/atoms/CircleLoader/CircleLoader';
+import type { IconComponent } from '@proton/icons/component';
+import { IcAlias } from '@proton/icons/icons/IcAlias';
+import { IcAliasSlash } from '@proton/icons/icons/IcAliasSlash';
+import { IcCardIdentity } from '@proton/icons/icons/IcCardIdentity';
+import { IcCreditCard } from '@proton/icons/icons/IcCreditCard';
+import { IcExclamationCircleFilled } from '@proton/icons/icons/IcExclamationCircleFilled';
+import { IcFileLines } from '@proton/icons/icons/IcFileLines';
+import { IcFilingCabinet } from '@proton/icons/icons/IcFilingCabinet';
+import { IcShield2Bolt } from '@proton/icons/icons/IcShield2Bolt';
+import { IcUser } from '@proton/icons/icons/IcUser';
+import { IcWrench } from '@proton/icons/icons/IcWrench';
+import type { IconSize } from '@proton/icons/types';
+import amex from '@proton/styles/assets/img/credit-card-icons/cc-american-express.svg';
+import masterCard from '@proton/styles/assets/img/credit-card-icons/cc-mastercard.svg';
+import visa from '@proton/styles/assets/img/credit-card-icons/cc-visa.svg';
+import clsx from '@proton/utils/clsx';
+
+import { isDisabledAliasItem } from '../../../lib/items/item.predicates';
+import { getFirstUrl } from '../../../lib/urls/utils/autofill';
+import { selectCanLoadDomainImages } from '../../../store/selectors/settings';
+import type { ItemMap, ItemRevision } from '../../../types/data/items';
+import { CardType } from '../../../types/protobuf/item-v1.static';
+import type { Maybe, MaybeNull } from '../../../types/utils';
+import { DomainIcon, ImageStatus } from './DomainIcon';
+import { IconBox, getIconSizePx } from './IconBox';
+
+export const itemTypeToIcon: ItemMap<IconComponent> = {
+    login: IcUser,
+    note: IcFileLines,
+    alias: IcAlias,
+    creditCard: IcCreditCard,
+    identity: IcCardIdentity,
+    sshKey: IcFilingCabinet,
+    wifi: IcShield2Bolt,
+    custom: IcWrench,
+};
+
+const presentItemIcon = (item: ItemRevision): IconComponent =>
+    isDisabledAliasItem(item) ? IcAliasSlash : itemTypeToIcon[item.data.type];
+
+type BaseItemIconProps = {
+    alt: string;
+    className?: string;
+    icon: IconComponent;
+    iconClassName?: string;
+    loadImage?: boolean;
+    normColor?: boolean;
+    customIcon?: ReactNode;
+    pill?: boolean;
+    size: IconSize;
+    url?: MaybeNull<string>;
+    renderIndicators?: (size: IconSize) => ReactNode;
+};
+
+export const ItemIcon: FC<BaseItemIconProps> = ({
+    alt,
+    className,
+    icon: Icon,
+    iconClassName,
+    loadImage = true,
+    normColor = true,
+    customIcon,
+    pill,
+    size,
+    url,
+    renderIndicators,
+}) => {
+    const [imageStatus, setImageStatus] = useState<ImageStatus>(ImageStatus.LOADING);
+    const handleStatusChange = useCallback((status: ImageStatus) => setImageStatus(status), []);
+    const ready = imageStatus === ImageStatus.READY;
+
+    return (
+        <IconBox
+            className={className}
+            mode={url && ready ? 'image' : 'icon'}
+            size={size}
+            pill={pill}
+            style={{
+                '--anime-delay': '0s',
+            }}
+        >
+            <span className="sr-only">{alt}</span>
+
+            {loadImage && (
+                <DomainIcon
+                    className={clsx('w-custom h-custom absolute inset-center', iconClassName)}
+                    onStatusChange={handleStatusChange}
+                    status={imageStatus}
+                    url={url ?? ''}
+                    style={{
+                        '--w-custom': `${getIconSizePx(size)}px`,
+                        '--h-custom': `${getIconSizePx(size)}px`,
+                    }}
+                />
+            )}
+
+            {customIcon ? (
+                <div
+                    className={clsx(
+                        'pass-item-icon--custom flex items-center w-custom h-custom absolute inset-center',
+                        iconClassName
+                    )}
+                    style={{
+                        '--w-custom': `${getIconSizePx(size)}px`,
+                        '--h-custom': `${getIconSizePx(size)}px`,
+                    }}
+                >
+                    {customIcon}
+                </div>
+            ) : (
+                <Icon
+                    className={clsx('absolute inset-center', iconClassName, ready && 'anime-fade-out')}
+                    color={normColor ? 'var(--interaction-norm)' : ''}
+                    size={size}
+                />
+            )}
+
+            {renderIndicators?.(size)}
+        </IconBox>
+    );
+};
+
+type ItemIconProps = {
+    className?: string;
+    iconClassName?: string;
+    item: ItemRevision;
+    pill?: boolean;
+    size: IconSize;
+    renderIndicators?: (size: IconSize) => ReactNode;
+};
+
+export const getCreditCardIcon = (cardType: CardType): Maybe<ReactNode> => {
+    switch (cardType) {
+        case CardType.AmericanExpress:
+            return <img src={amex} alt={cardType.toString()} />;
+        case CardType.Mastercard:
+            return <img src={masterCard} alt={cardType.toString()} />;
+        case CardType.Visa:
+            return <img src={visa} alt={cardType.toString()} />;
+    }
+};
+
+export const SafeItemIcon: FC<ItemIconProps> = ({ className, iconClassName, item, pill, size, renderIndicators }) => {
+    const { data } = item;
+    const loadDomainImages = useSelector(selectCanLoadDomainImages);
+    const domainURL = data.type === 'login' ? getFirstUrl(data.content.autofillUrls) : null;
+    const customIcon = data.type === 'creditCard' ? getCreditCardIcon(data.content.cardType) : undefined;
+
+    return (
+        <ItemIcon
+            alt={data.type}
+            className={className}
+            icon={presentItemIcon(item)}
+            iconClassName={iconClassName}
+            loadImage={loadDomainImages}
+            pill={pill}
+            renderIndicators={(size) => renderIndicators?.(size)}
+            size={size}
+            customIcon={customIcon}
+            url={domainURL}
+        />
+    );
+};
+
+type ItemIconIndicatorsProps = { size: IconSize; loading: boolean; error: boolean };
+
+export const ItemIconIndicators: FC<ItemIconIndicatorsProps> = ({ size, loading, error }) => {
+    if (error) {
+        return (
+            <IcExclamationCircleFilled className="absolute inset-center" color="var(--signal-warning)" size={size} />
+        );
+    }
+
+    if (loading) return <CircleLoader size="small" className="z-up color-primary absolute inset-center opacity-60" />;
+
+    return null;
+};

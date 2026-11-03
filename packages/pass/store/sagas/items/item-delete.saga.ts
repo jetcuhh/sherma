@@ -1,0 +1,52 @@
+import { call, put, select } from 'redux-saga/effects';
+
+import { hasAttachments, hasHadAttachments } from '../../../lib/items/item.predicates';
+import { deleteItemRevisions, deleteItems } from '../../../lib/items/item.requests';
+import { createTelemetryEvent } from '../../../lib/telemetry/utils';
+import type { ItemRevision } from '../../../types/data/items';
+import { TelemetryEventName, TelemetryItemType } from '../../../types/data/telemetry';
+import type { Maybe } from '../../../types/utils';
+import { or } from '../../../utils/fp/predicates';
+import { filesResolve } from '../../actions/creators/files';
+import { itemDelete, itemDeleteRevisions } from '../../actions/creators/item';
+import { withRevalidate } from '../../request/enhancers';
+import { createRequestSaga } from '../../request/sagas';
+import { selectItem } from '../../selectors/items';
+
+const removeItems = createRequestSaga({
+    actions: itemDelete,
+    call: function* (selectedItem, { getTelemetry }) {
+        const { shareId, itemId } = selectedItem;
+        const telemetry = getTelemetry();
+
+        const item: Maybe<ItemRevision> = yield select(selectItem(shareId, itemId));
+        if (!item) throw new Error('Invalid delete action');
+
+        yield call(deleteItems, [item]);
+
+        void telemetry?.push(
+            createTelemetryEvent(
+                TelemetryEventName.ItemDeletion,
+                {},
+                {
+                    type: TelemetryItemType[item.data.type],
+                }
+            )
+        );
+
+        return { ...selectedItem, hadFiles: or(hasAttachments, hasHadAttachments)(item) };
+    },
+});
+
+const removeRevisions = createRequestSaga({
+    actions: itemDeleteRevisions,
+    call: function* (dto) {
+        const { shareId, itemId } = dto;
+        const item: ItemRevision = yield deleteItemRevisions(dto);
+        yield put(withRevalidate(filesResolve.intent({ ...dto, revision: item.revision, folderId: item.folderId })));
+
+        return { shareId, itemId, item };
+    },
+});
+
+export default [removeItems, removeRevisions];

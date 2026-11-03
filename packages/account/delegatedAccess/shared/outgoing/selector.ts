@@ -1,0 +1,150 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import { getContactEmailKey } from '@proton/shared/lib/contacts/getContactEmailsMap';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { ContactEmail } from '@proton/shared/lib/interfaces/contacts/Contact';
+import { getLikelyHasKeysToReactivate } from '@proton/shared/lib/keys/getInactiveKeys';
+import { hasPaidPass } from '@proton/shared/lib/user/helpers';
+
+import { selectAddresses } from '../../../addresses';
+import { selectContactEmails } from '../../../contactEmails';
+import { selectContactEmailsMap } from '../../../contactEmails/selector';
+import { selectProtonDomains } from '../../../protonDomains';
+import { getLastModifiedDate } from '../../../recovery/lastModifiedTime';
+import { selectUser } from '../../../user';
+import { selectUserSettings } from '../../../userSettings';
+import { getIsOutgoingDelegatedAccessAvailable } from '../../available';
+import { maxOutgoingEmergencyContacts, maxOutgoingRecoveryContacts } from '../../constants';
+import { selectIsDelegatedAccessSupported, selectOutgoingDelegatedAccess } from '../../index';
+import { getEnrichedOutgoingDelegatedAccess } from './helper';
+import type { EnrichedOutgoingDelegatedAccess } from './interface';
+
+export interface EnrichedOutgoingDelegatedAccessReturnValue {
+    isAvailable: boolean;
+    totalOutgoingDelegatedAccess: number;
+    hasKeysToReactivate: boolean;
+    emergencyContacts: {
+        hasAccess: boolean;
+        hasUpsell: boolean;
+        items: EnrichedOutgoingDelegatedAccess[];
+        hasReachedLimit: boolean;
+        limit: number;
+        lastModifiedTime: Date | null;
+    };
+    recoveryContacts: {
+        hasAccess: boolean;
+        items: EnrichedOutgoingDelegatedAccess[];
+        hasReachedLimit: boolean;
+        limit: number;
+        lastModifiedTime: Date | null;
+    };
+    loading: boolean;
+}
+
+export const selectEnrichedOutgoingDelegatedAccess = createSelector(
+    [
+        selectUser,
+        selectOutgoingDelegatedAccess,
+        selectContactEmailsMap,
+        selectUserSettings,
+        selectIsDelegatedAccessSupported,
+    ],
+    (
+        { value: user },
+        delegatedAccess,
+        contactEmailsMap,
+        { value: userSettings },
+        isDelegatedAccessSupported
+    ): EnrichedOutgoingDelegatedAccessReturnValue => {
+        const items = delegatedAccess.value ?? [];
+        const ephemeral = delegatedAccess.ephemeral ?? {};
+
+        const hasEmergencyContactsAccess = !!user && (user.isPaid || hasPaidPass(user));
+        const hasEmergencyContactsUpsell = !!user && user.canPay && !hasEmergencyContactsAccess;
+
+        // Apps that don't wire up delegated access at all can't offer it to anyone, see
+        // `getIsDelegatedAccessSupportedInApp`.
+        const isAvailable = isDelegatedAccessSupported && getIsOutgoingDelegatedAccessAvailable(user);
+
+        const hasKeysToReactivate = Boolean(getLikelyHasKeysToReactivate(user));
+
+        const { emergencyContacts, recoveryContacts } = items.reduce<{
+            emergencyContacts: EnrichedOutgoingDelegatedAccess[];
+            recoveryContacts: EnrichedOutgoingDelegatedAccess[];
+        }>(
+            (acc, item) => {
+                const contactEmail = contactEmailsMap[getContactEmailKey(item.TargetEmail)]?.[0];
+                const value = getEnrichedOutgoingDelegatedAccess(item, contactEmail, ephemeral);
+                // Can be both emergency contact and recovery contact
+                if (value.parsedOutgoingDelegatedAccess.isEmergencyContact) {
+                    acc.emergencyContacts.push(value);
+                }
+                if (value.parsedOutgoingDelegatedAccess.isRecoveryContact) {
+                    acc.recoveryContacts.push(value);
+                }
+                return acc;
+            },
+            { emergencyContacts: [], recoveryContacts: [] }
+        );
+
+        const totalOutgoingDelegatedAccess = emergencyContacts.length + recoveryContacts.length;
+
+        return {
+            hasKeysToReactivate,
+            isAvailable,
+            totalOutgoingDelegatedAccess,
+            emergencyContacts: {
+                hasAccess: hasEmergencyContactsAccess,
+                hasUpsell: hasEmergencyContactsUpsell,
+                items: emergencyContacts,
+                hasReachedLimit: emergencyContacts.length === maxOutgoingEmergencyContacts,
+                limit: maxOutgoingEmergencyContacts,
+                lastModifiedTime: getLastModifiedDate(userSettings?.EmergencyContactsLastModifiedTime),
+            },
+            recoveryContacts: {
+                hasAccess: true,
+                items: recoveryContacts,
+                hasReachedLimit: recoveryContacts.length === maxOutgoingRecoveryContacts,
+                limit: maxOutgoingRecoveryContacts,
+                lastModifiedTime: getLastModifiedDate(userSettings?.RecoveryContactsLastModifiedTime),
+            },
+            loading: delegatedAccess.value === undefined,
+        };
+    }
+);
+
+export interface CreateOutgoingDelegatedAccessReturnValue {
+    addresses: Address[];
+    email: string;
+    domains: Set<string>;
+    emergencyContacts: Set<string>;
+    recoveryContacts: Set<string>;
+    contactEmails: ContactEmail[];
+}
+export const selectCreateOutgoingDelegatedAccessData = createSelector(
+    [selectUser, selectAddresses, selectEnrichedOutgoingDelegatedAccess, selectContactEmails, selectProtonDomains],
+    (
+        { value: user },
+        { value: addresses },
+        delegatedAccess,
+        { value: contactEmails },
+        { value: domains }
+    ): CreateOutgoingDelegatedAccessReturnValue => {
+        const domainsSet = new Set(domains ? [...domains.protonDomains, ...domains.premiumDomains] : []);
+        const emergencyContacts = new Set(
+            delegatedAccess.emergencyContacts.items.map((value) => value.outgoingDelegatedAccess.TargetEmail)
+        );
+        const recoveryContacts = new Set(
+            delegatedAccess.recoveryContacts.items.map((value) => value.outgoingDelegatedAccess.TargetEmail)
+        );
+
+        return {
+            email: user?.Email ?? '',
+            addresses: addresses ?? [],
+            domains: domainsSet,
+            recoveryContacts,
+            emergencyContacts,
+            contactEmails: contactEmails ?? [],
+        };
+    }
+);

@@ -1,0 +1,63 @@
+import type { AccessDTO, AccessKeys } from '../../lib/access/types';
+import type { InviteData } from '../../lib/invites/invite.requests';
+import type { MaybeNull } from '../utils';
+import type { FolderData } from './folders';
+import type { ItemRevision } from './items';
+import type { Share, ShareRole } from './shares';
+
+export type InviteUserDTO = { email: string; publicKey: string; role: ShareRole; hideSensitiveContent?: boolean };
+export type InviteNewUserDTO = Omit<InviteUserDTO, 'publicKey'>;
+export type InviteMemberDTO = InviteUserDTO | InviteNewUserDTO;
+
+export type InviteBatchCreateSuccess = AccessKeys & { count: number };
+export type NewUserInvitePromoteIntent = AccessDTO & { newUserInviteId: string };
+export type NewUserInvitePromoteSuccess = AccessKeys & InviteData;
+export type NewUserInviteRemoveIntent = AccessDTO & { newUserInviteId: string };
+export type InviteResendIntent = AccessDTO & { inviteId: string };
+export type InviteRemoveIntent = AccessDTO & { inviteId: string };
+
+export type InviteRejectIntent = { inviteToken: string };
+export type InviteAcceptIntent = { invitedAddressId: string; inviterEmail: string; inviteToken: string };
+export type InviteAcceptSuccess = { inviteToken: string; share: Share; items: ItemRevision[]; folders: FolderData[] };
+export type GroupInviteAcceptIntent = { inviterEmail: string; inviteToken: string };
+export type GroupInviteAcceptSuccess = { inviteToken: string };
+
+export type InviteRecommendationsIntent = {
+    pageSize: number;
+    shareId: string;
+    since: MaybeNull<string>;
+    startsWith: string;
+};
+
+export type InviteRecommendationsSuccess = {
+    startsWith: string;
+    emails: string[];
+    more: boolean;
+    next: MaybeNull<string>;
+    since: MaybeNull<string>;
+    /** organization response should be null for free users */
+    organization: MaybeNull<{
+        emails: string[];
+        name: string;
+    }>;
+};
+
+export type InviteRecommendationsSuggestedIntent = { shareId: string; startsWith: string };
+export type InviteRecommendationsSuggestedSuccess = {
+    startsWith: string;
+    suggested: { email: string; addressId: string; isGroup: boolean }[];
+};
+export type InviteRecommendationsOrganizationIntent = {
+    shareId: string;
+    since: MaybeNull<string>;
+    pageSize: number;
+    startsWith: string;
+};
+export type InviteRecommendationsOrganizationSuccess = {
+    startsWith: string;
+    name: MaybeNull<string>;
+    next: MaybeNull<string>;
+    more: boolean;
+    since: MaybeNull<string>;
+    emails: string[];
+};

@@ -1,0 +1,64 @@
+import { logger } from '@proton/pass/utils/logger';
+import { APPS } from '@proton/shared/lib/constants';
+
+import { contentScriptMessage, sendMessage, successMessage } from '../../../lib/message/send-message';
+import { WorkerMessageType } from '../../../types/messages';
+
+window.addEventListener('message', async (message) => {
+    try {
+        if (
+            message.origin === window.location.origin &&
+            message.data &&
+            message.data?.type !== undefined &&
+            message.data?.app === APPS.PROTONPASSBROWSEREXTENSION
+        ) {
+            switch (message.data.type) {
+                case WorkerMessageType.ACCOUNT_FORK:
+                    return await sendMessage.on(
+                        contentScriptMessage({
+                            type: WorkerMessageType.ACCOUNT_FORK,
+                            payload: message.data.payload,
+                        }),
+                        (response) =>
+                            window.postMessage({
+                                token: message.data?.token,
+                                ...response,
+                            })
+                    );
+
+                case WorkerMessageType.ACCOUNT_EXTENSION:
+                    return await sendMessage(
+                        contentScriptMessage({
+                            type: WorkerMessageType.ACCOUNT_EXTENSION,
+                        })
+                    );
+
+                case WorkerMessageType.ACCOUNT_ONBOARDING:
+                    return await sendMessage(
+                        contentScriptMessage({
+                            type: WorkerMessageType.ACCOUNT_ONBOARDING,
+                        })
+                    );
+
+                case WorkerMessageType.ACCOUNT_PROBE_2:
+                    return await sendMessage.on(
+                        contentScriptMessage({ type: WorkerMessageType.ACCOUNT_PROBE_2 }),
+                        (response) =>
+                            window.postMessage({
+                                token: message.data?.token,
+                                ...response,
+                            })
+                    );
+
+                case WorkerMessageType.ACCOUNT_PROBE:
+                    return window.postMessage(
+                        successMessage({
+                            token: message.data?.token,
+                        })
+                    );
+            }
+        }
+    } catch (e) {
+        logger.warn('[ContentScript::Fallback]', e);
+    }
+});

@@ -1,0 +1,42 @@
+import type { FC } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import Toggle from '@proton/components/components/toggle/Toggle';
+import { BRAND_NAME, PASS_SHORT_APP_NAME } from '@proton/shared/lib/constants';
+
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
+import { settingsEditIntent } from '../../../store/actions/creators/settings';
+import { selectBetaEnabled } from '../../../store/selectors/settings';
+import { PassFeature } from '../../../types/api/features';
+import { SettingsPanel } from '../SettingsPanel';
+
+const useToggleBeta = () => {
+    const dispatch = useDispatch();
+    const betaEnabled = useSelector(selectBetaEnabled);
+    const onToggle = () => dispatch(settingsEditIntent('behaviors', { beta: !betaEnabled }));
+    return { betaEnabled, onToggle };
+};
+
+export const Beta: FC = () => {
+    const featureFlagWebAlpha = useFeatureFlag(PassFeature.PassWebInternalAlpha);
+    const { betaEnabled, onToggle } = useToggleBeta();
+
+    if (!featureFlagWebAlpha) return null;
+
+    return (
+        <SettingsPanel title={c('Label').t`Beta Access`}>
+            <Toggle checked={betaEnabled} onChange={onToggle} className="max-h-full">
+                <span className="pl-2">
+                    {c('Info').t`Enable ${PASS_SHORT_APP_NAME} beta`}
+                    <span className="block color-weak text-sm">
+                        {c('Info')
+                            .t`Try new ${BRAND_NAME} features, updates and products before they are released to the public.`}
+                        {c('Info').t`This will reload the application.`}
+                    </span>
+                </span>
+            </Toggle>
+        </SettingsPanel>
+    );
+};

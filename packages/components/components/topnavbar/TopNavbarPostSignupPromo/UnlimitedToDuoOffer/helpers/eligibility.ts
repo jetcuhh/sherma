@@ -1,0 +1,43 @@
+import { CYCLE, PLANS } from '@proton/payments/core/constants';
+import type { FreeSubscription } from '@proton/payments/core/interface';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { APPS } from '@proton/shared/lib/constants';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+import type { ProtonConfig } from '@proton/shared/lib/interfaces/config';
+
+import {
+    checkAppIsValid,
+    checkCycleIsValid,
+    checkPlanIsValid,
+    checkTimeSubscribedIsValid,
+    checksAllPass,
+    hasNoScheduledSubscription,
+    hasSubscription,
+    isWebSubscription,
+    noPassLifetime,
+    userCanPay,
+    userNotDelinquent,
+} from '../../common/helpers/eligibilityChecks';
+import { MINIMUM_DAYS_SUBSCRIBED_TO_UNLIMITED } from './interface';
+
+interface EligibilityProps {
+    user: UserModel;
+    subscription?: Subscription | FreeSubscription;
+    protonConfig: ProtonConfig;
+    parentApp?: (typeof APPS)[keyof typeof APPS];
+}
+
+export const getIsEligible = ({ user, subscription, protonConfig, parentApp }: EligibilityProps) => {
+    return checksAllPass(
+        userCanPay(user),
+        userNotDelinquent(user),
+        noPassLifetime(user),
+        hasSubscription(subscription),
+        isWebSubscription(subscription),
+        hasNoScheduledSubscription(subscription),
+        checkAppIsValid([APPS.PROTONMAIL, APPS.PROTONDRIVE], protonConfig, parentApp),
+        checkCycleIsValid([CYCLE.YEARLY, CYCLE.TWO_YEARS], subscription),
+        checkPlanIsValid([PLANS.BUNDLE], subscription),
+        checkTimeSubscribedIsValid(MINIMUM_DAYS_SUBSCRIBED_TO_UNLIMITED, subscription)
+    );
+};

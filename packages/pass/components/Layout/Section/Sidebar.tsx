@@ -1,0 +1,22 @@
+import type { FC, PropsWithChildren } from 'react';
+
+import { getAppName } from '@proton/shared/lib/apps/helper';
+import { APPS } from '@proton/shared/lib/constants';
+
+import { TitlebarDragRegion } from './TitlebarDragRegion';
+
+import './Sidebar.scss';
+
+export const Sidebar: FC<PropsWithChildren> = ({ children }) => {
+    return (
+        <div id="pass-sidebar" className="sidebar hidden lg:flex flex-nowrap flex-column outline-none bg-strong">
+            <TitlebarDragRegion />
+            <h1 className="sr-only">{getAppName(APPS.PROTONPASS)}</h1>
+
+            <div className="mt-1 md:mt-0" aria-hidden="true" />
+            <div className="flex-1 flex-nowrap flex flex-column overflow-overlay pb-2 md:mt-2" tabIndex={-1}>
+                {children}
+            </div>
+        </div>
+    );
+};

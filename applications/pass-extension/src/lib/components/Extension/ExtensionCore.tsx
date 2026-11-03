@@ -1,0 +1,294 @@
+import type { PropsWithChildren } from 'react';
+import { type FC, useCallback, useRef } from 'react';
+
+import useInstance from '@proton/hooks/useInstance';
+import { AuthStoreProvider } from '@proton/pass/components/Core/AuthStoreProvider';
+import { ConnectivityProvider } from '@proton/pass/components/Core/ConnectivityProvider';
+import type { ExtensionClientState, PassCoreProviderProps } from '@proton/pass/components/Core/PassCoreProvider';
+import { PassCoreProvider } from '@proton/pass/components/Core/PassCoreProvider';
+import { createPassThemeManager } from '@proton/pass/components/Layout/Theme/ThemeService';
+import type { PassThemeOption } from '@proton/pass/components/Layout/Theme/types';
+import { UnlockProvider } from '@proton/pass/components/Lock/UnlockProvider';
+import type { PassConfig } from '@proton/pass/hooks/usePassConfig';
+import { getRequestIDHeaders } from '@proton/pass/lib/api/fetch-controller';
+import { imageResponsetoDataURL } from '@proton/pass/lib/api/images';
+import type { UnlockDTO } from '@proton/pass/lib/auth/lock/types';
+import { createAuthStore, exposeAuthStore } from '@proton/pass/lib/auth/store';
+import { textareaCopy } from '@proton/pass/lib/clipboard/utils';
+import { createPassCoreProxy } from '@proton/pass/lib/core/core.proxy';
+import { getExtensionLocalStorage } from '@proton/pass/lib/extension/storage';
+import { getWebStoreUrl } from '@proton/pass/lib/extension/utils/browser';
+import browser from '@proton/pass/lib/globals/browser';
+import { createI18nService } from '@proton/pass/lib/i18n/service';
+import { NativeMessageError } from '@proton/pass/lib/native-messaging/errors';
+import { createSettingsService } from '@proton/pass/lib/settings/service';
+import { NO_PAGE_CONTEXT_TELEMETRY_DIMENSIONS, TelemetryEventName } from '@proton/pass/types/data/telemetry';
+import { NativeMessageErrorType } from '@proton/pass/types/desktop/extension-unlock-with-desktop';
+import type { MaybeNull } from '@proton/pass/types/utils';
+import type { ClientEndpoint } from '@proton/pass/types/worker/runtime';
+import type { LocalStoreData } from '@proton/pass/types/worker/state';
+import { prop } from '@proton/pass/utils/fp/lens';
+import { createMemoryStore } from '@proton/pass/utils/store';
+import noop from '@proton/utils/noop';
+
+import config from '../../../app/config';
+import { sendTelemetryEvent } from '../../../app/content/utils/telemetry';
+import locales from '../../../app/locales';
+import { API_PROXY_URL } from '../../../app/worker/constants.runtime';
+import { WorkerMessageType } from '../../../types/messages';
+import { resolveMessageFactory, sendMessage } from '../../message/send-message';
+import { createConnectivityProxy } from '../../services/connectivity.proxy';
+import { createCoreServiceBridge } from '../../services/core.bridge';
+import { createMonitorBridge } from '../../services/monitor.bridge';
+import { CLIPBOARD_PERMISSIONS, requestPermissions } from '../../utils/permissions';
+import { createPopupController } from '../../utils/popup';
+import { reloadManager } from '../../utils/reload';
+import { sendSafariMessage } from '../../utils/safari';
+import { assertTabsAPIAvailable } from '../../utils/tabs';
+
+export type ExtensionCoreProps = {
+    endpoint: ClientEndpoint;
+    theme?: PassThemeOption;
+    wasm?: boolean;
+};
+
+const getPassCoreProviderProps = (
+    endpoint: ClientEndpoint,
+    config: PassConfig,
+    theme?: PassThemeOption
+): PassCoreProviderProps => {
+    const messageFactory = resolveMessageFactory(endpoint);
+
+    /** Read-only settings service */
+    const settings = createSettingsService({
+        clear: noop,
+        sync: noop,
+        read: async () => {
+            const data = await getExtensionLocalStorage<LocalStoreData>().getItem('settings');
+            if (!data) throw new Error('Missing settings');
+            return JSON.parse(data);
+        },
+    });
+
+    const onTelemetry = sendTelemetryEvent(messageFactory);
+    const popupController = endpoint === 'popup' ? createPopupController() : undefined;
+
+    const themeManager = createPassThemeManager({
+        getTheme: async () => theme ?? (await settings.resolve().catch(noop))?.theme,
+    });
+
+    return {
+        config,
+        connectivity: createConnectivityProxy(endpoint),
+        core: createPassCoreProxy(createCoreServiceBridge(messageFactory)),
+        endpoint,
+        i18n: createI18nService({
+            locales,
+            loadDateLocale: true,
+            getLocale: () => settings.resolve().then(prop('locale')).catch(noop),
+        }),
+        monitor: createMonitorBridge(messageFactory),
+        settings,
+        spotlight: {
+            acknowledge: (message) =>
+                sendMessage(messageFactory({ type: WorkerMessageType.SPOTLIGHT_ACK, payload: { message } }))
+                    .then((res) => res.type === 'success')
+                    .catch(() => false),
+            check: (message) =>
+                sendMessage(messageFactory({ type: WorkerMessageType.SPOTLIGHT_CHECK, payload: { message } }))
+                    .then((res) => res.type === 'success' && res.enabled)
+                    .catch(() => false),
+        },
+        /** A forced theme is applied once through `sync` (internal state update),
+         * external `setState` calls (eg: on worker settings updates) are ignored
+         * so the user's theme setting cannot override it */
+        theme: theme ? { ...themeManager, setState: noop } : themeManager,
+
+        generateOTP: (payload) =>
+            sendMessage.on(messageFactory({ type: WorkerMessageType.OTP_CODE_GENERATE, payload }), (response) =>
+                response.type === 'success' ? response : null
+            ),
+
+        getDomainImage: async (domain, signal) => {
+            const basePath = BUILD_TARGET === 'firefox' || BUILD_TARGET === 'safari' ? config.API_URL : API_PROXY_URL;
+            const url = `core/v4/images/logo?Domain=${domain}&Size=32&Mode=light&MaxScaleUpFactor=4`;
+            const requestUrl = `${basePath}/${url}`;
+
+            if (BUILD_TARGET === 'safari') {
+                return sendMessage.on(
+                    messageFactory({ type: WorkerMessageType.FETCH_DOMAINIMAGE, payload: { url: requestUrl } }),
+                    (res) => {
+                        if (res.type === 'error') throw new Error(res.error);
+                        return res.result;
+                    }
+                );
+            }
+
+            const [headers, requestId] = BUILD_TARGET === 'chrome' ? getRequestIDHeaders() : [];
+
+            if (BUILD_TARGET === 'chrome') {
+                signal.onabort = () =>
+                    sendMessage(
+                        messageFactory({
+                            type: WorkerMessageType.FETCH_ABORT,
+                            payload: { requestId: requestId! },
+                        })
+                    );
+            }
+
+            /* Forward the abort signal to the extension service worker. */
+            return fetch(requestUrl, { signal, headers }).then(imageResponsetoDataURL);
+        },
+
+        getLogs: () =>
+            sendMessage.on(messageFactory({ type: WorkerMessageType.LOG_REQUEST }), (res) =>
+                res.type === 'success' ? res.logs : []
+            ),
+
+        getRatingURL: getWebStoreUrl,
+
+        onLink: (url, options) => {
+            if (!assertTabsAPIAvailable(endpoint)) return window.open(url, '_BLANK');
+
+            return options?.replace
+                ? browser.tabs.update({ url }).catch(noop)
+                : browser.tabs
+                      .create({ url })
+                      /** Force focus on the opened tab because the popup, if expanded, remains over it */
+                      .then((tab) =>
+                          tab.windowId ? browser.windows.update(tab.windowId, { focused: true }) : undefined
+                      )
+                      /** Popup may not auto-close on firefox  */
+                      .then(() => endpoint === 'popup' && BUILD_TARGET === 'firefox' && window.close())
+                      .catch(noop);
+        },
+
+        onForceUpdate: () =>
+            sendMessage(messageFactory({ type: WorkerMessageType.WORKER_RELOAD }))
+                .then((res) => {
+                    if (res.type === 'error' && res.critical) void reloadManager.runtimeReload({ immediate: true });
+                })
+                .catch(noop),
+
+        openSettings: (page) => {
+            const settingsUrl = browser.runtime.getURL('/settings.html');
+            const url = `${settingsUrl}#/${page ?? ''}`;
+
+            onTelemetry(
+                TelemetryEventName.ExtensionUsed,
+                {},
+                // no page DOM available here: this fires from the settings page, not a content script
+                NO_PAGE_CONTEXT_TELEMETRY_DIMENSIONS
+            );
+
+            browser.tabs
+                .query({ url: settingsUrl })
+                .then(async (match) => {
+                    const tab = await (match.length > 0 && match[0].id
+                        ? browser.tabs.update(match[0].id, { active: true, url })
+                        : browser.tabs.create({ url }));
+
+                    if (popupController?.expanded) {
+                        /** Force focus on the opened tab because the popup, if expanded, remains over it */
+                        if (tab?.windowId) await browser.windows.update(tab.windowId, { focused: true });
+                    } else {
+                        window.close();
+                    }
+                })
+                .catch(noop);
+        },
+
+        onTelemetry,
+
+        onB2BEvent: (event) =>
+            sendMessage(messageFactory({ type: WorkerMessageType.B2B_EVENT, payload: { event } }))
+                .then((res) => res.type === 'success')
+                .catch(() => false),
+
+        writeToClipboard: async (content, clipboardTTL, promptForPermissions) => {
+            let granted = !promptForPermissions;
+
+            /** Clipboard write is done directly in the view and content script with clipboard async api.
+             * Chrome needs to wait because requesting permissions will close the popup and
+             * the ongoing async write will fail otherwise.
+             * Firefox in the contrary requires to not await unless requesting permissions is
+             * considered not being in sync with a user interraction. */
+            const writePromise = navigator.clipboard.writeText(content).catch(() => {
+                /* navigator.clipboard.writeText currently doesn't work on Safari content script and
+                 * will throw NotAllowedError. So we copy through the native app instead. */
+                if (BUILD_TARGET === 'safari') {
+                    void sendSafariMessage({
+                        writeToClipboard: {
+                            Content: content,
+                        },
+                    });
+                } else {
+                    /* Workaround for some websites where the autofill dropdown's
+                     * clipboard write is blocked by the host page's permissions policy */
+                    textareaCopy(content);
+                }
+            });
+            if (BUILD_TARGET === 'chrome') await writePromise;
+
+            /** Handle clipboard auto-clear if TTL is specified. Auto-clear must be delegated
+             * to the background worker since the view may be closed before the timeout expires.
+             * This requires clipboard permissions to be granted. */
+            if (clipboardTTL && clipboardTTL > 0) {
+                if (promptForPermissions) {
+                    granted = await requestPermissions(CLIPBOARD_PERMISSIONS);
+                }
+
+                if (granted) {
+                    await sendMessage(
+                        messageFactory({
+                            type: WorkerMessageType.CLIPBOARD_AUTOCLEAR,
+                            payload: { timeoutMs: clipboardTTL, content },
+                        })
+                    );
+                }
+            }
+
+            return granted;
+        },
+
+        popup: popupController,
+    };
+};
+
+export const ExtensionCore: FC<PropsWithChildren<ExtensionCoreProps>> = ({ children, endpoint, theme, wasm }) => {
+    const extensionClientState = useRef<MaybeNull<ExtensionClientState>>(null);
+    const coreProps = useInstance(() => getPassCoreProviderProps(endpoint, config, theme));
+    const authStore = useInstance(() => exposeAuthStore(createAuthStore(createMemoryStore())));
+    const message = resolveMessageFactory(endpoint);
+
+    const unlock = useCallback(
+        async (payload: UnlockDTO): Promise<void> =>
+            sendMessage(message({ type: WorkerMessageType.AUTH_UNLOCK, payload })).then((res) => {
+                /** Broker transport failure carries no structured error — surface a localized
+                 * message so the notification is never blank (the popup can outlive the flow). */
+                if (res.type === 'error') throw new NativeMessageError(NativeMessageErrorType.UNKNOWN);
+                if (!res.ok) {
+                    /** Desktop unlock carries a typed `NativeMessageErrorType`: reconstruct the
+                     * error here so it is localized at this edge, in the popup's locale. */
+                    if (res.errorType) throw new NativeMessageError(res.errorType);
+                    throw new Error(res.error ?? '');
+                }
+            }),
+        []
+    );
+
+    return (
+        <PassCoreProvider
+            {...coreProps}
+            getExtensionClientState={() => extensionClientState.current}
+            setExtensionClientState={(value) => (extensionClientState.current = value)}
+            wasm={wasm}
+        >
+            <ConnectivityProvider service={coreProps.connectivity}>
+                <AuthStoreProvider store={authStore}>
+                    <UnlockProvider unlock={unlock}>{children}</UnlockProvider>
+                </AuthStoreProvider>
+            </ConnectivityProvider>
+        </PassCoreProvider>
+    );
+};

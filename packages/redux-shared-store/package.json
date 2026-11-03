@@ -1,0 +1,50 @@
+{
+    "name": "@proton/redux-shared-store",
+    "description": "Sharing dispatch and selector context",
+    "exports": {
+        "./sharedListeners": "./sharedListeners.ts",
+        "./sharedReducers": "./sharedReducers.ts",
+        "./sharedProvider": "./sharedProvider.tsx",
+        "./sharedSerializable": "./sharedSerializable.ts",
+        "./sharedStore": "./sharedStore.ts",
+        "./persist": "./persist.ts",
+        "./listenerInterface": "./listenerInterface.ts",
+        "./eventLoop/calendarEventLoopV6": "./eventLoop/calendarEventLoopV6.ts",
+        "./eventLoop/contactEventLoopV6": "./eventLoop/contactEventLoopV6.ts",
+        "./eventLoop/coreEventLoopV6": "./eventLoop/coreEventLoopV6.ts",
+        "./eventLoop/mailEventLoopV6": "./eventLoop/mailEventLoopV6.ts",
+        "./test": "./test.ts",
+        "./settingsHeartbeat/mailSettingsHeartbeatListener": "./settingsHeartbeat/mailSettingsHeartbeatListener.ts",
+        "./settingsHeartbeat/calendarSettingsHeartbeatListener": "./settingsHeartbeat/calendarSettingsHeartbeatListener.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet"
+    },
+    "dependencies": {
+        "@proton/account": "workspace:^",
+        "@proton/calendar": "workspace:^",
+        "@proton/features": "workspace:^",
+        "@proton/mail": "workspace:^",
+        "@proton/react-redux-store": "workspace:^",
+        "@proton/redux-shared-store-types": "workspace:^",
+        "@proton/redux-utilities": "workspace:^",
+        "@proton/shared": "workspace:^",
+        "@proton/utils": "workspace:^",
+        "@reduxjs/toolkit": "catalog:",
+        "date-fns": "^2.30.0",
+        "react": "catalog:",
+        "react-redux": "catalog:",
+        "redux": "catalog:"
+    },
+    "devDependencies": {
+        "@proton/oxlint-config": "workspace:^",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "typescript": "catalog:"
+    }
+}

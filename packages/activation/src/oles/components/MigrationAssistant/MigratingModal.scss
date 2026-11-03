@@ -1,0 +1,9 @@
+.oles-migrating-modal {
+	--background-with-alpha: color-mix(in srgb, var(--background-norm) 90%, transparent);
+
+	background: radial-gradient(
+		ellipse farthest-side at center,
+		var(--background-norm) 0%,
+		var(--background-with-alpha) 100%
+	);
+}

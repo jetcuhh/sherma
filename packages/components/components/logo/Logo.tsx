@@ -1,0 +1,99 @@
+import type { ReactNode } from 'react';
+
+import { APPS, type APP_NAMES } from '@proton/shared/lib/constants';
+
+import AccountLogo from './AccountLogo';
+import AuthenticatorLogo from './AuthenticatorLogo';
+import CalendarLogo from './CalendarLogo';
+import DocsLogo from './DocsLogo';
+import DriveLogo from './DriveLogo';
+import type { LogoProps as LogoBaseProps } from './LogoBase';
+import LumoLogo from './LumoLogo';
+import MailLogo from './MailLogo';
+import MeetLogo from './MeetLogo';
+import PassLogo from './PassLogo';
+import SheetsLogo from './SheetsLogo';
+import SpacesLogo from './SpacesLogo';
+import VpnLogo from './VpnLogo';
+import WalletLogo from './WalletLogo';
+
+const {
+    PROTONACCOUNT,
+    PROTONCALENDAR,
+    PROTONDRIVE,
+    PROTONMAIL,
+    PROTONVPN_SETTINGS,
+    PROTONPASS,
+    PROTONDOCS,
+    PROTONSHEETS,
+    PROTONWALLET,
+    PROTONLUMO,
+    PROTONMEET,
+    PROTONAUTHENTICATOR,
+    PROTONSPACES,
+    PROTONCONSOLE,
+} = APPS;
+
+export interface LogoProps extends LogoBaseProps {
+    appName: APP_NAMES;
+    fallback?: ReactNode;
+}
+
+const Logo = ({ appName, fallback = null, ...rest }: LogoProps) => {
+    if (appName === PROTONACCOUNT) {
+        return <AccountLogo {...rest} />;
+    }
+
+    // TODO: Remove PROTONCONSOLE once we have a proper logo for it
+    if (appName === PROTONMAIL || appName === PROTONCONSOLE) {
+        return <MailLogo {...rest} />;
+    }
+
+    if (appName === PROTONCALENDAR) {
+        return <CalendarLogo {...rest} />;
+    }
+
+    if (appName === PROTONVPN_SETTINGS) {
+        return <VpnLogo {...rest} />;
+    }
+
+    if (appName === PROTONDRIVE) {
+        return <DriveLogo {...rest} />;
+    }
+
+    if (appName === PROTONPASS) {
+        return <PassLogo {...rest} />;
+    }
+
+    if (appName === PROTONDOCS) {
+        return <DocsLogo {...rest} />;
+    }
+
+    if (appName === PROTONSHEETS) {
+        return <SheetsLogo {...rest} />;
+    }
+
+    if (appName === PROTONWALLET) {
+        return <WalletLogo {...rest} />;
+    }
+
+    if (appName === PROTONLUMO) {
+        return <LumoLogo {...rest} />;
+    }
+
+    if (appName === PROTONMEET) {
+        return <MeetLogo {...rest} />;
+    }
+
+    if (appName === PROTONAUTHENTICATOR) {
+        return <AuthenticatorLogo {...rest} />;
+    }
+
+    if (appName === PROTONSPACES) {
+        return <SpacesLogo {...rest} />;
+    }
+
+    return fallback;
+};
+
+export default Logo;

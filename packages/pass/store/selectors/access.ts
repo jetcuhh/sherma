@@ -1,0 +1,52 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import { toShareAccessKey } from '../../lib/access/access.utils';
+import type { AccessItem, AccessKeys } from '../../lib/access/types';
+import { prop } from '../../utils/fp/lens';
+import type { AccessState } from '../reducers';
+import type { State } from '../types';
+import { SelectorError } from './errors';
+
+const DEFAULT_ACCESS: AccessItem = {
+    members: [],
+    invites: [],
+    newUserInvites: [],
+};
+
+const selectAccessState = (state: State) => state.access;
+const getAccess = (access: AccessState, key: string) => access[key] || DEFAULT_ACCESS;
+
+export const selectAccess =
+    (shareId: string, itemId?: string) =>
+    ({ access }: State) =>
+        getAccess(access, toShareAccessKey({ shareId, itemId }));
+
+export const selectAccessOrThrow = (shareId: string, itemId?: string) =>
+    createSelector([selectAccess(shareId, itemId)], (access) => {
+        if (!access) throw new SelectorError(`Access item for key ${toShareAccessKey({ shareId, itemId })} not found`);
+        return access;
+    });
+
+export const selectAccessMembers = (shareId: string, itemId?: string) =>
+    createSelector(
+        selectAccess(shareId, itemId),
+        (access): Set<string> =>
+            new Set(
+                access.members
+                    .map(prop('email'))
+                    .concat(access.invites.map(prop('invitedEmail')))
+                    .concat(access.newUserInvites.map(prop('invitedEmail')))
+            )
+    );
+
+export const selectAccessForMany = (dtos: AccessKeys[]) =>
+    createSelector(selectAccessState, (access) =>
+        Object.fromEntries(
+            new Map(
+                dtos.map((dto) => {
+                    const stateKey = toShareAccessKey(dto);
+                    return [stateKey, getAccess(access, stateKey)];
+                })
+            )
+        )
+    );

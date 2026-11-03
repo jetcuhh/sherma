@@ -1,0 +1,62 @@
+import type { FC } from 'react';
+import { useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { IcBolt } from '@proton/icons/icons/IcBolt';
+import { IcMagicWand } from '@proton/icons/icons/IcMagicWand';
+import { IcPencil } from '@proton/icons/icons/IcPencil';
+
+import { isPaidPlan } from '../../../lib/user/user.predicates';
+import { selectPassPlan } from '../../../store/selectors/user';
+import type { MaybeNull } from '../../../types/utils';
+import { epochToRelativeDaysAgo } from '../../../utils/time/format';
+import { CardContent } from '../../Layout/Card/CardContent';
+
+type Props = {
+    createTime: number;
+    lastUseTime?: MaybeNull<number>;
+    modifyTime: number;
+    handleHistoryClick: () => void;
+};
+
+export const ItemHistoryStats: FC<Props> = ({ createTime, lastUseTime, modifyTime, handleHistoryClick }) => {
+    const passPlan = useSelector(selectPassPlan);
+
+    return (
+        <div className="flex flex-column border border-weak rounded-xl px-4 py-3 gap-3">
+            {lastUseTime !== undefined && (
+                <CardContent
+                    icon={<IcMagicWand size={4} />}
+                    ellipsis
+                    title={c('Title').t`Last autofill`}
+                    subtitle={
+                        // translator: when this login was last used
+                        lastUseTime ? epochToRelativeDaysAgo(lastUseTime) : c('Info').t`Never`
+                    }
+                />
+            )}
+
+            <CardContent
+                icon={<IcPencil size={4} />}
+                title={c('Title').t`Last modified`}
+                subtitle={epochToRelativeDaysAgo(modifyTime)}
+                ellipsis
+            />
+
+            <CardContent
+                icon={<IcBolt size={4} />}
+                title={c('Title').t`Created`}
+                subtitle={epochToRelativeDaysAgo(createTime)}
+                ellipsis
+            />
+
+            {isPaidPlan(passPlan) && (
+                <Button onClick={handleHistoryClick} className="mt-1" color="weak" shape="solid" fullWidth pill>
+                    {c('Action').t`View item history`}
+                </Button>
+            )}
+        </div>
+    );
+};

@@ -1,0 +1,17 @@
+import { put, takeLeading } from 'redux-saga/effects';
+
+import { unlock } from '../../actions/creators/auth';
+import type { RootSagaOptions } from '../../types';
+
+function* unlockWorker({ getAuthService }: RootSagaOptions, { payload, meta: { request } }: ReturnType<typeof unlock.intent>) {
+    try {
+        yield getAuthService().unlock(payload);
+        yield put(unlock.success(request.id, payload.mode));
+    } catch (err: any) {
+        yield put(unlock.failure(request.id, err, payload.mode));
+    }
+}
+
+export default function* watcher(options: RootSagaOptions) {
+    yield takeLeading(unlock.intent.match, unlockWorker, options);
+}

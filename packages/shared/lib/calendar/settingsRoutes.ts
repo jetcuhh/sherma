@@ -1,0 +1,50 @@
+import { getSlugFromApp } from '../apps/slugHelper';
+import { APPS } from '../constants';
+import { validateBase64string } from '../helpers/encoding';
+import { CALENDAR_SETTINGS_ROUTE } from './constants';
+
+interface GetPathOptions {
+    fullPath?: boolean;
+    sectionId?: string;
+}
+
+const getPathWithOptions = (relativePath: string, options?: GetPathOptions) => {
+    const { fullPath, sectionId } = options || {};
+
+    let path = `${relativePath}`;
+
+    if (fullPath) {
+        path = `/${getSlugFromApp(APPS.PROTONCALENDAR)}${path}`;
+    }
+
+    if (sectionId) {
+        path = `${path}#${sectionId}`;
+    }
+
+    return path;
+};
+
+export const getCalendarsSettingsPath = (options?: GetPathOptions) => {
+    return getPathWithOptions(CALENDAR_SETTINGS_ROUTE.CALENDARS, options);
+};
+
+export const getInteroperabilityOperationsPath = (options?: GetPathOptions) => {
+    return getPathWithOptions(CALENDAR_SETTINGS_ROUTE.INTEROPS, options);
+};
+
+export const getCalendarSubpagePath = (calendarID: string, options?: GetPathOptions) => {
+    return getPathWithOptions(`${getCalendarsSettingsPath()}/${calendarID}`, options);
+};
+
+export const getIsCalendarSubpage = (pathname: string, calendarsSectionTo: string) => {
+    // The calendar subpage is accessed via /calendar/calendars/calendarId
+    const calendarsSectionPath = `/${getSlugFromApp(APPS.PROTONCALENDAR)}${calendarsSectionTo}`;
+
+    const regexString = `^${calendarsSectionPath}/(.*)`.replaceAll('/', '\\/');
+    const match = (new RegExp(regexString).exec(pathname) || [])[1];
+    if (!match) {
+        return false;
+    }
+
+    return validateBase64string(match, true);
+};

@@ -1,0 +1,77 @@
+import type { ComponentType, ReactNode } from 'react';
+
+import type { ThemeColor } from '@proton/colors/types';
+import type { IconSize } from '@proton/icons/types';
+
+/**
+ * Route configs reference their icon by component rather than by name, so that the icon is imported
+ * where the route is declared and every consumer (sidebar, settings search) renders the same one.
+ */
+export type IconComponent = ComponentType<{ className?: string; size?: IconSize }>;
+
+export enum SettingsLayoutVariant {
+    Default = 'default',
+    Card = 'card',
+    Mobile = 'mobile',
+}
+
+export enum SettingsCardMaxWidth {
+    Wide = '93.75rem',
+    Medium = '65.5rem',
+    Narrow = '46.25rem',
+}
+
+export interface SubSectionConfig {
+    text?: string;
+    invisibleTitle?: boolean;
+    id: string;
+    hide?: boolean;
+    available?: boolean;
+    beta?: boolean;
+    variant?: SettingsLayoutVariant;
+    /** Translated terms a user might search for to land on this subsection. */
+    keywords?: string[];
+}
+
+export interface SettingsAreaConfig {
+    text: string;
+    title?: string;
+    noTitle?: boolean;
+    description?: ReactNode;
+    subsections?: SubSectionConfig[];
+}
+
+export interface SubrouteConfig {
+    id: string;
+    text: string;
+    to: string;
+    icon?: IconComponent;
+    available?: boolean;
+    variant?: SettingsLayoutVariant;
+    /** Translated terms a user might search for to land on this subroute. */
+    keywords?: string[];
+}
+
+export interface SubrouteGroup {
+    id: string;
+    title: string;
+    description?: string;
+    subroutes: Record<string, SubrouteConfig>;
+}
+
+export interface SectionConfig extends SettingsAreaConfig {
+    id: string;
+    to: string;
+    icon: IconComponent;
+    available?: boolean;
+    notification?: ThemeColor;
+    upgradeRequired?: boolean;
+    subroutes?: { [key: string]: SubrouteConfig };
+    subrouteGroups?: Record<string, SubrouteGroup>;
+}
+
+export interface SidebarConfig {
+    readonly available?: boolean;
+    readonly header: string;
+    readonly routes: { [key: string]: SectionConfig };
+}

@@ -1,0 +1,18 @@
+import { createRoot } from 'react-dom/client';
+
+import { ExtensionRoot } from '../../../../../../lib/components/Extension/ExtensionRoot';
+import { IFrameApp } from '../../../../../../lib/components/Inline/IFrameApp';
+import { Dropdown } from './Dropdown';
+
+if (BUILD_TARGET === 'safari') document.body.classList.add('is-safari');
+
+const container = document.getElementById('root');
+const root = createRoot(container!);
+
+root.render(
+    <ExtensionRoot endpoint="dropdown">
+        <IFrameApp>
+            <Dropdown />
+        </IFrameApp>
+    </ExtensionRoot>
+);

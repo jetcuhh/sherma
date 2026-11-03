@@ -1,0 +1,15 @@
+{
+    "name": "@proton/react-redux-store",
+    "description": "Shared react redux store context",
+    "exports": {
+        "./ProtonStoreContext": "./ProtonStoreContext.ts"
+    },
+    "dependencies": {
+        "react": "catalog:",
+        "react-redux": "catalog:"
+    },
+    "devDependencies": {
+        "@proton/eslint-config-proton": "workspace:^",
+        "@types/react": "catalog:"
+    }
+}

@@ -1,0 +1,68 @@
+import type { KeyboardEvent } from 'react';
+import { useState } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import useLoading from '@proton/hooks/useLoading';
+import { emailValidator, requiredValidator } from '@proton/shared/lib/helpers/formValidators';
+import noop from '@proton/utils/noop';
+
+import { InputField as InputFieldTwo } from '../../../components/v2/field/InputField';
+import useFormErrors from '../../../components/v2/useFormErrors';
+
+interface Props {
+    onSubmit: (email: string) => Promise<void>;
+    defaultEmail?: string;
+}
+
+const EmailMethodForm = ({ onSubmit, defaultEmail = '' }: Props) => {
+    const [email, setEmail] = useState(defaultEmail);
+    const [loading, withLoading] = useLoading();
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    const handleSubmit = async () => {
+        if (loading || !onFormSubmit()) {
+            return;
+        }
+        await onSubmit(email);
+    };
+
+    return (
+        <>
+            <InputFieldTwo
+                id="email"
+                bigger
+                label={c('Label').t`Email address`}
+                error={validator([requiredValidator(email), emailValidator(email)])}
+                disableChange={loading}
+                autoFocus
+                type="email"
+                value={email}
+                onValue={(value: string) => {
+                    setEmail(value);
+                }}
+                onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        withLoading(handleSubmit()).catch(noop);
+                    }
+                }}
+            />
+            <Button
+                size="large"
+                color="norm"
+                type="button"
+                fullWidth
+                loading={loading}
+                onClick={() => withLoading(handleSubmit()).catch(noop)}
+                className="mt-6"
+            >
+                {c('Action').t`Get verification code`}
+            </Button>
+        </>
+    );
+};
+
+export default EmailMethodForm;

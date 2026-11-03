@@ -1,0 +1,12 @@
+import { combineReducers } from '@reduxjs/toolkit';
+
+import { sharedReducers } from '@proton/redux-shared-store/sharedReducers';
+
+import { meetReducers } from './slices';
+
+export const rootReducer = combineReducers({
+    ...sharedReducers,
+    ...meetReducers,
+});
+
+export type MeetState = ReturnType<typeof rootReducer>;

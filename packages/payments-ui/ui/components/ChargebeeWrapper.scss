@@ -1,0 +1,13 @@
+@use '~@proton/styles/scss/lib/config' as *;
+@use '~@proton/styles/scss/lib/rem' as *;
+
+.centered-loader {
+	inset-inline-start: 50%;
+	inset-block-start: 50%;
+	transform: translateX(-50%) translateY(-50%);
+}
+
+.error-container {
+	color: var(--signal-danger);
+	min-block-size: rem(20);
+}

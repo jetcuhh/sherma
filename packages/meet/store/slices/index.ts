@@ -1,0 +1,49 @@
+import { backgroundReducer } from './backgroundSlice';
+import { chatAndReactionsReducer } from './chatAndReactionsSlice';
+import { connectionReducer } from './connectionSlice';
+import { currentMeetingReducer } from './currentMeeting';
+import { customBackgroundsReducer } from './customBackgroundsSlice';
+import { devToolsReducer } from './devToolsSlice';
+import { deviceManagementReducer } from './deviceManagementSlice';
+import { layoutReducer } from './layoutSlice';
+import { meetAppStateReducer } from './meetAppStateSlice';
+import { meetingInfoModelReducer } from './meetingInfoModel';
+import { meetingSnackbarsReducer } from './meetingSnackbarsSlice';
+import { meetingsReducer } from './meetings';
+import { agentParticipantsReducer } from './participants/agentParticipantsSlice';
+import { participantsReducer } from './participants/participantsSlice';
+import { sortedParticipantsReducer } from './participants/sortedParticipantsSlice';
+import { recordingStatusReducer } from './recordingStatusSlice';
+import { recordingsReducer } from './recordingsSlice';
+import { screenShareStatusReducer } from './screenShareStatusSlice';
+import { settingsReducer } from './settings';
+import { uiStateReducer } from './uiStateSlice';
+import { userSettingsReducer } from './userSettings';
+import { meetUserReducer } from './userSlice';
+import { waitingRoomReducer } from './waitingRoomSlice';
+
+export const meetReducers = {
+    ...backgroundReducer,
+    ...chatAndReactionsReducer,
+    ...connectionReducer,
+    ...devToolsReducer,
+    ...deviceManagementReducer,
+    ...layoutReducer,
+    ...meetAppStateReducer,
+    ...currentMeetingReducer,
+    ...customBackgroundsReducer,
+    ...meetingInfoModelReducer,
+    ...meetingSnackbarsReducer,
+    ...meetingsReducer,
+    ...participantsReducer,
+    ...agentParticipantsReducer,
+    ...sortedParticipantsReducer,
+    ...userSettingsReducer,
+    ...recordingsReducer,
+    ...recordingStatusReducer,
+    ...screenShareStatusReducer,
+    ...settingsReducer,
+    ...uiStateReducer,
+    ...meetUserReducer,
+    ...waitingRoomReducer,
+};

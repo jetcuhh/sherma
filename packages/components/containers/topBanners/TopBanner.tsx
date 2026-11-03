@@ -1,0 +1,59 @@
+import type { ReactNode } from 'react';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { IcCross } from '@proton/icons/icons/IcCross';
+import { isElectronOnMac } from '@proton/shared/lib/helpers/desktop';
+import clsx from '@proton/utils/clsx';
+
+interface Props {
+    children: ReactNode;
+    className?: string;
+    innerClassName?: string;
+    innerPadding?: string;
+    onClose?: () => void;
+    'data-testid'?: string;
+    /**
+     * Exposes the banner as an alert (auto-announced live region). Defaults to `true`. Set to
+     * `false` when the event is already announced elsewhere, to avoid a double announcement.
+     */
+    announce?: boolean;
+}
+
+const TopBanner = ({
+    children,
+    className,
+    innerClassName,
+    innerPadding = 'p-2',
+    onClose,
+    announce = true,
+    ...rest
+}: Props) => {
+    return (
+        <div
+            role={announce ? 'alert' : undefined}
+            className={clsx([
+                'flex shrink-0 flex-nowrap text-center relative text-bold no-print',
+                className,
+                isElectronOnMac && 'py-2 top-bar',
+            ])}
+            {...rest}
+        >
+            <div className={clsx('flex-1', innerPadding, innerClassName)}>{children}</div>
+            {onClose ? (
+                <Button
+                    icon
+                    shape="ghost"
+                    className="shrink-0 rounded-none"
+                    onClick={onClose}
+                    title={c('Action').t`Close this banner`}
+                >
+                    <IcCross alt={c('Action').t`Close this banner`} />
+                </Button>
+            ) : null}
+        </div>
+    );
+};
+
+export default TopBanner;

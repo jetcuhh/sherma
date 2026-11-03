@@ -1,0 +1,122 @@
+import type { ReactNode } from 'react';
+import { type ComponentProps, type FC, useEffect, useMemo, useState } from 'react';
+import type { RouteChildrenProps } from 'react-router-dom';
+
+import { c } from 'ttag';
+
+import { Tabs } from '@proton/components/components/tabs/Tabs';
+import { IcArrowWithinSquare } from '@proton/icons/icons/IcArrowWithinSquare';
+import { PASS_APP_NAME } from '@proton/shared/lib/constants';
+
+import { AccountPath } from '../../../constants';
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
+import { useNavigateToAccount } from '../../../hooks/useNavigateToAccount';
+import { PassFeature } from '../../../types/api/features';
+import { OrganizationAliasCreateMode } from '../../../types/api/pass';
+import type { Unpack } from '../../../types/utils';
+import { usePassCore } from '../../Core/PassCoreProvider';
+import { useNavigate } from '../../Navigation/NavigationActions';
+import { getLocalPath } from '../../Navigation/routing';
+import { useOrganization } from '../../Organization/OrganizationProvider';
+import { Import } from '../Import';
+import { AccessTokens } from './Tabs/AccessTokens';
+import { Aliases } from './Tabs/Aliases';
+import { General } from './Tabs/General';
+import { Security } from './Tabs/Security';
+import { Support } from './Tabs/Support';
+
+import './Settings.scss';
+
+type SettingTab = Unpack<Exclude<ComponentProps<typeof Tabs>['tabs'], undefined>> & { hash: string };
+
+const getSettingsTabs = (
+    exportTab: ReactNode,
+    orgEnabled: boolean = false,
+    aliasCreationDisabled: boolean = false,
+    accessTokensEnabled: boolean = false
+): SettingTab[] => [
+    { hash: 'general', title: c('Label').t`General`, content: <General /> },
+    ...(!aliasCreationDisabled ? [{ hash: 'aliases', title: c('Label').t`Aliases`, content: <Aliases /> }] : []),
+    { hash: 'security', title: c('Label').t`Security`, content: <Security /> },
+    ...(accessTokensEnabled
+        ? [{ hash: 'access-tokens', title: c('Label').t`Access tokens`, content: <AccessTokens /> }]
+        : []),
+    { hash: 'import', title: c('Label').t`Import`, content: <Import /> },
+    { hash: 'export', title: c('Label').t`Export`, content: exportTab },
+    { hash: 'account', title: c('Label').t`Account`, icon: <IcArrowWithinSquare />, content: <></> },
+    ...(orgEnabled
+        ? [
+              {
+                  hash: 'organization',
+                  title: c('Label').t`Organization`,
+                  icon: <IcArrowWithinSquare />,
+                  content: <></>,
+              },
+          ]
+        : []),
+    { hash: 'support', title: c('Label').t`Support`, content: <Support /> },
+];
+
+const pathnameToIndex = (tabs: SettingTab[], hash: string) => {
+    const idx = tabs.findIndex((tab) => tab.hash === hash);
+    return idx !== -1 ? idx : 0;
+};
+
+type Props = RouteChildrenProps & {
+    exportTab: ReactNode;
+};
+
+const SettingsTabs: FC<Props> = ({ exportTab, ...props }) => {
+    const navigate = useNavigate();
+    const navigateToAccount = useNavigateToAccount(AccountPath.DASHBOARD);
+    const navigateToOrganization = useNavigateToAccount(AccountPath.POLICIES);
+    const pathname = props.location.hash?.substring(1, props.location.hash.length);
+
+    const organization = useOrganization();
+    const orgAliasCreationDisabled = organization?.settings.AliasCreateMode === OrganizationAliasCreateMode.NOBODY;
+    const accessTokensEnabled = useFeatureFlag(PassFeature.PassAccessTokens);
+
+    const tabs = useMemo(
+        () => getSettingsTabs(exportTab, organization?.settings.enabled, orgAliasCreationDisabled, accessTokensEnabled),
+        [organization, accessTokensEnabled]
+    );
+    const [activeTab, setActiveTab] = useState<number>(pathnameToIndex(tabs, pathname));
+
+    const handleOnChange = (nextTab: number) => {
+        if (tabs[nextTab].hash === 'account') navigateToAccount();
+        else if (tabs[nextTab].hash === 'organization') navigateToOrganization();
+        else navigate(getLocalPath('settings'), { hash: tabs[nextTab].hash });
+    };
+
+    useEffect(() => setActiveTab(pathnameToIndex(tabs, pathname)), [pathname]);
+
+    return (
+        <Tabs
+            className="shrink-0 max-w-custom"
+            contentClassName="p-0"
+            navContainerClassName="pass-settings--tabs mb-2 pt-4 sticky top-0 z-up"
+            onChange={handleOnChange}
+            tabs={tabs}
+            value={activeTab}
+        />
+    );
+};
+
+export const Settings: FC<Props> = (props) => {
+    const { config } = usePassCore();
+    return (
+        <div
+            className="flex flex-column gap-2 flex-nowrap justify-space-between w-full h-full px-4 overflow-auto"
+            style={{ '--max-w-custom': '50em' }}
+        >
+            <SettingsTabs {...props} />
+
+            <div className="justify-end shrink-0 pb-3">
+                <hr className="mb-2" />
+                <span className="text-xs color-weak">
+                    {PASS_APP_NAME} v{config.APP_VERSION}
+                </span>
+            </div>
+        </div>
+    );
+};

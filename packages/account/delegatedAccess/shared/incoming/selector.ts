@@ -1,0 +1,43 @@
+import { createSelector } from '@reduxjs/toolkit';
+
+import { getContactEmailKey } from '@proton/shared/lib/contacts/getContactEmailsMap';
+
+import { selectContactEmailsMap } from '../../../contactEmails/selector';
+import { selectIncomingDelegatedAccess } from '../../index';
+import { getEnrichedIncomingDelegatedAccess } from './helper';
+import type { EnrichedIncomingDelegatedAccess } from './interface';
+
+export interface EnrichedIncomingDelegatedAccessReturnValue {
+    items: {
+        emergencyContacts: EnrichedIncomingDelegatedAccess[];
+        recoveryContacts: EnrichedIncomingDelegatedAccess[];
+    };
+    loading: boolean;
+}
+
+export const selectEnrichedIncomingDelegatedAccess = createSelector(
+    [selectIncomingDelegatedAccess, selectContactEmailsMap],
+    (delegatedAccess, contactEmailsMap): EnrichedIncomingDelegatedAccessReturnValue => {
+        const items = delegatedAccess.value ?? [];
+        const ephemeral = delegatedAccess.ephemeral ?? {};
+
+        return {
+            items: items.reduce<EnrichedIncomingDelegatedAccessReturnValue['items']>(
+                (acc, incomingDelegatedAccess) => {
+                    const contactEmail = contactEmailsMap[getContactEmailKey(incomingDelegatedAccess.SourceEmail)]?.[0];
+                    const value = getEnrichedIncomingDelegatedAccess(incomingDelegatedAccess, contactEmail, ephemeral);
+                    // Can be both emergency contact and recovery contact
+                    if (value.parsedIncomingDelegatedAccess.isEmergencyContact) {
+                        acc.emergencyContacts.push(value);
+                    }
+                    if (value.parsedIncomingDelegatedAccess.isRecoveryContact) {
+                        acc.recoveryContacts.push(value);
+                    }
+                    return acc;
+                },
+                { emergencyContacts: [], recoveryContacts: [] }
+            ),
+            loading: delegatedAccess.value === undefined,
+        };
+    }
+);

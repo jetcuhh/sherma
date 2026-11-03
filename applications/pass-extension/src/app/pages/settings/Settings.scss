@@ -1,0 +1,19 @@
+@use '~@proton/pass/styles/common' as *;
+
+body {
+	overflow: auto !important;
+	block-size: 100%;
+}
+
+.pass-settings {
+	max-inline-size: 52rem;
+}
+
+/* override checkboxes */
+.checkbox-container:not(td *) {
+	gap: 1rem;
+
+	.checkbox-fakecheck {
+		margin-inline: 0.625rem !important;
+	}
+}

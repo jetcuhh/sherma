@@ -1,0 +1,7 @@
+@use '~@proton/styles/scss/lib/config' as *;
+@use '~@proton/styles/scss/lib/rem' as *;
+
+.modal.easy-switch-modal {
+	max-inline-size: rem(580);
+	inline-size: 100%;
+}

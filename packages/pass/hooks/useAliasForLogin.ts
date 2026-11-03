@@ -1,0 +1,69 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
+
+import type { FormikContextType } from 'formik';
+
+import { useOrganization } from '../components/Organization/OrganizationProvider';
+import { selectAliasByAliasEmail } from '../store/selectors/alias';
+import { OrganizationAliasCreateMode } from '../types/api/pass';
+import type { ItemRevision } from '../types/data/items';
+import type { LoginItemFormValues } from '../types/forms/item';
+import type { Maybe } from '../types/utils';
+import { merge } from '../utils/object/merge';
+import { isEmptyString } from '../utils/string/is-empty-string';
+import type { UseAliasOptionsResult } from './useAliasOptions';
+import { useAliasOptions } from './useAliasOptions';
+
+export type AliasForLoginProps = {
+    setOpen: (opened: boolean) => void;
+    aliasOptions: UseAliasOptionsResult;
+    canCreate: boolean;
+    open: boolean;
+    relatedAlias: Maybe<ItemRevision<'alias'>>;
+    usernameIsAlias: boolean;
+    willCreate: boolean;
+};
+
+export const useAliasForLogin = <T extends LoginItemFormValues>(form: FormikContextType<T>): AliasForLoginProps => {
+    const [aliasModalOpen, setAliasModalOpen] = useState(false);
+
+    const { values } = form;
+    const { withAlias, itemEmail, aliasPrefix } = values;
+
+    const org = useOrganization();
+    const orgAliasCreationDisabled = org?.settings.AliasCreateMode === OrganizationAliasCreateMode.NOBODY;
+
+    const aliasOptions = useAliasOptions({ shareId: form.values.shareId, lazy: true });
+    const relatedAlias = useSelector(selectAliasByAliasEmail(itemEmail));
+    const willCreateAlias = !relatedAlias && withAlias && !isEmptyString(aliasPrefix);
+
+    useEffect(() => {
+        if (relatedAlias) {
+            void form.setValues((values) =>
+                merge(values, {
+                    withAlias: false,
+                    aliasPrefix: '',
+                    aliasSuffix: undefined,
+                    mailboxes: [],
+                })
+            );
+        }
+    }, [relatedAlias]);
+
+    useEffect(() => {
+        if (aliasModalOpen) aliasOptions.request();
+    }, [aliasModalOpen]);
+
+    return useMemo(
+        () => ({
+            setOpen: setAliasModalOpen,
+            aliasOptions,
+            canCreate: !relatedAlias && !withAlias && !orgAliasCreationDisabled,
+            open: aliasModalOpen,
+            relatedAlias,
+            usernameIsAlias: Boolean(relatedAlias || willCreateAlias),
+            willCreate: willCreateAlias,
+        }),
+        [aliasOptions, withAlias, aliasModalOpen, relatedAlias, willCreateAlias, orgAliasCreationDisabled]
+    );
+};

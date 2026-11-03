@@ -1,0 +1,241 @@
+import { clearDetectionCache } from '@protontech/autofill';
+import { FieldType, fieldTypes } from '@protontech/autofill/types';
+import throttle from 'lodash/throttle';
+
+import { isActiveElement } from '@proton/pass/utils/dom/active-element';
+import { prop } from '@proton/pass/utils/fp/lens';
+import { logger } from '@proton/pass/utils/logger';
+
+import { WorkerMessageType } from '../../../../types/messages';
+import { IFRAME_EXTENDED_AUTOFILL_FIELDS } from '../../constants.runtime';
+import { withContext } from '../../context/context';
+import { getAutofillPageTelemetryDimensions } from '../../utils/autofill-telemetry';
+import { getFrameAttributes } from '../../utils/frame';
+import type { FrameMessageBroker, FrameMessageHandler } from '../client/client.channel';
+import { DROPDOWN_FOCUS_TIMEOUT, isFocusableElement } from '../inline/dropdown/dropdown.focus';
+import { createFocusGuard } from './field.interactivity';
+import type { FormHandle } from './form';
+import { createFormHandles } from './form';
+
+type FormManagerOptions = {
+    channel: FrameMessageBroker;
+    onDetection: (forms: FormHandle[]) => void;
+};
+
+type FormManagerState = {
+    /** form manager state flag */
+    active: boolean;
+    /** last detection run */
+    detectionAt: number;
+    /** number of detections executed */
+    detectionCount: number;
+    /** detection request */
+    detectionRequest: number;
+    /** tracked forms that have been detected */
+    trackedForms: Map<HTMLElement, FormHandle>;
+};
+
+export const createFormManager = ({ onDetection, channel }: FormManagerOptions) => {
+    const state: FormManagerState = {
+        active: true,
+        detectionAt: 0,
+        detectionCount: 0,
+        detectionRequest: -1,
+        trackedForms: new Map(),
+    };
+
+    const focusGuard = createFocusGuard();
+
+    const getForms = () => Array.from(state.trackedForms.values());
+    const getFormByIds = (formIds: string[]) => getForms().filter((form) => formIds.includes(form.formId));
+    const getFormById = (formId: string) => getForms().find((form) => form.formId === formId);
+    const getFields = () => Array.from(getForms().flatMap((form) => form.getFields()));
+
+    const detachTrackedForm = (formEl: HTMLElement) => {
+        state.trackedForms.get(formEl)?.detach();
+        state.trackedForms.delete(formEl);
+    };
+
+    const sync = withContext((_) => {
+        state.trackedForms.forEach((form) => {
+            form.getFields().forEach((field) => field.sync());
+        });
+    });
+
+    /* Garbage collection is used to detach tracked forms if they have been
+     * removed from the DOM - this may be the case in SPA apps. Once a form
+     * is detected, it will be tracked until removed */
+    const garbagecollect = (didDetach: boolean = false): boolean => {
+        state.trackedForms.forEach((form) => {
+            if (form.detached) {
+                detachTrackedForm(form.element);
+                didDetach = true;
+            }
+        });
+
+        return didDetach;
+    };
+
+    /**
+     * Asynchronously runs form detection with throttling to optimize performance.
+     * Uses a combination of throttle, leading/trailing edge, and requestIdleCallback
+     * mechanisms to prevent UI blocking and efficiently manage detection tasks.
+     * - Recycles and/or creates form handles for each detected form and reconciliates accordingly.
+     * - Performs autosave reconciliation on each detection run to capture any changes made to form data.
+     * - Returns a boolean flag indicating whether the detection was executed successfully
+     */
+    const runDetection = throttle(
+        withContext<(reason: string) => Promise<boolean>>(async (ctx, reason: string) => {
+            const settings = ctx?.getSettings();
+            const extendedIframeAutofill = Boolean(ctx?.getFeatureFlags().PassIFrameExtendedAutofill);
+            const subframe = !ctx?.mainFrame;
+
+            const { Autofill, Autofill2FA, CreditCard } = ctx?.getFeatures() ?? {};
+            const detectIdentity = Boolean(Autofill && settings?.autofill.identity);
+            const excludedFieldTypes = new Set<FieldType>();
+
+            /* OTP autofill is not supported in sub-frames */
+            if (!Autofill2FA || subframe) excludedFieldTypes.add(FieldType.OTP);
+            if (!detectIdentity) excludedFieldTypes.add(FieldType.IDENTITY);
+            if (!CreditCard) excludedFieldTypes.add(FieldType.CREDIT_CARD);
+
+            /* Sub-frames only support credit-card autofill when
+             * extended iframe autofill is disabled */
+            if (subframe && !extendedIframeAutofill) {
+                IFRAME_EXTENDED_AUTOFILL_FIELDS.forEach((type) => excludedFieldTypes.add(type));
+            }
+
+            /* if there is an on-going detection, early return */
+            if (state.detectionRequest !== -1) return false;
+            const gcd = garbagecollect();
+
+            /* When every field type is excluded, tracked forms cannot hold detectable
+             * fields anymore : detach them (eg: after a feature-flag or settings update) */
+            if (excludedFieldTypes.size === fieldTypes.length) {
+                state.trackedForms.forEach((form) => detachTrackedForm(form.element));
+            }
+
+            if (await ctx?.service.detector.shouldPredict()) {
+                state.detectionRequest = requestIdleCallback(() => {
+                    if (state.active) {
+                        logger.debug(`[FormTracker::Detector] Running detection for "${reason}"`);
+
+                        try {
+                            const forms = ctx?.service.detector.predictAll({ excludedFieldTypes });
+                            forms?.forEach((options) => {
+                                const formHandle = state.trackedForms.get(options.form) ?? createFormHandles(options);
+                                state.trackedForms.set(options.form, formHandle);
+                                formHandle.reconciliate(options.formType, options.fields);
+                            });
+
+                            onDetection(getForms());
+                        } catch (err) {
+                            logger.warn(`[FormTracker::Detector] ${err}`);
+                        }
+                    }
+
+                    /* reset detection state when finished */
+                    state.detectionRequest = -1;
+                    state.detectionCount++;
+                });
+
+                return true;
+            }
+
+            if (gcd || state.detectionCount === 0) void ctx?.service.autosave.reconciliate();
+            clearDetectionCache();
+
+            return false;
+        }),
+        250,
+        { leading: true, trailing: true }
+    );
+
+    const detect = async (options: { reason: string }) => {
+        /* If `detect` calls are inundated due to concurrent DOM mutations or transition events,
+         * this function cancels ongoing detection requests if they occur too closely together—
+         * set heuristically to 150ms. This prevents triggering detectors on a transitioning page,
+         * which may still have DOM nodes affecting final prediction results. This condition only
+         * applies to subsequent detection runs, prioritizing the speed of the initial detection. */
+        const now = Date.now();
+        const cancel = !state.active || (state.detectionCount > 0 && now - state.detectionAt < 150);
+        state.detectionAt = now;
+
+        if (cancel) {
+            cancelIdleCallback(state.detectionRequest);
+            state.detectionRequest = -1;
+        }
+
+        if (!state.active) return;
+
+        void runDetection(options.reason);
+    };
+
+    const onFrameFormsQuery: FrameMessageHandler<WorkerMessageType.FRAME_FORMS_QUERY> = (_, sendResponse) => {
+        const formTypes = getForms().map(prop('formType'));
+        sendResponse({ formTypes, telemetry: getAutofillPageTelemetryDimensions(document.documentElement) });
+
+        return true;
+    };
+
+    const onFrameFormsCluster: FrameMessageHandler<WorkerMessageType.FRAME_FORM_CLUSTER> = (_, sendResponse) => {
+        const forms = getForms().map((form) => ({ formId: form.formId, fields: form.getClusterables() }));
+        const frameAttributes = getFrameAttributes();
+        sendResponse({ forms, frameAttributes });
+
+        return true;
+    };
+
+    /** Only relevant when the dropdown is acquiring focus cross-frame. In order
+     * to bypass focus-traps in frame fields, we apply the same locking mechanism
+     * as the `DropdownFocusController` living in the top-frame. */
+    const onFrameFieldLock: FrameMessageHandler<WorkerMessageType.FRAME_FIELD_LOCK> = ({ payload }, sendResponse) => {
+        const form = getFormById(payload.formId);
+        const field = form?.getFieldById(payload.fieldId);
+        const fields = form?.getFields();
+
+        const activeEl = document.activeElement;
+        const wasFocused = Boolean(field && isActiveElement(field.element));
+
+        if (payload.locked) {
+            if (wasFocused) {
+                fields?.forEach((formField) => formField.interactivity.lock());
+                field?.element.blur();
+            } else if (isFocusableElement(activeEl)) {
+                /** Some focus-trap setups redirect focus to an element outside the
+                 * tracked fields (eg: a sibling button), evading the field locks
+                 * above. Lock that element directly to acquire dropdown focus. */
+                focusGuard.lock(activeEl, DROPDOWN_FOCUS_TIMEOUT);
+            }
+        } else {
+            fields?.forEach((formField) => formField.interactivity.unlock());
+        }
+
+        sendResponse({ wasFocused });
+        return true;
+    };
+
+    channel.register(WorkerMessageType.FRAME_FORMS_QUERY, onFrameFormsQuery);
+    channel.register(WorkerMessageType.FRAME_FIELD_LOCK, onFrameFieldLock);
+    channel.register(WorkerMessageType.FRAME_FORM_CLUSTER, onFrameFormsCluster);
+
+    const destroy = () => {
+        channel.unregister(WorkerMessageType.FRAME_FORMS_QUERY, onFrameFormsQuery);
+        channel.unregister(WorkerMessageType.FRAME_FORM_CLUSTER, onFrameFormsCluster);
+        channel.unregister(WorkerMessageType.FRAME_FIELD_LOCK, onFrameFieldLock);
+
+        cancelIdleCallback(state.detectionRequest);
+        runDetection.cancel();
+
+        state.active = false;
+        state.detectionRequest = -1;
+        state.detectionCount = 0;
+
+        state.trackedForms.forEach((form) => detachTrackedForm(form.element));
+        state.trackedForms.clear();
+    };
+
+    return { getFormById, getFormByIds, getFields, getForms, detect, sync, destroy };
+};
+
+export type FormManager = ReturnType<typeof createFormManager>;

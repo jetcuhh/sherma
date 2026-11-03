@@ -1,0 +1,834 @@
+import { importKey } from '@protontech/crypto/subtle/aesGcm.ts';
+import { c } from 'ttag';
+
+import { revoke, setLocalKey } from '@proton/shared/lib/api/auth';
+import { getApiError, getApiErrorMessage, getIsOfflineError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { generateClientKey } from '@proton/shared/lib/authentication/clientKey';
+import type { ForkEncryptedBlob } from '@proton/shared/lib/authentication/fork/blob';
+import { getForkDecryptedBlob } from '@proton/shared/lib/authentication/fork/blob';
+import type { LocalKeyResponse } from '@proton/shared/lib/authentication/interface';
+import noop from '@proton/utils/noop';
+
+import { DEFAULT_LOCK_TTL } from '../../constants';
+import type { Notification } from '../../store/actions/enhancers/notification';
+import type { Api } from '../../types/api/api';
+import type { Maybe, MaybeNull, MaybePromise } from '../../types/utils';
+import { NotificationKey } from '../../types/worker/notification';
+import { getErrorMessage } from '../../utils/errors/get-error-message';
+import { asyncLock } from '../../utils/fp/promises';
+import { safeCall } from '../../utils/fp/safe-call';
+import { logger } from '../../utils/logger';
+import { partialMerge } from '../../utils/object/merge';
+import { deleteKey } from '../../utils/object/zero';
+import { getEpoch } from '../../utils/time/epoch';
+import { PassErrorCode } from '../api/errors';
+import type { RefreshSessionData } from '../api/refresh';
+import { getIsApiUnavailable } from '../api/utils';
+import { generateOfflineComponents } from '../cache/crypto';
+import { PassCryptoError } from '../crypto/utils/errors';
+import { loadCoreCryptoWorker } from '../crypto/utils/worker';
+import type { PullForkCall, RequestForkData } from './fork';
+import {
+    type ConsumeForkPayload,
+    type RequestForkOptions,
+    type RequestForkResult,
+    consumeFork,
+    generateForkSecret,
+    getForkChallenge,
+    isReauthForkState,
+    pullFork,
+    requestFork,
+} from './fork';
+import { checkSessionLock } from './lock/session/lock.requests';
+import type { Lock, LockAdapter, LockAdapterMap, LockCreateDTO, UnlockDTO } from './lock/types';
+import { LockMode } from './lock/types';
+import type { UnsafePasswordCredentials } from './password';
+import {
+    PasswordVerification,
+    getPasswordVerification,
+    registerExtraPassword,
+    removeExtraPassword,
+    verifyExtraPassword,
+    verifyOfflinePassword,
+    verifyPassword,
+} from './password';
+import type { ReauthActionPayload } from './reauth';
+import {
+    type AuthSession,
+    type EncryptedAuthSession,
+    type ResumeSessionResult,
+    encryptPersistedSessionWithKey,
+    getPersistedSessionKey,
+    migrateSession,
+    resumeSession,
+    syncAuthSession,
+} from './session';
+import type { AuthStore } from './store';
+
+export type AuthOptions = {
+    /** `forceLock` will locally lock the session upon resuming */
+    forceLock?: boolean;
+    /** If `true`, will re-persist session on login */
+    forcePersist?: boolean;
+    /** If `true`, session resuming should be retried */
+    retryable?: boolean;
+    /** If `true`, the session is considered unlocked */
+    unlocked?: boolean;
+    /** Finalize pending action if it triggered a re-auth  */
+    reauth?: ReauthActionPayload;
+    /** Blocks any notification dispatches when `true` */
+    silence?: boolean;
+    /** Optional override of the `onLoginStart` callback. */
+    onStart?: AuthServiceConfig['onLoginStart'];
+    /** Optional override of the `onLoginComplete` callback */
+    onComplete?: AuthServiceConfig['onLoginComplete'];
+};
+
+export interface AuthServiceConfig {
+    api: Api;
+    /** Store holding the active session data */
+    authStore: AuthStore;
+
+    /** Override the default pull fork call. This is mostly
+     * required for safari extensions which will not include
+     * cookies set by account when requesting a fork sw-side. */
+    pullFork?: PullForkCall;
+
+    /** The in-memory session is used to store the session data securely.
+     * It allows resuming a session without any API calls to re-authenticate.
+     * In most cases you can omit the implementation and rely on the `authStore` */
+    getMemorySession?: (localID: Maybe<number>) => MaybePromise<Partial<AuthSession>>;
+    /** The persisted session will be parsed and decrypted to extract the
+     * session data. Requires an API call to retrieve the local key. */
+    getPersistedSession: (localID: Maybe<number>) => MaybePromise<MaybeNull<EncryptedAuthSession>>;
+    /**  Implement any service initialization logic in this hook. Should return
+     * a boolean flag indicating wether user was authorized or not. */
+    onInit: (options: AuthOptions) => Promise<boolean>;
+    /** Called when authorization sequence starts: this can happen when consuming a
+     * session fork or when trying to resume a session. */
+    onLoginStart?: () => MaybePromise<void>;
+    /** Called whenever a user is successfully authenticated. This can happen
+     * after consuming a fork or resuming a session.  */
+    onLoginComplete?: (userID: string, localID: Maybe<number>, reauth?: ReauthActionPayload) => MaybePromise<void>;
+    /** Called when logout sequence starts before the authentication store is cleared */
+    onLogoutStart?: () => void;
+    /** Called whenever a user is unauthenticated. This will be triggered any time
+     * the `logout` function is called (either via user action or when an inactive
+     * session is detected). The `broadcast` flag indicates wether we should
+     * broadcast the unauthorized session to other clients. */
+    onLogoutComplete?: (userID: Maybe<string>, localID: Maybe<number>, broadcast: boolean) => void;
+    /** Called during a hard logout sequence if we couldn't properly revoke the session.
+     * This can be the case when revoking a session offline due to too many failed unlocks.
+     * Only the session `UID` is passed (should be stored to revoke after) */
+    onLogoutFailure?: (UID: string) => void;
+    /** Called right before consuming a fork. Will not be called in the
+     * case of a "reauth" fork (see `onForkReauth`) */
+    onForkConsumeStart?: () => MaybePromise<void>;
+    /** Called immediately after a fork has been successfully consumed. At this
+     * point the user is not fully logged in yet. */
+    onForkConsumeComplete?: (session: AuthSession, payload: ConsumeForkPayload) => MaybePromise<void>;
+    /** Called on a successful fork re-auth flow. */
+    onForkReauth?: (
+        data: Extract<RequestForkData, { type: 'reauth' }>,
+        state: string,
+        blob?: ForkEncryptedBlob
+    ) => Promise<boolean>;
+    /** Called when a fork could not be successfully consumed. This can happen
+     * if the fork data is invalid */
+    onForkInvalid?: (data: { reauth: boolean }) => void;
+    /** Handle the result of a fork request call. Can be used to redirect the
+     * user automatically when requesting a fork from account. Optional `data`
+     * object should be persisted for the `result.state` key. `forkSecret` must
+     * be persisted too and passed back when consuming the fork. */
+    onForkRequest?: (result: RequestForkResult & { forkSecret: string }, data?: RequestForkData) => void;
+    /** Optional hook when session resuming starts. Returning `false` from this
+     * function will halt the session resume sequence. */
+    onResumeStart?: (data: {
+        hasSession: boolean;
+        memorySession: Maybe<Partial<AuthSession>>;
+    }) => MaybePromise<boolean>;
+    /** Called when an invalid persistent session error is thrown during a
+     * session resuming sequence. It will get called with the invalid session
+     * and the localID being resumed for retry mechanisms */
+    onSessionInvalid?: (
+        error: unknown,
+        data: {
+            localID: Maybe<number>;
+            invalidSession: EncryptedAuthSession;
+            retry: (session: EncryptedAuthSession) => Promise<ResumeSessionResult>;
+        }
+    ) => MaybePromise<ResumeSessionResult>;
+    /* Called when no persisted session or in-memory session can be used to
+     * resume a session. */
+    onSessionEmpty?: () => void;
+    /** Called when a session is locked either through user action or when a
+     * locked session is detected. The `broadcast` flag indicates wether we should
+     * broadcast the locked session to other clients. */
+    onLocked?: (mode: LockMode, localID: Maybe<number>, broadcast: boolean) => MaybePromise<void>;
+    /** Callback when session lock is created, updated or deleted */
+    onLockUpdate?: (lock: Lock, localID: Maybe<number>, broadcast: boolean) => MaybePromise<void>;
+    /** Called with the `sessionLockToken` when session is successfully unlocked */
+    onUnlocked?: (mode: LockMode, token: Maybe<string>, localID: Maybe<number>, offline: boolean) => Promise<void>;
+    /** Implement encrypted local session persistence using this hook. Called on every
+     * successful consumed fork or unlocked session. */
+    onSessionPersist?: (encryptedSession: string) => MaybePromise<void>;
+    /** Called when resuming the session failed for any reason excluding inactive
+     * session error. */
+    onSessionFailure: (options: AuthOptions, err: unknown) => MaybePromise<void>;
+    /** Called when session tokens have been refreshed. The`broadcast` flag indicates
+     * wether we should broadcast the refresh session data to other clients. */
+    onSessionRefresh?: (localId: Maybe<number>, data: RefreshSessionData, broadcast: boolean) => MaybePromise<void>;
+    /** Implement how you want to handle notifications emitted from the service */
+    onNotification?: (notification: Notification) => void;
+    /** Triggered when extra password is required */
+    onMissingScope?: () => void;
+}
+
+export const createAuthService = (config: AuthServiceConfig) => {
+    const { api, authStore } = config;
+
+    const adapters = new Map<LockMode, LockAdapter>();
+
+    const getLockAdapter = <T extends LockMode>(mode: T): LockAdapterMap[T] => {
+        const adapter = adapters.get(mode);
+        if (!adapter) throw new Error(`Lock adapter not found for "${mode}"`);
+        return adapter as LockAdapterMap[T];
+    };
+
+    const authService = {
+        init: asyncLock(async (options: AuthOptions) => {
+            logger.info(`[AuthService] Initialization start`);
+            return config.onInit(options).catch((err) => {
+                logger.warn(`[AuthService] Initialization failure`, err);
+                if (!options.silence) config.onNotification?.({ type: 'error', text: getErrorMessage(err) });
+                return false;
+            });
+        }),
+
+        /** Stores the initial configuration object passed to the
+         * auth service factory function. Useful if you want to trigger
+         * certain handlers outside of the auth service flow. */
+        config,
+
+        registerLockAdapter: (adapter: LockAdapter<any, any>) => adapters.set(adapter.type, adapter),
+
+        login: async (session: AuthSession, options: AuthOptions) => {
+            /** see: `AuthService::consumeFork` for overrides */
+            const onLoginStart = options.onStart ?? config.onLoginStart;
+            const onLoginComplete = options.onComplete ?? config.onLoginComplete;
+
+            await onLoginStart?.();
+
+            try {
+                if (!authStore.validSession(session)) {
+                    authStore.clear();
+                    throw new Error('Invalid session');
+                }
+
+                authStore.setSession(session);
+                await api.reset();
+
+                const migrated = await migrateSession(authStore);
+                if (migrated || options.forcePersist) await authService.persistSession().catch(noop);
+
+                const lockMode = authStore.getLockMode();
+
+                if (options?.forceLock && lockMode !== LockMode.NONE) {
+                    await authService.lock(lockMode, { soft: true, broadcast: false });
+                    return false;
+                }
+
+                if (!options?.unlocked) {
+                    const sessionLock = await checkSessionLock();
+                    const sessionLockRegistered = sessionLock.mode === LockMode.SESSION;
+                    const sessionLocked = sessionLock.locked;
+
+                    const hasToken = authStore.getLockToken() !== undefined;
+                    const needsToken = sessionLockRegistered && !hasToken;
+                    const overrideLock = sessionLockRegistered ? lockMode !== sessionLock.mode : false;
+                    const shouldLockSession = overrideLock || sessionLocked || needsToken;
+
+                    if (shouldLockSession) {
+                        logger.info(`[AuthService] Locked session [locked=${sessionLocked},token=${hasToken}]`);
+                        await authService.lock(LockMode.SESSION, { soft: true, broadcast: false });
+                        return false;
+                    }
+                }
+            } catch (err) {
+                const { code } = getApiError(err);
+                if (code === PassErrorCode.MISSING_SCOPE) return false;
+
+                if (!options.silence) {
+                    config.onNotification?.({
+                        text: c('Warning').t`Your session could not be resumed.`,
+                        type: 'error',
+                    });
+                }
+
+                logger.warn(`[AuthService] Logging in session failed`, err);
+                await config.onSessionFailure({ forceLock: true, retryable: options.retryable }, err);
+                return false;
+            }
+
+            logger.info(`[AuthService] User is authorized`);
+            await onLoginComplete?.(authStore.getUserID()!, authStore.getLocalID(), options.reauth);
+
+            return true;
+        },
+
+        logout: async (options: { soft: boolean; broadcast?: boolean }) => {
+            api.setResumeLock(false);
+            config.onLogoutStart?.();
+
+            const localID = authStore.getLocalID();
+            const userID = authStore.getUserID();
+
+            if (!options?.soft) {
+                await api({ ...revoke(), silence: true }).catch((err) => {
+                    if (getIsOfflineError(err)) {
+                        const UID = authStore.getUID();
+                        logger.info(`[AuthService] Session not fully revoked`);
+                        return UID && config.onLogoutFailure?.(UID);
+                    }
+                });
+            }
+
+            logger.info(`[AuthService] User is not authorized`);
+
+            await api.reset();
+            authStore.clear();
+            config.onLogoutComplete?.(userID, localID, options.broadcast ?? true);
+
+            return true;
+        },
+
+        consumeFork: async (
+            payload: ConsumeForkPayload,
+            apiUrl?: string
+        ): Promise<{ ok: boolean; reauth: boolean }> => {
+            const data = safeCall(() => JSON.parse(payload.localState ?? ''))();
+
+            if (isReauthForkState(data)) {
+                try {
+                    const encryptedSession = await config.getPersistedSession(data.localID);
+                    if (!encryptedSession) throw new Error('No session matching reauth');
+
+                    const { UserID, Payload } = await pullFork({ api, apiUrl, payload, pullFork: config.pullFork });
+                    if (UserID !== encryptedSession.UserID) throw new Error('Reauth session mismatch');
+
+                    const decryptedBlob: Maybe<ForkEncryptedBlob> = await (async () => {
+                        switch (payload.mode) {
+                            case 'web':
+                                const { payloadVersion, key } = payload;
+                                const clientKey = await importKey(key!);
+                                return getForkDecryptedBlob(clientKey, Payload, payloadVersion);
+                            case 'extension':
+                                if (payload.offlineKey) {
+                                    return {
+                                        type: 'offline',
+                                        keyPassword: payload.keyPassword!,
+                                        offlineKeyPassword: payload.offlineKey.password,
+                                        offlineKeySalt: payload.offlineKey.salt,
+                                    };
+                                }
+                        }
+                    })();
+
+                    await config.onForkReauth?.(data, payload.state, decryptedBlob);
+                    return { ok: true, reauth: true };
+                } catch (err) {
+                    config.onForkInvalid?.({ reauth: true });
+                    return { ok: false, reauth: true };
+                }
+            }
+
+            await config.onForkConsumeStart?.();
+
+            try {
+                const { session, Scopes } = await consumeFork({ api, apiUrl, payload, pullFork: config.pullFork });
+                const validScope = Scopes.includes('pass');
+
+                if (!validScope) {
+                    /** If the scope is invalid then the user must unlock with his
+                     * pass extra password in order to continue the login sequence.
+                     * Clear any offline components provided by account as they will
+                     * need to be recomputed against the extra password */
+                    delete session.offlineConfig;
+                    delete session.offlineKD;
+                }
+
+                await config.onForkConsumeComplete?.(session, payload);
+
+                /** Override login hooks as `consumeFork` is orchestrating these side-effects */
+                const loggedIn = validScope && (await authService.login(session, { onStart: noop, onComplete: noop }));
+
+                if (!validScope) {
+                    authStore.setSession(session);
+                    authStore.setExtraPassword(true);
+                    config.onMissingScope?.();
+                }
+
+                const locked = authStore.getLocked();
+
+                /** Persist the session only on successful login. If the forked session is
+                 * locked, persist eitherway to avoid requiring a new fork consumption if
+                 * user does not unlock immediately (reset api state for persisting). */
+                if (locked) await api.reset();
+                if (loggedIn || locked) await authService.persistSession({ regenerateClientKey: true });
+                if (loggedIn) await config.onLoginComplete?.(authStore.getUserID()!, authStore.getLocalID());
+
+                return { ok: true, reauth: false };
+            } catch (error: unknown) {
+                const reason = error instanceof Error ? ` (${getApiErrorMessage(error) ?? error?.message})` : '';
+
+                config.onNotification?.({
+                    text: c('Warning').t`Your session could not be authorized.` + reason,
+                    type: 'error',
+                });
+
+                config.onForkInvalid?.({ reauth: false });
+                await authService.logout({ soft: true, broadcast: false });
+
+                throw error;
+            }
+        },
+
+        requestFork: async (options: RequestForkOptions, data?: RequestForkData): Promise<RequestForkResult> => {
+            const forkSecret = generateForkSecret();
+            const result = requestFork({ ...options, forkChallenge: await getForkChallenge(forkSecret) });
+            config.onForkRequest?.({ ...result, forkSecret }, data);
+
+            return result;
+        },
+
+        createLock: async (dto: LockCreateDTO) => {
+            if (dto.mode === LockMode.NONE) return;
+
+            const localID = authStore.getLocalID();
+            const sessionLockRegistered = authStore.getLockMode() === LockMode.SESSION;
+
+            /** If we're creating a new lock over an
+             * active API session lock - delete it first */
+            const onBeforeCreate = sessionLockRegistered
+                ? async () => {
+                      const { current } = dto;
+                      if (!(current && current.mode === LockMode.SESSION)) throw new Error('Invalid lock creation');
+                      const lock = await getLockAdapter(LockMode.SESSION).delete(current.pin);
+                      void config.onLockUpdate?.(lock, localID, false);
+                  }
+                : undefined;
+
+            const lock = await (() => {
+                switch (dto.mode) {
+                    case LockMode.BIOMETRICS:
+                        return getLockAdapter(dto.mode).create(dto.password, dto.ttl, onBeforeCreate);
+                    case LockMode.PASSWORD:
+                        return getLockAdapter(dto.mode).create(dto.password, dto.ttl, onBeforeCreate);
+                    case LockMode.SESSION:
+                        return getLockAdapter(dto.mode).create(dto.pin, dto.ttl, onBeforeCreate);
+                    case LockMode.DESKTOP:
+                        return getLockAdapter(dto.mode).create(dto.secret, dto.ttl, onBeforeCreate);
+                }
+            })();
+
+            void config.onLockUpdate?.(lock, localID, true);
+        },
+
+        deleteLock: async (dto: UnlockDTO) => {
+            if (dto.mode === LockMode.NONE) return;
+
+            const lock = await (() => {
+                switch (dto.mode) {
+                    case LockMode.BIOMETRICS:
+                        return getLockAdapter(dto.mode).delete(dto.key);
+                    case LockMode.PASSWORD:
+                        return getLockAdapter(dto.mode).delete(dto.password);
+                    case LockMode.SESSION:
+                        return getLockAdapter(dto.mode).delete(dto.pin);
+                    case LockMode.DESKTOP:
+                        return getLockAdapter(dto.mode).delete(dto.key);
+                }
+            })();
+
+            const localID = authStore.getLocalID();
+            void config.onLockUpdate?.(lock, localID, true);
+        },
+
+        lock: async (mode: LockMode, options: { broadcast?: boolean; soft: boolean }): Promise<Lock> => {
+            if (mode === LockMode.NONE) return { mode: LockMode.NONE, locked: false };
+
+            const adapter = getLockAdapter(mode);
+            const localID = authStore.getLocalID();
+            const broadcast = options.broadcast ?? false;
+
+            api.setResumeLock(false);
+            await config.onLocked?.(mode, localID, broadcast);
+            const lock = await adapter.lock(options);
+
+            return lock;
+        },
+
+        unlock: async (dto: UnlockDTO): Promise<void> => {
+            if (dto.mode === LockMode.NONE) return;
+
+            try {
+                const token = await (() => {
+                    switch (dto.mode) {
+                        case LockMode.BIOMETRICS:
+                            return getLockAdapter(dto.mode).unlock(dto.key);
+                        case LockMode.PASSWORD:
+                            return getLockAdapter(dto.mode).unlock(dto.password);
+                        case LockMode.SESSION:
+                            return getLockAdapter(dto.mode).unlock(dto.pin);
+                        case LockMode.DESKTOP:
+                            return getLockAdapter(dto.mode).unlock(dto.key);
+                    }
+                })();
+
+                const localID = authStore.getLocalID();
+                await config.onUnlocked?.(dto.mode, token, localID, dto.offline ?? false);
+            } catch (error) {
+                /** error is thrown for clients to consume */
+                logger.warn(`[AuthService] Unlock failure [mode=${dto.mode}]`, error);
+                throw error;
+            }
+        },
+
+        /** Check if the local lock has expired based on TTL without extending it.
+         * Used primarily to determine if auto-lock should be triggered when the
+         * TTL threshold has been exceeded since the last extension. */
+        checkAutoLock: async (): Promise<Maybe<Lock>> => {
+            const mode = authStore.getLockMode();
+            if (mode === LockMode.NONE) return;
+
+            /** Check if TTL has expired since last extension and trigger auto-lock */
+            const ttl = authStore.getLockTTL();
+            const lastExtendTime = authStore.getLockLastExtendTime();
+
+            if (ttl && lastExtendTime !== undefined) {
+                const now = getEpoch();
+                const diff = now - lastExtendTime;
+                if (diff > ttl) return authService.lock(mode, { soft: true, broadcast: true });
+            }
+        },
+
+        /** Check lock status and extend if valid. First checks for auto-lock
+         * conditions, then delegates to the adapter which handles both validation
+         * and extension (required for session PIN locks that need both local
+         * and backend-side extension). */
+        checkLock: async (): Promise<Lock> => {
+            const mode = authStore.getLockMode();
+            const localID = authStore.getLocalID();
+
+            if (mode === LockMode.NONE) return { mode: LockMode.NONE, locked: false };
+
+            return (
+                (await authService.checkAutoLock()) ??
+                (async () => {
+                    const lock = await getLockAdapter(mode).check();
+                    const shouldSync = lock.mode !== LockMode.NONE && !lock.locked;
+                    if (shouldSync) await authService.syncLock({ lockLastExtendTime: getEpoch() });
+                    await config.onLockUpdate?.(lock, localID, false);
+                    return lock;
+                })()
+            );
+        },
+
+        /** Passing the `regenerateClientKey` option will generate
+         * a new local key and update it back-end side. Ideally, this
+         * should only happen after consuming a fork. */
+        persistSession: async (options?: { regenerateClientKey: boolean }) => {
+            try {
+                const session = authStore.getSession();
+                if (!authStore.validSession(session)) throw new Error('Trying to persist invalid session');
+
+                const clientKey = await (async () => {
+                    if (options?.regenerateClientKey) {
+                        const { serializedData, key } = await generateClientKey();
+                        await api<LocalKeyResponse>(setLocalKey(serializedData));
+                        authStore.setClientKey(serializedData);
+                        return key;
+                    }
+
+                    return getPersistedSessionKey(api, authStore);
+                })();
+
+                if (!clientKey) {
+                    logger.info('[AuthService] Cannot persist session before `clientKey` is set');
+                    return;
+                }
+
+                logger.info('[AuthService] Persisting session');
+                /* If the clientKey resolution sequence triggered a refresh,
+                 * make sure we persist the session with the new tokens */
+                session.lastUsedAt = getEpoch();
+                const syncedSession = syncAuthSession(session, authStore);
+                const encryptedSession = await encryptPersistedSessionWithKey(syncedSession, clientKey);
+
+                await config.onSessionPersist?.(encryptedSession);
+            } catch (error) {
+                logger.warn(`[AuthService] Persisting session failure`, error);
+            }
+        },
+
+        /** Single entry point for persisting lock fields. Mirrors the update into the
+         * in-memory `authStore` and writes the persisted session in one shot. */
+        syncLock: async (update: Partial<{ unlockRetryCount: number; lockLastExtendTime: Maybe<number> }>) => {
+            const localID = authStore.getLocalID();
+            if ('unlockRetryCount' in update) authStore.setUnlockRetryCount(update.unlockRetryCount ?? 0);
+            if ('lockLastExtendTime' in update) authStore.setLockLastExtendTime(update.lockLastExtendTime);
+            await authService.syncPersistedSession(localID, update);
+        },
+
+        /** Syncs the persisted session without re-encrypting the session blob. Use
+         * when updating session components that do not require re-generating the
+         * encrypted blob or the session digest. (FIXME: use in refresh flow) */
+        syncPersistedSession: async (localID: Maybe<number>, update: Omit<Partial<EncryptedAuthSession>, 'blob'>) => {
+            const encryptedSession = await config.getPersistedSession(localID);
+            if (!encryptedSession) return;
+
+            const updatedKeys = Object.keys(update).join(', ');
+            const syncedEncryptedSession = partialMerge(encryptedSession, update);
+            await config.onSessionPersist?.(JSON.stringify(syncedEncryptedSession));
+
+            logger.info(`[AuthService] Synced persisted session ${localID ?? 0} [${updatedKeys}]`);
+        },
+
+        resumeSession: async (localID: Maybe<number>, options: AuthOptions): Promise<boolean> => {
+            try {
+                const memorySession = await config.getMemorySession?.(localID);
+                const persistedSession = await config.getPersistedSession(localID);
+                const validMemorySession = memorySession && authStore.validSession(memorySession);
+                const hasSession = Boolean(validMemorySession || persistedSession);
+
+                const proceed = (await config.onResumeStart?.({ hasSession, memorySession })) ?? true;
+                if (!proceed) return false;
+
+                if (validMemorySession) {
+                    logger.info(`[AuthService] Resuming in-memory session [lock=${options.forceLock}]`);
+                    options.forcePersist = options.forcePersist || !persistedSession;
+                    return await authService.login(memorySession, options);
+                }
+
+                if (!persistedSession) {
+                    /** If we have no persisted session to resume from, exit early */
+                    logger.info(`[AuthService] No persisted session found`);
+                    config.onSessionEmpty?.();
+                    return false;
+                }
+
+                logger.info(`[AuthService] Resuming persisted session [lock=${options.forceLock ?? false}]`);
+                await config.onLoginStart?.();
+
+                /** Partially configure the auth store before resume sequence. `keyPassword`
+                 * and `sessionLockToken` may be still encrypted at this point */
+                authStore.setSession(persistedSession);
+                await api.reset();
+
+                const result = await resumeSession(persistedSession, localID, config, options);
+
+                logger.info(`[AuthService] Session successfully resumed`);
+                options.forcePersist = options.forcePersist || result.repersist;
+                return await authService.login(result.session, options);
+            } catch (error: unknown) {
+                if (error instanceof Error) {
+                    const text = c('Warning').t`Your session could not be resumed.`;
+                    const errorMessage = getErrorMessage(error);
+                    logger.warn(`[AuthService] Resuming session failed: ${errorMessage}`);
+                    if (!options.silence) config.onNotification?.({ text, type: 'error', errorMessage });
+                }
+
+                /** If a session fails to resume due to reasons other than being locked,
+                 * inactive, or offline, the sessionFailure callback should trigger the
+                 * resuming process. Session errors will be managed by the API listener. */
+                const { sessionLocked, sessionInactive } = api.getState();
+                const sessionFailure = !(sessionLocked || sessionInactive);
+                if (sessionFailure) await config.onSessionFailure(options, error);
+
+                return false;
+            }
+        },
+
+        /** Password confirmation can either be verified offline or online.
+         * In `srp` mode, we will verify the user's password through SRP
+         * (two-password mode not supported yet). If the user has an offline
+         * config, we compare the `offlineKD` with the derived argon2 hash */
+        confirmPassword: async (password: string, mode?: PasswordVerification): Promise<boolean> => {
+            const credentials: UnsafePasswordCredentials = { password };
+
+            try {
+                await loadCoreCryptoWorker();
+
+                switch (mode ?? getPasswordVerification(authStore)) {
+                    case PasswordVerification.LOCAL: {
+                        const offlineConfig = authStore.getOfflineConfig()!;
+                        const offlineVerifier = authStore.getOfflineVerifier()!;
+                        return await verifyOfflinePassword(password, { offlineConfig, offlineVerifier });
+                    }
+
+                    case PasswordVerification.EXTRA_PASSWORD: {
+                        await verifyExtraPassword(credentials);
+
+                        const components = await generateOfflineComponents(password);
+                        authStore.setOfflineComponents(components);
+
+                        /** Online extra password verification will happen on
+                         * first login after a successful fork. At this point
+                         * we can enable the password lock automatically. */
+                        if (
+                            !EXTENSION_BUILD &&
+                            [LockMode.NONE, LockMode.BIOMETRICS].includes(authStore.getLockMode())
+                        ) {
+                            authStore.setLockMode(LockMode.PASSWORD);
+                            authStore.setLockTTL(DEFAULT_LOCK_TTL);
+                        }
+
+                        await authService.persistSession({ regenerateClientKey: true });
+
+                        return true;
+                    }
+
+                    case PasswordVerification.SRP: {
+                        return await verifyPassword(credentials);
+                    }
+                }
+            } catch (error) {
+                logger.warn(`[AuthService] failed password confirmation (${getErrorMessage(error)})`);
+
+                /** Throw the underlying error in case of connectivity
+                 * issues to avoid showing the wrong error message */
+                if (error instanceof PassCryptoError) throw error;
+                if (getIsApiUnavailable(error)) throw error;
+
+                return false;
+            } finally {
+                credentials.password = '';
+                deleteKey(credentials, 'password');
+            }
+        },
+
+        registerExtraPassword: async (password: string): Promise<boolean> => {
+            const credentials: UnsafePasswordCredentials = { password };
+            try {
+                /** Compute the offline components in order to update the auth store on successful
+                 * extra password registration : this will affect any password locks or offline mode
+                 * setting. Users will now have to unlock the client with the extra password */
+                const components = await generateOfflineComponents(password);
+                await registerExtraPassword(credentials);
+
+                /* Clear biometrics */
+                if (authStore.getLockMode() === LockMode.BIOMETRICS) {
+                    authStore.setEncryptedOfflineKD(undefined);
+                    authStore.setLockMode(LockMode.PASSWORD);
+                    await authService.config.onLockUpdate?.(
+                        { mode: LockMode.PASSWORD, locked: false, ttl: authStore.getLockTTL() },
+                        authStore.getLocalID(),
+                        true
+                    );
+                }
+
+                authStore.setExtraPassword(true);
+                authStore.setOfflineComponents(components);
+
+                await authService.persistSession();
+                return true;
+            } finally {
+                credentials.password = '';
+                deleteKey(credentials, 'password');
+            }
+        },
+
+        removeExtraPassword: async (password: string) => {
+            const credentials: UnsafePasswordCredentials = { password };
+
+            try {
+                /** Clear biometrics: removing extra password would
+                 * invalidate the `encryptedOfflineKD` */
+                if (authStore.getLockMode() === LockMode.BIOMETRICS) {
+                    authStore.setEncryptedOfflineKD(undefined);
+                    await authService.config.onLockUpdate?.(
+                        { mode: LockMode.PASSWORD, locked: false },
+                        authStore.getLocalID(),
+                        true
+                    );
+                }
+
+                await verifyExtraPassword(credentials);
+                await removeExtraPassword();
+                await authService.logout({ soft: true, broadcast: true });
+            } finally {
+                credentials.password = '';
+                deleteKey(credentials, 'password');
+            }
+        },
+    };
+
+    api.subscribe(async (event) => {
+        /** Ensure we have an active session before processing API events*/
+        if (authStore.hasSession()) {
+            switch (event.type) {
+                case 'session': {
+                    if (event.status === 'inactive') {
+                        if (!event.silent) {
+                            config.onNotification?.({
+                                text: c('Warning').t`Your session is inactive.`,
+                                type: 'error',
+                            });
+                        }
+                        await authService.logout({ soft: true, broadcast: true });
+                    }
+
+                    if (event.status === 'locked') {
+                        const locked = authStore.getLocked();
+
+                        if (!locked) {
+                            config.onNotification?.({
+                                key: NotificationKey.LOCK,
+                                text: c('Warning').t`Your session was locked.`,
+                                type: 'info',
+                            });
+                        }
+
+                        await authService.lock(LockMode.SESSION, { soft: true, broadcast: true });
+                    }
+
+                    if (event.status === 'restricted') {
+                        if (event.error?.includes('two-factor-authentication-2fa')) {
+                            config.onNotification?.({
+                                text: '',
+                                key: NotificationKey.ORG_MISSING_2FA,
+                                type: 'error',
+                                expiration: -1,
+                            });
+                        }
+
+                        await authService.logout({ soft: true, broadcast: true });
+                    }
+
+                    if (event.status === 'missing-scope') config.onMissingScope?.();
+
+                    break;
+                }
+
+                case 'refresh': {
+                    const { data } = event;
+                    if (authStore.getUID() === data.UID) {
+                        /** The `onSessionRefresh` callback is invoked to persist the new tokens.
+                         * If this callback throws an error, it is crucial to avoid updating the
+                         * authentication store data. This precaution prevents potential inconsistencies
+                         * between the store and persisted data. The provisional refresh token is confirmed
+                         * only upon the initial use of the new access token. */
+                        await config.onSessionRefresh?.(authStore.getLocalID(), data, true);
+                        authStore.setSession(data);
+                    }
+
+                    break;
+                }
+            }
+        }
+    });
+
+    return authService;
+};
+
+export type AuthService = ReturnType<typeof createAuthService>;

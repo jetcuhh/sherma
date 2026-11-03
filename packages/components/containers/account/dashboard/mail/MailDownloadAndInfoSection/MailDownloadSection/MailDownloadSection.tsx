@@ -1,0 +1,137 @@
+import { c } from 'ttag';
+
+import { IcBrandLinux } from '@proton/icons/icons/IcBrandLinux';
+import { IcBrandMac } from '@proton/icons/icons/IcBrandMac';
+import { IcBrandProtonCalendar } from '@proton/icons/icons/IcBrandProtonCalendar';
+import { IcBrandProtonMail } from '@proton/icons/icons/IcBrandProtonMail';
+import { IcBrandWindows } from '@proton/icons/icons/IcBrandWindows';
+import { CALENDAR_MOBILE_APP_LINKS } from '@proton/shared/lib/calendar/constants';
+import { APPS } from '@proton/shared/lib/constants';
+import { isElectronApp } from '@proton/shared/lib/helpers/desktop';
+import { getAppStoreLink, getPlayStoreLink } from '@proton/shared/lib/helpers/mobileAppLinks';
+import { MAIL_MOBILE_APP_LINKS } from '@proton/shared/lib/mail/constants';
+import appleAppStoreImage from '@proton/styles/assets/img/vpn/download-section/apple-app-store.svg';
+import googlePlayStoreImage from '@proton/styles/assets/img/vpn/download-section/google-play-store.svg';
+
+import DashboardDownloadSection from '../../../shared/DashboardDownloadSection/DashboardDownloadSection';
+import calendarMobilePreview from './images/download-preview-calendar.png';
+import linuxPreview from './images/download-preview-linux.png';
+import macosPreview from './images/download-preview-macos.png';
+import mailMobilePreview from './images/download-preview-mail.png';
+import windowsPreview from './images/download-preview-windows.png';
+
+const downloadData = [
+    {
+        title: () => c('Download').t`Mobile`,
+        tabs: [
+            {
+                title: () => c('Download').t`Mail`,
+                icon: <IcBrandProtonMail />,
+                content: {
+                    image: mailMobilePreview,
+                    downloadButtons: [
+                        {
+                            title: () => c('Download').t`Download on the Apple App Store`,
+                            link: getAppStoreLink(MAIL_MOBILE_APP_LINKS.appStore),
+                            style: 'appstore' as const,
+                            image: appleAppStoreImage,
+                        },
+                        {
+                            title: () => c('Download').t`Get it on Google Play`,
+                            link: getPlayStoreLink(MAIL_MOBILE_APP_LINKS.playStore),
+                            style: 'appstore' as const,
+                            image: googlePlayStoreImage,
+                        },
+                    ],
+                },
+            },
+            {
+                title: () => c('Download').t`Calendar`,
+                icon: <IcBrandProtonCalendar />,
+                content: {
+                    image: calendarMobilePreview,
+                    downloadButtons: [
+                        {
+                            title: () => c('Download').t`Download on the Apple App Store`,
+                            link: getAppStoreLink(CALENDAR_MOBILE_APP_LINKS.appStore),
+                            style: 'appstore' as const,
+                            image: appleAppStoreImage,
+                        },
+                        {
+                            title: () => c('Download').t`Get it on Google Play`,
+                            link: getPlayStoreLink(CALENDAR_MOBILE_APP_LINKS.playStore),
+                            style: 'appstore' as const,
+                            image: googlePlayStoreImage,
+                        },
+                    ],
+                },
+            },
+        ],
+        enabled: true,
+    },
+    {
+        title: () => c('Download').t`Desktop`,
+        tabs: [
+            {
+                title: () => c('Download').t`Windows`,
+                icon: <IcBrandWindows />,
+                content: {
+                    image: windowsPreview,
+                    downloadButtons: [
+                        {
+                            title: () => c('Download').t`Download for Windows`,
+                            link: 'https://proton.me/download/mail/windows/ProtonMail-desktop.exe',
+                        },
+                    ],
+                },
+            },
+            {
+                title: () => c('Download').t`macOS`,
+                icon: <IcBrandMac />,
+                content: {
+                    image: macosPreview,
+                    downloadButtons: [
+                        {
+                            title: () => c('Download').t`Download for macOS`,
+                            link: 'https://proton.me/download/mail/macos/ProtonMail-desktop.dmg',
+                        },
+                    ],
+                },
+            },
+            {
+                title: () => c('Download').t`Linux`,
+                icon: <IcBrandLinux />,
+                content: {
+                    image: linuxPreview,
+                    downloadButtons: [
+                        {
+                            title: () => c('Download').t`Download for Linux`,
+                            links: [
+                                {
+                                    title: () => c('Download').t`.deb (Ubuntu/Debian)`,
+                                    link: 'https://proton.me/download/mail/linux/ProtonMail-desktop-beta.deb',
+                                },
+                                {
+                                    title: () => c('Download').t`.rpm (Fedora/RHEL)`,
+                                    link: 'https://proton.me/download/mail/linux/ProtonMail-desktop-beta.rpm',
+                                },
+                                {
+                                    title: () => c('Download').t`Download on Snap store`,
+                                    link: 'https://snapcraft.io/proton-mail',
+                                    external: true,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ],
+        enabled: !isElectronApp,
+    },
+];
+
+const MailDownloadSection = () => {
+    return <DashboardDownloadSection downloadConfig={downloadData} app={APPS.PROTONMAIL} />;
+};
+
+export default MailDownloadSection;

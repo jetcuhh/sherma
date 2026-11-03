@@ -1,0 +1,253 @@
+import type { PayloadAction, ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+import { createSlice, miniSerializeError, original } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { previousSelector } from '@proton/redux-utilities/creator';
+import { getFetchedAt, getFetchedEphemeral } from '@proton/redux-utilities/fetchedAt';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import type { CacheType } from '@proton/redux-utilities/interface';
+import { cacheHelper, createPromiseStore } from '@proton/redux-utilities/promiseStore';
+import { getIsMissingScopeError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+import { APPS } from '@proton/shared/lib/constants';
+import updateObject from '@proton/shared/lib/helpers/updateObject';
+import type { OrganizationExtended } from '@proton/shared/lib/interfaces/Organization';
+import type { User } from '@proton/shared/lib/interfaces/User';
+import {
+    getDefaultOrganizationSettings,
+    getOrganization,
+    getOrganizationSettings,
+} from '@proton/shared/lib/organization/api';
+
+import { serverEvent } from '../eventLoop';
+import { initEvent } from '../init';
+import { type UserState, userFulfilled, userThunk } from '../user';
+import { canFetchOrganization } from './helper';
+
+const name = 'organization' as const;
+
+enum ValueType {
+    dummy = 0,
+    complete = 1,
+}
+
+export interface OrganizationState extends UserState {
+    [name]: ModelState<OrganizationExtended> & { meta: { type: ValueType } };
+}
+
+type SliceState = OrganizationState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+export const selectOrganization = (state: OrganizationState) => state[name];
+export const selectOrganizationLoading = (state: OrganizationState) => {
+    const { value, error } = selectOrganization(state);
+    return value === undefined && error === undefined;
+};
+
+const freeOrganization = {
+    Settings: {
+        MailCategoryViewEnabled: true,
+    },
+} as unknown as OrganizationExtended;
+
+const initialState: SliceState = {
+    value: undefined,
+    error: undefined,
+    meta: {
+        type: ValueType.dummy,
+        fetchedAt: 0,
+        fetchedEphemeral: undefined,
+    },
+};
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {
+        pending: (state) => {
+            state.error = undefined;
+        },
+        fulfilled: (state, action: PayloadAction<{ value: Model; type: ValueType }>) => {
+            state.value = action.payload.value;
+            state.error = undefined;
+            state.meta.type = action.payload.type;
+            state.meta.fetchedAt = getFetchedAt();
+            state.meta.fetchedEphemeral = getFetchedEphemeral();
+        },
+        rejected: (state, action) => {
+            state.error = action.payload;
+            state.meta.fetchedAt = getFetchedAt();
+            state.meta.fetchedEphemeral = getFetchedEphemeral();
+        },
+        update: (state, action: PayloadAction<{ Organization: Partial<OrganizationExtended> }>) => {
+            if (!state.value) {
+                return;
+            }
+            state.value = { ...state.value, ...action.payload.Organization };
+        },
+        updateOrganizationSettings: (
+            state,
+            action: PayloadAction<{ value: Partial<OrganizationExtended['Settings']> }>
+        ) => {
+            if (!state.value) {
+                return;
+            }
+            state.value.Settings = updateObject(state.value.Settings, action.payload.value);
+        },
+    },
+    extraReducers: (builder) => {
+        const handleUserUpdate = (state: OrganizationState['organization'], user: User | undefined) => {
+            if (!state.value || !user) {
+                return;
+            }
+
+            const isFreeOrganization = original(state)?.meta.type === ValueType.dummy;
+
+            if (!isFreeOrganization && user && !canFetchOrganization(user)) {
+                // Do not get any organization update when user becomes unsubscribed.
+                state.value = freeOrganization;
+                state.error = undefined;
+                state.meta.type = ValueType.dummy;
+                state.meta.fetchedEphemeral = undefined;
+                state.meta.fetchedAt = 0;
+            }
+
+            if (isFreeOrganization && user && canFetchOrganization(user)) {
+                state.error = undefined;
+                state.meta.type = ValueType.complete;
+                state.meta.fetchedEphemeral = undefined;
+                state.meta.fetchedAt = 0;
+            }
+        };
+
+        builder.addCase(initEvent, (state, action) => {
+            handleUserUpdate(state, action.payload.User);
+        });
+        builder.addCase(userFulfilled, (state, action) => {
+            handleUserUpdate(state, action.payload);
+        });
+
+        builder.addCase(serverEvent, (state, action) => {
+            if (!state.value) {
+                return;
+            }
+            if (action.payload.Organization || action.payload.OrganizationSettings) {
+                state.value = updateObject(state.value, {
+                    ...action.payload.Organization,
+                    ...(action.payload.OrganizationSettings
+                        ? { Settings: updateObject(state.value.Settings, action.payload.OrganizationSettings) }
+                        : undefined),
+                });
+                state.error = undefined;
+                state.meta.type = ValueType.complete;
+            } else {
+                handleUserUpdate(state, action.payload.User);
+            }
+        });
+    },
+});
+
+const promiseStore = createPromiseStore<Model>();
+const previous = previousSelector(selectOrganization);
+
+/**
+ * Re-fetches the organization data and refreshes the state and UI.
+ *
+ * If you are changing the organization data by another api request,
+ * consider using the {@link organizationActions.update} instead that stores
+ * the request's response in the state, without unnecessary re-fetching.
+ */
+const modelThunk = (options?: {
+    cache?: CacheType;
+    type?: 'extended' | 'organization' | 'settings';
+}): ThunkAction<Promise<Model>, OrganizationState, ProtonThunkArguments, UnknownAction> => {
+    return (dispatch, getState, extraArgument) => {
+        const select = () => {
+            return previous({ dispatch, getState, extraArgument, options });
+        };
+        const getPayload = async () => {
+            const user = await dispatch(userThunk());
+            const defaultValue = {
+                value: freeOrganization,
+                type: ValueType.dummy,
+            };
+            if (!canFetchOrganization(user)) {
+                return defaultValue;
+            }
+
+            const getOrganizationPromise = () => {
+                return getOrganization({ api: extraArgument.api });
+            };
+
+            const getSettingsPromise = () => {
+                // In the lite app, some actions use JWT for authentication and have limited access. Calling organization settings with such tokens will fail.
+                // Some pages like Privacy and Recovery get a forked session with full access and can call the API to fetch organization settings.
+                return extraArgument.config.APP_NAME === APPS.PROTONACCOUNTLITE &&
+                    !extraArgument.authentication.hasPassword()
+                    ? getDefaultOrganizationSettings()
+                    : getOrganizationSettings({ api: extraArgument.api });
+            };
+
+            const getValue = async (): Promise<OrganizationExtended> => {
+                const originalOrganization = select()?.value;
+                const originalSettings = originalOrganization?.Settings;
+
+                if (originalSettings && options?.type === 'organization') {
+                    const organization = await getOrganizationPromise();
+                    const settings = select()?.value?.Settings || originalSettings;
+                    return {
+                        ...organization,
+                        Settings: settings,
+                    };
+                }
+
+                if (originalOrganization && options?.type === 'settings') {
+                    const settings = await getSettingsPromise();
+                    const organization = select()?.value || originalOrganization;
+                    return {
+                        ...organization,
+                        Settings: settings,
+                    };
+                }
+
+                const [organization, settings] = await Promise.all([getOrganizationPromise(), getSettingsPromise()]);
+                return {
+                    ...organization,
+                    Settings: settings,
+                };
+            };
+
+            try {
+                const value = await getValue();
+                return {
+                    value: value,
+                    type: ValueType.complete,
+                };
+            } catch (e: any) {
+                if (getIsMissingScopeError(e)) {
+                    return defaultValue;
+                }
+                throw e;
+            }
+        };
+        const cb = async () => {
+            try {
+                dispatch(slice.actions.pending());
+                const payload = await getPayload();
+                dispatch(slice.actions.fulfilled(payload));
+                return payload.value;
+            } catch (error) {
+                dispatch(slice.actions.rejected(miniSerializeError(error)));
+                throw error;
+            }
+        };
+        return cacheHelper({ store: promiseStore, select, cb, cache: options?.cache });
+    };
+};
+
+export const organizationReducer = { [name]: slice.reducer };
+export const organizationActions = slice.actions;
+export const organizationThunk = modelThunk;
+export const organizationFulfilled = slice.actions.fulfilled;
+
+export const MAX_CHARS_API = {
+    ORG_NAME: 40,
+};

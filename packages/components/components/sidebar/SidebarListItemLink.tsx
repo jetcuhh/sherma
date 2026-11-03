@@ -1,0 +1,44 @@
+import type { ReactNode, Ref } from 'react';
+import { forwardRef } from 'react';
+import type { NavLinkProps } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
+
+import clsx from '@proton/utils/clsx';
+
+export interface Props extends Omit<NavLinkProps, 'className'> {
+    children: ReactNode;
+    itemClassName?: string;
+    className?: string;
+    forceReload?: boolean;
+}
+
+const SidebarListItemLink = forwardRef<HTMLAnchorElement, Props>(
+    (
+        { children, itemClassName = 'navigation-link', className, forceReload, to, isActive, style, ...rest }: Props,
+        ref: Ref<HTMLAnchorElement>
+    ) => {
+        if (forceReload) {
+            return (
+                <a ref={ref} href={to.toString()} className={clsx([itemClassName, className])} {...rest}>
+                    {children}
+                </a>
+            );
+        }
+        return (
+            <NavLink
+                to={to}
+                style={style}
+                isActive={isActive}
+                ref={ref}
+                className={clsx([itemClassName, className])}
+                {...rest}
+            >
+                {children}
+            </NavLink>
+        );
+    }
+);
+
+SidebarListItemLink.displayName = 'SidebarListItemLink';
+
+export default SidebarListItemLink;

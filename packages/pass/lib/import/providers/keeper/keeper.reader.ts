@@ -1,0 +1,142 @@
+import { c } from 'ttag';
+
+import type { ItemImportIntent } from '../../../../types/data/items.dto';
+import { WifiSecurity } from '../../../../types/protobuf';
+import type { Maybe } from '../../../../types/utils';
+import { truthy } from '../../../../utils/fp/predicates';
+import { logger } from '../../../../utils/logger';
+import { formatExpirationDateMMYYYY } from '../../../../utils/time/expiration-date';
+import { ImportProviderError } from '../../helpers/error';
+import { createImportFolderTree } from '../../helpers/folders';
+import {
+    getEmailOrUsername,
+    getImportedVaultName,
+    importCreditCardItem,
+    importCustomItem,
+    importIdentityItem,
+    importLoginItem,
+    importNoteItem,
+    importSshKeyItem,
+    importWifiItem,
+} from '../../helpers/transformers';
+import type { ImportReaderResult, ImportVault } from '../../types';
+import type { KeeperData } from './keeper.types';
+import {
+    extractKeeperExtraFields,
+    extractKeeperIdentity,
+    getKeeperBuiltinExtraFields,
+    getKeeperFolderPath,
+} from './keeper.utils';
+
+export const readKeeperData = async (file: File): Promise<ImportReaderResult> => {
+    const ignored: string[] = [];
+    const warnings: string[] = [];
+    const vaultItems: ItemImportIntent[] = [];
+
+    try {
+        const data = await file.text();
+        const parsedData = JSON.parse(data) as KeeperData;
+        const tree = createImportFolderTree({ separator: '\\' });
+
+        for (const item of parsedData.records) {
+            const type = item.$type ?? c('Label').t`Unknown`;
+            const title = item.title ?? '';
+            const folderId = tree.add(getKeeperFolderPath(item));
+
+            try {
+                const value = await (async (): Promise<Maybe<ItemImportIntent>> => {
+                    switch (item.$type) {
+                        /* If $type is undefined, then it's a "General" item type
+                         * which was the type for login items on older Keeper versions */
+                        case undefined:
+                        case 'login':
+                            return importLoginItem({
+                                name: title,
+                                note: item.notes,
+                                password: item.password,
+                                urls: [item.login_url],
+                                totp: item.custom_fields?.['$oneTimeCode::1'],
+                                extraFields: extractKeeperExtraFields(item.custom_fields, ['$oneTimeCode::1']),
+                                ...(await getEmailOrUsername(item.login)),
+                            });
+                        case 'encryptedNotes':
+                            return importNoteItem({
+                                name: title,
+                                note: item.notes,
+                                extraFields: extractKeeperExtraFields(item.custom_fields),
+                            });
+                        case 'bankCard':
+                            return importCreditCardItem({
+                                name: title,
+                                note: item.notes,
+                                cardholderName: item.custom_fields?.['$text:cardholderName:1'],
+                                number: item.custom_fields?.['$paymentCard::1']?.cardNumber,
+                                expirationDate: formatExpirationDateMMYYYY(
+                                    item.custom_fields?.['$paymentCard::1']?.cardExpirationDate ?? ''
+                                ),
+                                verificationNumber: item.custom_fields?.['$paymentCard::1']?.cardSecurityCode,
+                                pin: item.custom_fields?.['$pinCode::1'],
+                                extraFields: extractKeeperExtraFields(item.custom_fields, [
+                                    '$text:cardholderName:1',
+                                    '$paymentCard::1',
+                                    '$pinCode::1',
+                                ]),
+                            });
+                        case 'ssnCard':
+                        case 'contact':
+                            return importIdentityItem({
+                                name: item.title,
+                                note: item.notes,
+                                ...extractKeeperIdentity(item),
+                            });
+
+                        case 'sshKeys':
+                            return importSshKeyItem({
+                                name: item.title,
+                                note: item.notes,
+                                publicKey: item.custom_fields?.['$keyPair::1']?.publicKey,
+                                privateKey: item.custom_fields?.['$keyPair::1']?.privateKey,
+                                extraFields: getKeeperBuiltinExtraFields(item)
+                                    .concat(extractKeeperExtraFields(item.custom_fields, ['$keyPair::1']))
+                                    .filter(truthy),
+                            });
+
+                        case 'wifiCredentials':
+                            return importWifiItem({
+                                name: item.title,
+                                note: item.notes,
+                                ssid: item.custom_fields?.['$text:SSID:1'],
+                                security: WifiSecurity.UnspecifiedWifiSecurity,
+                                password: item.password,
+                                extraFields: extractKeeperExtraFields(item.custom_fields, ['$text:SSID:1']),
+                            });
+
+                        default:
+                            return importCustomItem({
+                                name: item.title,
+                                note: item.notes,
+                                extraFields: getKeeperBuiltinExtraFields(item)
+                                    .concat(extractKeeperExtraFields(item.custom_fields))
+                                    .filter(truthy),
+                            });
+                    }
+                })();
+
+                if (!value) ignored.push(`[${type}] ${title}`);
+                else vaultItems.push({ ...value, folderId });
+            } catch (err) {
+                ignored.push(`[${type}] ${title}`);
+                logger.warn('[Importer::Keeper]', err);
+            }
+        }
+
+        const vaults: ImportVault[] = [
+            { name: getImportedVaultName(), shareId: null, folders: tree.folders, items: vaultItems },
+        ];
+
+        return { vaults, ignored, warnings };
+    } catch (e) {
+        logger.warn('[Importer::Keeper]', e);
+        throw new ImportProviderError('Keeper', e);
+    }
+};

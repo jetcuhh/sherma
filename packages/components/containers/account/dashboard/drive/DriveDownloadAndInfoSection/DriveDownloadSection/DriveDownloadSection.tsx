@@ -1,0 +1,135 @@
+import { c } from 'ttag';
+
+import { ButtonLike } from '@proton/atoms/Button/ButtonLike';
+import { IcBrandAndroid } from '@proton/icons/icons/IcBrandAndroid';
+import { IcBrandApple } from '@proton/icons/icons/IcBrandApple';
+import { IcBrandMac } from '@proton/icons/icons/IcBrandMac';
+import { IcBrandWindows } from '@proton/icons/icons/IcBrandWindows';
+import { APPS, DESKTOP_PLATFORMS } from '@proton/shared/lib/constants';
+import macosPreview from '@proton/styles/assets/img/onboarding/drive-download-preview-macos.png';
+import windowsPreview from '@proton/styles/assets/img/onboarding/drive-download-preview-windows.png';
+import appleAppStoreImage from '@proton/styles/assets/img/vpn/download-section/apple-app-store.svg';
+import googlePlayStoreImage from '@proton/styles/assets/img/vpn/download-section/google-play-store.svg';
+
+import DashboardDownloadSection from '../../../shared/DashboardDownloadSection/DashboardDownloadSection';
+import useDownloadDesktopAppURL from '../../../shared/DashboardDownloadSection/useDownloadDesktopAppURL';
+import androidPreview from './images/download-preview-android.png';
+import iosPreview from './images/download-preview-ios.png';
+
+const DriveDownloadSection = () => {
+    const macOsDownloadUrl = useDownloadDesktopAppURL(APPS.PROTONDRIVE, DESKTOP_PLATFORMS.MACOS);
+    const windowsX64DownloadUrl = useDownloadDesktopAppURL(APPS.PROTONDRIVE, DESKTOP_PLATFORMS.WINDOWS_X64);
+    const windowsARMDownloadUrl = useDownloadDesktopAppURL(APPS.PROTONDRIVE, DESKTOP_PLATFORMS.WINDOWS_ARM);
+
+    const downloadData = [
+        {
+            title: () => c('Download').t`Mobile`,
+            tabs: [
+                {
+                    title: () => c('Download').t`iPhone/iPad`,
+                    icon: <IcBrandApple />,
+                    content: {
+                        image: iosPreview,
+                        hint: () => c('Download').t`Scan the QR code with your mobile device`,
+                        downloadButtons: [
+                            {
+                                title: () => c('Download').t`Download on the Apple App Store`,
+                                link: 'https://apps.apple.com/app/apple-store/id1509667851?pt=106513916&ct=wa_set_btn&mt=8',
+                                style: 'appstore' as const,
+                                image: appleAppStoreImage,
+                            },
+                        ],
+                    },
+                },
+                {
+                    title: () => c('Download').t`Android`,
+                    icon: <IcBrandAndroid />,
+                    content: {
+                        image: androidPreview,
+                        hint: () => {
+                            const downloadButton = (
+                                <ButtonLike
+                                    as="a"
+                                    size="small"
+                                    shape="underline"
+                                    color="norm"
+                                    key={'download-apk-button'}
+                                    href={'https://proton.me/download/DriveAndroid/ProtonDrive-Android.apk'}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                >
+                                    {c('Download').t`download the app (APK)`}
+                                </ButtonLike>
+                            );
+                            // translator : Scan the QR code with your mobile device. You can also download the app (APK) directly.
+                            return c('Download')
+                                .jt`Scan the QR code with your mobile device. You can also ${downloadButton} directly.`;
+                        },
+                        downloadButtons: [
+                            {
+                                title: () => c('Download').t`Get it on Google Play`,
+                                link: 'https://play.google.com/store/apps/details?id=me.proton.android.drive&referrer=utm_source\%3Dproton.me\%26utm_medium\%3Dweb\%26utm_campaign\%3Dwa_set_btn',
+                                style: 'appstore' as const,
+                                image: googlePlayStoreImage,
+                            },
+                        ],
+                    },
+                },
+            ],
+            enabled: true,
+        },
+        {
+            title: () => c('Download').t`Desktop`,
+            tabs: [
+                {
+                    title: () => c('Download').t`Windows`,
+                    icon: <IcBrandWindows />,
+                    content: {
+                        image: windowsPreview,
+                        downloadButtons: [
+                            {
+                                title: () => c('Download').t`Download for Windows`,
+                                links: [
+                                    {
+                                        title: () => c('Download').t`Windows 10/11 (x64)`,
+                                        link: windowsX64DownloadUrl,
+                                    },
+                                    {
+                                        title: () => c('Download').t`Windows 10/11 (ARM64)`,
+                                        link: windowsARMDownloadUrl,
+                                    },
+                                ],
+                            },
+                        ],
+                        footnote: {
+                            title: () => c('Download').t`Installation guide`,
+                            link: 'https://proton.me/support/proton-drive-windows-app',
+                        },
+                    },
+                },
+                {
+                    title: () => c('Download').t`macOS`,
+                    icon: <IcBrandMac />,
+                    content: {
+                        image: macosPreview,
+                        downloadButtons: [
+                            {
+                                title: () => c('Download').t`Download for macOS`,
+                                link: macOsDownloadUrl,
+                            },
+                        ],
+                        footnote: {
+                            title: () => c('Download').t`Installation guide`,
+                            link: 'https://proton.me/support/drive-macos-guide',
+                        },
+                    },
+                },
+            ],
+            enabled: true,
+        },
+    ];
+
+    return <DashboardDownloadSection downloadConfig={downloadData} app={APPS.PROTONDRIVE} />;
+};
+
+export default DriveDownloadSection;

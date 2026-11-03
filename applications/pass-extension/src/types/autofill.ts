@@ -1,0 +1,68 @@
+import type { CCFieldType } from '@protontech/autofill/types';
+
+import type { ItemContent, SelectedItem } from '@proton/pass/types/data/items';
+import type { Result } from '@proton/pass/types/utils';
+import type { CCItemData } from '@proton/pass/types/worker/data';
+import type { FormCredentials } from '@proton/pass/types/worker/form';
+
+import type { FrameField } from './frames';
+
+export type WithAutofillOrigin<T> = T &
+    FrameField & {
+        frameOrigin: string;
+        origin: string;
+    };
+
+type AutofillActionType = 'creditCard' | 'login' | 'identity' | 'email' | 'password';
+type AutofillItem = WithAutofillOrigin<SelectedItem & { notification?: string }>;
+type AutofillValue = WithAutofillOrigin<{ value: string }>;
+
+type AbstractAutofillDTO<T extends Record<AutofillActionType, any>> = {
+    [K in AutofillActionType]: { type: K } & T[K];
+}[AutofillActionType];
+
+export type AutofillActionDTO<T extends AutofillActionType = AutofillActionType> = Extract<
+    AbstractAutofillDTO<{
+        creditCard: AutofillItem;
+        login: AutofillItem;
+        identity: AutofillItem;
+        email: AutofillValue;
+        password: AutofillValue;
+    }>,
+    { type: T }
+>;
+
+export type AutofillSequence<T = {}> =
+    { status: 'start' } | ({ status: 'fill' } & T) | { status: 'completed'; refocus: FrameField };
+
+type AutofillStatus = AutofillSequence['status'];
+
+export type AutofillRequest<T extends AutofillStatus = AutofillStatus> = Extract<
+    AutofillSequence<
+        AbstractAutofillDTO<{
+            login: SelectedItem & { credentials: FormCredentials; field: FrameField; notification?: string };
+            identity: SelectedItem & { identity: ItemContent<'identity'>; field: FrameField };
+            /** Credit card autofill request payload. The data field is partial to support
+             * cross-origin autofill scenarios where sensitive fields (number, CVV) must be
+             * stripped when autofilling across origin boundaries. */
+            creditCard: SelectedItem & { data: Partial<CCItemData>; fields: FrameField[] };
+            email: { email: string; field: FrameField };
+            password: { password: string; field: FrameField };
+        }>
+    >,
+    { status: T }
+>;
+
+export type AutofillResult = Result<
+    AbstractAutofillDTO<{
+        /** Returns what fields where autofilled as part
+         * of the autofill request for the specific frame.
+         * We track autofilled fields to secure cross-frame
+         * filling ensuring we never autofill more than twice.. */
+        creditCard: { autofilled: CCFieldType[] };
+        login: Record<never, never>;
+        identity: Record<never, never>;
+        email: Record<never, never>;
+        password: Record<never, never>;
+    }>
+>;

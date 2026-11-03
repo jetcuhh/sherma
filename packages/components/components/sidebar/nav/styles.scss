@@ -1,0 +1,85 @@
+@use '~@proton/styles/scss/lib/config' as *;
+
+[data-sidebar-root] {
+	padding-block-start: $focus-ring-size;
+}
+
+[data-sidebar-header],
+[data-sidebar-leaf] {
+	text-align: start;
+	user-select: none;
+}
+
+[data-sidebar-header].interactive:focus-visible,
+[data-sidebar-leaf].interactive:focus-visible {
+	box-shadow:
+		inset 0 0 0 1px var(--focus-outline),
+		0 0 0 #{$focus-ring-size} var(--focus-ring);
+}
+
+[data-sidebar-leaf] {
+	text-decoration: none;
+	color: inherit;
+
+	&:hover .color-weak {
+		color: inherit;
+	}
+
+	&[aria-current='page'] {
+		color: var(--navigation-current-item-text-color);
+		font-weight: var(--font-weight-semibold);
+		background: var(--navigation-current-item-background-color);
+
+		&:hover {
+			background: var(--interaction-default-hover);
+		}
+	}
+}
+
+[data-sidebar-trigger] {
+	color: var(--text-weak);
+}
+
+[data-sidebar-header]:hover .color-weak,
+[data-sidebar-header]:hover [data-sidebar-trigger] {
+	color: inherit;
+}
+
+[data-sidebar-header][aria-expanded='true']:not(:hover) {
+	background-color: inherit;
+}
+
+// =========================
+// Depth 1 — top-level sections
+// =========================
+[data-sidebar-depth='1'] {
+	line-height: var(--space-6);
+
+	> [data-sidebar-header] {
+		font-weight: var(--font-weight-semibold);
+	}
+
+	&[data-state='closed'] {
+		color: var(--text-weak);
+	}
+
+	&[data-state='open'] {
+		> [data-sidebar-header] [data-sidebar-trigger] {
+			color: inherit;
+		}
+	}
+}
+
+// =========================
+// Depth 2 — nested sections
+// =========================
+[data-sidebar-depth='2'] {
+	line-height: var(--space-5);
+}
+
+// =========================
+// Depth 3 — padded leaf
+// =========================
+[data-sidebar-leaf][data-sidebar-depth='3'] {
+	padding-inline-start: var(--space-6);
+}

@@ -1,0 +1,84 @@
+import { type FC, type ReactElement, useMemo } from 'react';
+import { useSelector } from 'react-redux';
+
+import noop from '@proton/utils/noop';
+
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
+import { getFolderChildren } from '../../../lib/folders/folder.utils';
+import { isShareManageable } from '../../../lib/shares/share.predicates';
+import { isWritableVault } from '../../../lib/vaults/vault.predicates';
+import { selectFolders } from '../../../store/selectors/folders';
+import { selectActiveSharedWithMeCount } from '../../../store/selectors/shared';
+import { selectShare } from '../../../store/selectors/shares';
+import { selectDefaultVault, selectVisibleVaultsWithCount } from '../../../store/selectors/vaults';
+import { PassFeature } from '../../../types/api/features';
+import type { ShareType } from '../../../types/data/shares';
+import { useNavigationFilters } from '../../Navigation/NavigationFilters';
+import { useItemScope } from '../../Navigation/NavigationMatches';
+import { useVaultActions } from '../../Vault/VaultActionsProvider';
+import { VaultMenuAll } from './VaultMenuAll';
+import { VaultMenuItem } from './VaultMenuItem';
+import { VaultMenuTrash } from './VaultMenuTrash';
+import { type VaultMenuOption, getVaultOptionInfo } from './utils';
+
+import './VaultMenu.scss';
+
+type Props = {
+    onAction?: () => void;
+    render?: (selectedVaultOption: VaultMenuOption, menu: ReactElement) => ReactElement;
+};
+
+export const VaultMenu: FC<Props> = ({ render, onAction = noop }) => {
+    const { filters } = useNavigationFilters();
+    const { selectedShareId, selectedFolderId } = filters;
+    const scope = useItemScope();
+    const inTrash = scope === 'trash';
+
+    const vaults = useSelector(selectVisibleVaultsWithCount);
+    const defaultVault = useSelector(selectDefaultVault);
+    const selectedVault = useSelector(selectShare<ShareType.Vault>(selectedShareId));
+
+    const selectedVaultOption = getVaultOptionInfo(selectedVault || (inTrash ? 'trash' : 'all'));
+    const vaultActions = useVaultActions();
+    const totalSharedWithMe = useSelector(selectActiveSharedWithMeCount);
+    const foldersEnabled = useFeatureFlag(PassFeature.PassFolder);
+    const folders = useSelector(selectFolders);
+
+    const menu = useMemo(() => {
+        const totalItems = vaults.reduce<number>((subtotal, { count }) => subtotal + count, 0) + totalSharedWithMe;
+        const hasFolders =
+            foldersEnabled && vaults.some(({ shareId }) => getFolderChildren(folders[shareId]).has(null));
+
+        /* When the only vault is the auto-created default one, hide it so the
+         * sidebar just shows "All items" until the user creates another vault. */
+        const soleDefaultVault = vaults.length === 1 && !!defaultVault && vaults[0].shareId === defaultVault.shareId;
+
+        return (
+            <>
+                <VaultMenuAll count={totalItems} selected={scope === 'share' && !selectedShareId} onAction={onAction} />
+
+                {!soleDefaultVault &&
+                    vaults.map((vault) => (
+                        <VaultMenuItem
+                            key={vault.shareId}
+                            vault={vault}
+                            count={vault.count}
+                            label={vault.content.name}
+                            selected={scope === 'share' && selectedShareId === vault.shareId && !selectedFolderId}
+                            canMove={isWritableVault(vault) && vault.count > 0}
+                            canDelete={vault.owner}
+                            canInvite={!vault.shared}
+                            canManage={isShareManageable(vault)}
+                            canLeave={vault.shared && !vault.owner && !vault.groupId}
+                            withExpandButton={hasFolders}
+                            onAction={onAction}
+                        />
+                    ))}
+
+                <VaultMenuTrash selected={scope === 'trash'} onAction={onAction} />
+            </>
+        );
+    }, [vaults, defaultVault, vaultActions, selectedShareId, selectedFolderId, scope, totalSharedWithMe, foldersEnabled, folders]);
+
+    return render?.(selectedVaultOption, menu) ?? menu;
+};

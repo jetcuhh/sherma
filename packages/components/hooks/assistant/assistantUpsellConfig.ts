@@ -1,0 +1,50 @@
+import { CYCLE } from '@proton/payments/core/constants';
+import type { SelectedPlan } from '@proton/payments/core/subscription/selected-plan';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+
+import type { OpenCallbackProps } from '../../containers/payments/subscription/SubscriptionModalProvider';
+
+const getUpgradeCycles = (currentCycle = CYCLE.MONTHLY) => ({
+    cycle: currentCycle,
+    minimumCycle: currentCycle,
+    maximumCycle: currentCycle === CYCLE.MONTHLY ? CYCLE.YEARLY : currentCycle,
+});
+
+export const getAssistantUpsellConfigPlanAndCycle = (
+    user: UserModel,
+    isOrgAdmin: boolean,
+    selectedPlan: SelectedPlan,
+    useLumo: boolean
+): Pick<OpenCallbackProps, 'planIDs' | 'cycle' | 'minimumCycle' | 'maximumCycle'> | undefined => {
+    const cycles = getUpgradeCycles(selectedPlan.cycle);
+
+    if (isOrgAdmin) {
+        // if we already have addons, then we will use the current number of addons as starting addon number
+        // in the upsell
+        // if we don't, then we will use the number of members as starting number for addons
+        const addonsValue =
+            (useLumo ? selectedPlan.getTotal('MaxLumo') : selectedPlan.getTotal('MaxAI')) ||
+            selectedPlan.getTotalUsers();
+
+        // Update the selected plan with the new addon count
+        const updatedSelectedPlan = useLumo
+            ? selectedPlan.setLumoCount(addonsValue)
+            : selectedPlan.setScribeCount(addonsValue);
+
+        return {
+            planIDs: updatedSelectedPlan.planIDs,
+            ...cycles,
+        };
+    }
+
+    if (user.isPaid) {
+        const updatedSelectedPlan = useLumo ? selectedPlan.setLumoCount(1) : selectedPlan.setScribeCount(1);
+
+        return {
+            planIDs: updatedSelectedPlan.planIDs,
+            ...cycles,
+        };
+    }
+
+    return undefined;
+};

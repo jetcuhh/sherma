@@ -1,0 +1,129 @@
+import type { FC } from 'react';
+import { useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import Alert from '@proton/components/components/alert/Alert';
+import { IcEye } from '@proton/icons/icons/IcEye';
+import { IcEyeSlash } from '@proton/icons/icons/IcEyeSlash';
+import { IcThreeDotsVertical } from '@proton/icons/icons/IcThreeDotsVertical';
+import { IcTrash } from '@proton/icons/icons/IcTrash';
+
+import { useConfirm } from '../../../../hooks/useConfirm';
+import { useRequest } from '../../../../hooks/useRequest';
+import { getAddressId } from '../../../../lib/monitor/monitor.utils';
+import { AddressType, type MonitorAddress } from '../../../../lib/monitor/types';
+import {
+    deleteCustomAddress,
+    resolveAddressMonitor,
+    toggleAddressMonitor,
+} from '../../../../store/actions/creators/monitor';
+import { selectRequestInFlight } from '../../../../store/request/selectors';
+import { selectMonitorSettingByType } from '../../../../store/selectors/monitor';
+import { ConfirmationModal } from '../../../Confirmation/ConfirmationModal';
+import { DropdownMenuButton } from '../../../Layout/Dropdown/DropdownMenuButton';
+import { QuickActionsDropdown } from '../../../Layout/Dropdown/QuickActionsDropdown';
+import { useMonitor } from '../../MonitorContext';
+
+type Props = { resolved: boolean; disabled: boolean } & MonitorAddress;
+
+export const BreachActions: FC<Props> = ({ resolved, disabled, ...address }) => {
+    const { monitored, type, email } = address;
+    const { deleteAddress } = useMonitor();
+
+    const groupMonitored = useSelector(selectMonitorSettingByType(type));
+    const deleting = useSelector(selectRequestInFlight(deleteCustomAddress.requestID(email)));
+
+    const resolve = useRequest(resolveAddressMonitor, { initial: address });
+    const toggle = useRequest(toggleAddressMonitor, { initial: address });
+
+    const confirmResolve = useConfirm(() => resolve.dispatch(address));
+    const confirmToggle = useConfirm(() => toggle.dispatch({ ...address, monitor: !monitored }));
+    const confirmDelete = useConfirm(() => deleteAddress(getAddressId(address)));
+
+    return (
+        <div className="flex flex-nowrap gap-2">
+            {!resolved && (
+                <Button
+                    pill
+                    shape="solid"
+                    color="weak"
+                    onClick={confirmResolve.prompt}
+                    loading={resolve.loading}
+                    disabled={resolve.loading}
+                >
+                    {c('Action').t`Mark as resolved`}
+                </Button>
+            )}
+
+            <QuickActionsDropdown
+                className="shrink-0"
+                color="weak"
+                disabled={disabled}
+                icon={IcThreeDotsVertical}
+                originalPlacement="bottom-end"
+                pill
+                shape="solid"
+            >
+                <DropdownMenuButton
+                    disabled={!groupMonitored}
+                    icon={monitored ? IcEyeSlash : IcEye}
+                    label={monitored ? c('Action').t`Pause monitoring` : c('Action').t`Resume monitoring`}
+                    loading={toggle.loading}
+                    onClick={confirmToggle.prompt}
+                />
+                {address.type === AddressType.CUSTOM && (
+                    <DropdownMenuButton
+                        icon={IcTrash}
+                        label={c('Action').t`Remove`}
+                        loading={deleting}
+                        onClick={confirmDelete.prompt}
+                    />
+                )}
+            </QuickActionsDropdown>
+
+            {confirmResolve.pending && (
+                <ConfirmationModal
+                    open
+                    onClose={confirmResolve.cancel}
+                    onSubmit={confirmResolve.confirm}
+                    title={c('Title').t`Mark as resolved?`}
+                    submitText={c('Action').t`Confirm`}
+                >
+                    <Alert className="mb-4" type="info">
+                        {c('Info')
+                            .t`All current breaches will be marked as resolved. In case of future data breaches, you'll be notified.`}
+                    </Alert>
+                </ConfirmationModal>
+            )}
+
+            {confirmToggle.pending && (
+                <ConfirmationModal
+                    open
+                    onClose={confirmToggle.cancel}
+                    onSubmit={confirmToggle.confirm}
+                    title={monitored ? c('Title').t`Pause monitoring?` : c('Title').t`Resume monitoring?`}
+                    submitText={c('Action').t`Confirm`}
+                >
+                    <Alert className="mb-4" type="info">
+                        {monitored
+                            ? c('Info').t`You will no longer be notified of data breaches for this email address.`
+                            : c('Info').t`You will be notified of data breaches for this email address.`}
+                    </Alert>
+                </ConfirmationModal>
+            )}
+
+            {confirmDelete.pending && (
+                <ConfirmationModal
+                    open
+                    onClose={confirmDelete.cancel}
+                    onSubmit={confirmDelete.confirm}
+                    title={c('Title').t`Remove email address?`}
+                    submitText={c('Action').t`Confirm`}
+                    alertText={c('Warning').t`This email address will no longer be monitored for data breaches.`}
+                />
+            )}
+        </div>
+    );
+};

@@ -1,0 +1,104 @@
+import { c } from 'ttag';
+
+import type { PLANS } from '@proton/payments/core/constants';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import type { FreePlanDefault, Plan } from '@proton/shared/lib/payments/plan/interface';
+
+import type { ModalProps } from '../../../components/modalTwo/Modal';
+import Modal from '../../../components/modalTwo/Modal';
+import ModalContent from '../../../components/modalTwo/ModalContent';
+import ModalHeader from '../../../components/modalTwo/ModalHeader';
+import type { ModalTwoPromiseHandlers } from '../../../components/modalTwo/useModalTwo';
+import useCancellationTelemetry from './cancellationFlow/useCancellationTelemetry';
+import { UpsellModalPanel } from './panels/UpsellModalPanel';
+import { useUpsellModal } from './useUpsellModal';
+
+type UpsellResult = {
+    status: 'cancelled' | 'kept' | 'upsold';
+};
+
+type PromiseHandlers = ModalTwoPromiseHandlers<UpsellResult>;
+
+export type PlanProps = {
+    freePlan: FreePlanDefault;
+    plans: Plan[];
+    subscription: Subscription;
+    upsellPlanId: PLANS;
+};
+
+const UpsellModal = ({
+    freePlan,
+    onResolve,
+    onClose,
+    onReject,
+    plans,
+    subscription,
+    upsellPlanId,
+    ...rest
+}: Omit<ModalProps, 'onSubmit'> & PlanProps & PromiseHandlers) => {
+    const { sendUpsellModalCancelReport, sendUpsellModalCloseReport, sendUpsellModalUpsellReport } =
+        useCancellationTelemetry();
+
+    const {
+        currency,
+        downgradedPlanAmount,
+        downgradedPlanName,
+        freePlanFeatures,
+        freePlanTitle,
+        upsellPlanAmount,
+        upsellPlanFeatures,
+        upsellPlanName,
+        upsellSavings,
+    } = useUpsellModal({ freePlan, plans, subscription, upsellPlanId });
+
+    const handleConfirmCancel = () => {
+        sendUpsellModalCancelReport();
+        onResolve({ status: 'cancelled' });
+        onClose?.();
+    };
+
+    const handleUpsell = () => {
+        sendUpsellModalUpsellReport();
+        onResolve({ status: 'upsold' });
+        onClose?.();
+    };
+
+    const handleKeepSubscription = () => {
+        onResolve({ status: 'kept' });
+        sendUpsellModalCloseReport();
+        onClose?.();
+    };
+
+    return (
+        <Modal onClose={handleKeepSubscription} size="xlarge" className="pb-4" {...rest}>
+            <ModalHeader
+                subline={c('Cancellation upsell')
+                    .t`Try ${upsellPlanName} and retain access to all premium email and calendar features.`}
+                title={c('Cancellation upsell').t`Save money with ${upsellPlanName}`}
+            />
+            <ModalContent>
+                <div className="flex flex-column md:flex-row flex-nowrap justify-space-between items-stretch gap-6">
+                    <UpsellModalPanel
+                        currency={currency}
+                        downgradedPlanAmount={downgradedPlanAmount}
+                        downgradedPlanName={downgradedPlanName}
+                        features={upsellPlanFeatures}
+                        isUpsell={true}
+                        onClick={handleUpsell}
+                        planName={upsellPlanName}
+                        upsellPlanAmount={upsellPlanAmount}
+                        upsellSavings={c('Cancellation upsell').t`Save ${upsellSavings}`}
+                    />
+                    <UpsellModalPanel
+                        features={freePlanFeatures}
+                        isUpsell={false}
+                        onClick={handleConfirmCancel}
+                        planName={freePlanTitle}
+                    />
+                </div>
+            </ModalContent>
+        </Modal>
+    );
+};
+
+export default UpsellModal;

@@ -1,0 +1,90 @@
+/**
+ * Payment Telemetry API
+ *
+ * Central export for all payment telemetry functions.
+ *
+ * @example
+ * import { checkoutTelemetry } from '@proton/payments/telemetry/telemetry';
+ *
+ * // Initialization
+ * checkoutTelemetry.reportInitialization({ ... });
+ *
+ * // User changes
+ * checkoutTelemetry.reportSubscriptionEstimationChange({ ... });
+ *
+ * // Payment funnel
+ * checkoutTelemetry.reportPayment({ ... });
+ *
+ * // Subscription modal specific
+ * checkoutTelemetry.subscriptionContainer.reportChangeStep({ ... });
+ *
+ */
+import { reportBillingAddressEditSuccess } from './billing-address';
+import {
+    reportAddLumo,
+    reportAddMeet,
+    reportAddPass,
+    reportBillingCountryChange,
+    reportGuardShown,
+    reportInitialization,
+    reportPayment,
+    reportSubscriptionEstimationChange,
+    reportUpsellModalOpen,
+} from './shared-checkout-telemetry';
+import {
+    reportAudienceChange,
+    reportChangeStep,
+    reportCheckoutCondensedAddonsExperimentSeen,
+    reportClosedByUser,
+    reportPlanDescriptionInteraction,
+    reportVpn2024AddonsExperimentSeen,
+} from './subscription-container';
+
+/**
+ * Checkout telemetry API.
+ *
+ * Contains all telemetry reporting functions organized by scope:
+ * - Top-level functions: Used across all checkout flows
+ * - `subscriptionContainer`: Events specific to subscription modification modal
+ */
+export const checkoutTelemetry = {
+    /** Report checkout component initialization. Call once on mount. */
+    reportInitialization,
+    /** Report subscription parameter changes (plan, cycle, currency, etc.) */
+    reportSubscriptionEstimationChange,
+    /** Report billing country/state changes */
+    reportBillingCountryChange,
+    /** Report Add Lumo button interaction (first time only) */
+    reportAddLumo,
+    /** Report Add Meet button interaction (first time only) */
+    reportAddMeet,
+    /** Report Add Pass button interaction (every add) */
+    reportAddPass,
+    /** Report payment funnel events (attempt, verification, success, etc.) */
+    reportPayment,
+    /** Report that the subscription modal opened from an upsell surface. Call once per modal open. */
+    reportUpsellModalOpen,
+    /** Report that the guard banner was shown */
+    reportGuardShown,
+    /** Report a successful save in the "Edit billing address" modal */
+    reportBillingAddressEditSuccess,
+
+    /**
+     * Events specific to the subscription modification modal.
+     * Only use these in the subscription modification flow.
+     */
+    subscriptionContainer: {
+        /** Report audience tab clicks (b2c/family/b2b) */
+        reportAudienceChange,
+        /** Report plan description expand/collapse */
+        reportPlanDescriptionInteraction,
+        /** Report modal close by user (not after success) */
+        reportClosedByUser,
+        /** Report step navigation (plan_selection ↔ checkout) */
+        reportChangeStep,
+        /** Report first exposure to the VPN 2024 addons experiment variant */
+        reportVpn2024AddonsExperimentSeen,
+        /** Report first exposure to the condensed add-ons checkout experiment variant (eligible users only) */
+        reportCheckoutCondensedAddonsExperimentSeen,
+    },
+};

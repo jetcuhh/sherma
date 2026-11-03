@@ -1,0 +1,101 @@
+import type { Runtime } from 'webextension-polyfill';
+
+import type { PassConfig } from '../hooks/usePassConfig';
+import type { ReauthActionPayload } from '../lib/auth/reauth';
+import type { AuthService } from '../lib/auth/service';
+import type { AuthStore } from '../lib/auth/store';
+import type { PassCoreProxy } from '../lib/core/core.types';
+import type { FilePortWriter } from '../lib/file-storage/types';
+import type { ForceSyncStore } from '../lib/sync/force-sync';
+import type { TelemetryEvent } from '../types/data/telemetry';
+import type { ContextBridgeApi } from '../types/desktop';
+import type { Maybe, MaybeNull, MaybePromise } from '../types/utils';
+import type { EncryptedPassCache } from '../types/worker/cache';
+import type { ClientEndpoint } from '../types/worker/runtime';
+import type { AppState, AppStatus, LocalStoreData } from '../types/worker/state';
+import type { AnyStorage } from '../types/worker/storage';
+import type { Notification } from './actions/enhancers/notification';
+import type { SagaEvent } from './events';
+import type { FeatureFlagAndVariantState, rootReducer } from './reducers';
+import type { ProxiedSettings } from './reducers/settings';
+
+export type State = ReturnType<typeof rootReducer>;
+type Telemetry = { start: () => void; stop: () => void; push: (event: TelemetryEvent) => Promise<boolean> };
+export type PassSaga = (options: RootSagaOptions) => Generator;
+type PassBootResult =
+    | { ok: true; fromCache: boolean; offline: boolean; version?: string; reauth?: ReauthActionPayload }
+    | { ok: false; clearCache: boolean; offline: boolean };
+
+export interface RootSagaOptions {
+    /** defines the current client type */
+    endpoint: ClientEndpoint;
+    /** extension id when running as a web extension, undefined otherwise */
+    extensionId?: Maybe<string>;
+
+    getConfig: () => PassConfig;
+    getCore: () => PassCoreProxy;
+    getAppState: () => AppState;
+    getAuthService: () => AuthService;
+    getAuthStore: () => AuthStore;
+    getSettings: () => MaybePromise<ProxiedSettings>;
+    getTelemetry: () => MaybeNull<Telemetry>;
+
+    setAppStatus: (status: AppStatus) => void;
+
+    /** Retrieves the port by name in the extension */
+    getPort?: (name: string) => Maybe<Runtime.Port>;
+    /** Writes a file via port messaging [fallback] */
+    getPortWriter?: FilePortWriter;
+
+    /** Fine-tune the event channel polling interval - this will
+     * be called after each polling run to set the next value */
+    getPollingInterval: () => number;
+    /** Define the initial polling delay : this is especially useful
+     * to avoid immediately spawning the event channels after the
+     * service worker was killed by the browser */
+    getPollingDelay?: (pollingInterval: number, lastCalledAt?: number) => number;
+
+    /** Retrieves the encrypted cache from whatever storage
+     * the current client is using for persisting data */
+    getCache: () => Promise<Partial<EncryptedPassCache>>;
+    /** Persists the stringified encrypted cache to whatever storage the
+     * current client is using for persisting data */
+    setCache: (encrypted: EncryptedPassCache) => Promise<void>;
+
+    /** Retrieves storage for the given client */
+    getStorage?: () => AnyStorage<LocalStoreData>;
+
+    /** Per-account folders rollout force-sync state */
+    getForceSyncStore?: () => ForceSyncStore;
+
+    /** Retrieves the IPC bridge when running in Electron */
+    getDesktopBridge?: () => ContextBridgeApi;
+
+    /** Callback with the result of the boot sequence. The `clearCache`
+     * flag indicates if the boot failure should result in a cache wipe */
+    onBoot?: (result: PassBootResult) => void;
+
+    /** Optional callback to mutate state before initial hydration */
+    onBeforeHydrate?: (state: State, fromCache: boolean) => MaybePromise<State>;
+
+    /** Callback used when account locale is updated */
+    onLocaleUpdated?: (locale: string) => void;
+
+    /** Callback used when the local beta flag is updated */
+    onBetaUpdated?: (enabled: boolean) => MaybePromise<void>;
+
+    /** Callback for handling notification effects */
+    onNotification: (notification: Notification) => void;
+
+    /** Callback for propagating feature flags updates */
+    onFeatureFlags?: (features: FeatureFlagAndVariantState) => void;
+
+    /** Called whenever some changes were committed to the items state */
+    onItemsUpdated: (options?: { report: boolean }) => MaybePromise<void>;
+
+    /** Callback triggered when settings have been updated: leverage
+     * this to persist the settings to storage if needed. */
+    onSettingsUpdated?: (settings: ProxiedSettings) => MaybePromise<void>;
+
+    publish: (evt: SagaEvent) => void;
+}

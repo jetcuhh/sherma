@@ -1,0 +1,46 @@
+import type { TelemetryEvent } from '../../types/data/telemetry';
+import type { Maybe } from '../../types/utils';
+import type { AnyStorage } from '../../types/worker/storage';
+import type { EventDispatcher } from '../../utils/event/dispatcher';
+import { createEventDispatcher } from '../../utils/event/dispatcher';
+import { logger } from '../../utils/logger';
+import { merge } from '../../utils/object/merge';
+import type { AbstractAlarm } from '../../utils/time/alarm';
+import { UNIX_HOUR, UNIX_MINUTE } from '../../utils/time/constants';
+import { getEpoch } from '../../utils/time/epoch';
+import { sendTelemetryBundle } from './telemetry.requests';
+
+const MIN_DT = ENV === 'production' ? 6 * UNIX_HOUR : UNIX_MINUTE; /* DEV: chrome alarms need to be >60 seconds */
+const MAX_DT = ENV === 'production' ? 12 * UNIX_HOUR : 2 * UNIX_MINUTE;
+
+type TelemetryServiceOptions<StorageKey extends string> = {
+    alarm: AbstractAlarm;
+    storage: AnyStorage<Record<StorageKey, string>>;
+    getStorageKey: () => StorageKey;
+    getEnabled: () => boolean;
+    getUserTier: () => Maybe<string>;
+};
+
+export const createCoreTelemetryService = <StorageKey extends string>({
+    alarm,
+    storage,
+    getEnabled,
+    getStorageKey,
+    getUserTier,
+}: TelemetryServiceOptions<StorageKey>) =>
+    createEventDispatcher<TelemetryEvent, StorageKey>({
+        id: 'Telemetry',
+        alarm,
+        maxRetries: 2,
+        storage,
+        dispatch: sendTelemetryBundle,
+        getEnabled,
+        getSendTime: () => getEpoch() + MIN_DT + Math.floor(Math.random() * (MAX_DT - MIN_DT)),
+        getStorageKey,
+        prepare: (event) => {
+            logger.info(`[Telemetry] Adding ${event.Event} to current bundle`);
+            return merge(event, { Dimensions: { user_tier: getUserTier() } });
+        },
+    });
+
+export type TelemetryService = EventDispatcher<TelemetryEvent>;

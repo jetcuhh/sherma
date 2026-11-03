@@ -1,0 +1,90 @@
+import type { FC, ReactNode } from 'react';
+import { useSelector } from 'react-redux';
+
+import { Form, FormikProvider } from 'formik';
+import { c } from 'ttag';
+
+import { IcChevronLeft } from '@proton/icons/icons/IcChevronLeft';
+import { IcCrossBig } from '@proton/icons/icons/IcCrossBig';
+
+import { useInviteForm } from '../../../hooks/invite/useInviteForm';
+import { AccessTarget } from '../../../lib/access/types';
+import { selectShareOrThrow } from '../../../store/selectors/shares';
+import type { SelectedShare } from '../../../types/data/items';
+import type { ShareType } from '../../../types/data/shares';
+import type { VaultInviteFormValues } from '../../../types/forms/invite';
+import { SidebarModal } from '../../Layout/Modal/SidebarModal';
+import { Panel } from '../../Layout/Panel/Panel';
+import { PanelHeader } from '../../Layout/Panel/PanelHeader';
+import { useInviteActions } from '../InviteContext';
+import type { InviteStepAttributes } from '../Steps/InviteStepActions';
+import { InviteStepActions } from '../Steps/InviteStepActions';
+import { FORM_ID, VaultInviteForm } from './VaultInviteForm';
+
+export const VaultInviteCreate: FC<SelectedShare> = ({ shareId }) => {
+    const { close, manageVaultAccess } = useInviteActions();
+    const vault = useSelector(selectShareOrThrow<ShareType.Vault>(shareId));
+
+    const { form, emailFieldRef, validator, loading } = useInviteForm<VaultInviteFormValues>({
+        onSuccess: ({ shareId }) => manageVaultAccess(shareId),
+        initialValues: {
+            step: 'members',
+            members: [],
+            target: AccessTarget.Vault,
+            shareId,
+        },
+    });
+
+    const attributes = ((): InviteStepAttributes => {
+        const submitDisabled = loading || validator?.loading || !form.isValid;
+
+        switch (form.values.step) {
+            case 'members':
+                return {
+                    closeAction: close,
+                    closeIcon: IcCrossBig,
+                    closeLabel: c('Action').t`Close`,
+                    submitDisabled,
+                    submitText: c('Action').t`Continue`,
+                };
+
+            case 'permissions':
+                return {
+                    closeAction: () => form.setFieldValue('step', 'members'),
+                    closeIcon: IcChevronLeft,
+                    closeLabel: c('Action').t`Back`,
+                    submitDisabled,
+                    submitText: c('Action').t`Continue`,
+                };
+
+            case 'review':
+                return {
+                    closeAction: () => form.setFieldValue('step', 'permissions'),
+                    closeIcon: IcChevronLeft,
+                    closeLabel: c('Action').t`Back`,
+                    submitDisabled,
+                    submitLoading: loading,
+                    submitText: vault.shared ? c('Action').t`Send invite` : c('Action').t`Share vault`,
+                };
+        }
+    })();
+
+    return (
+        <SidebarModal open className={`pass-invite--${form.values.step}`}>
+            {(didEnter): ReactNode => (
+                <Panel loading={loading} header={<PanelHeader actions={InviteStepActions(FORM_ID, attributes)} />}>
+                    <FormikProvider value={form}>
+                        <Form id={FORM_ID} className="flex-1">
+                            <VaultInviteForm
+                                form={form}
+                                autoFocus={didEnter}
+                                ref={emailFieldRef}
+                                validator={validator}
+                            />
+                        </Form>
+                    </FormikProvider>
+                </Panel>
+            )}
+        </SidebarModal>
+    );
+};

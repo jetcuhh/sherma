@@ -1,0 +1,86 @@
+import type { FC, ReactNode } from 'react';
+
+import { Form, FormikProvider } from 'formik';
+import { c } from 'ttag';
+
+import { IcChevronLeft } from '@proton/icons/icons/IcChevronLeft';
+import { IcCrossBig } from '@proton/icons/icons/IcCrossBig';
+
+import { useInviteForm } from '../../../hooks/invite/useInviteForm';
+import { AccessTarget } from '../../../lib/access/types';
+import type { SelectedItem } from '../../../types/data/items';
+import type { ItemInviteFormValues } from '../../../types/forms/invite';
+import { SidebarModal } from '../../Layout/Modal/SidebarModal';
+import { Panel } from '../../Layout/Panel/Panel';
+import { PanelHeader } from '../../Layout/Panel/PanelHeader';
+import { useInviteActions } from '../InviteContext';
+import type { InviteStepAttributes } from '../Steps/InviteStepActions';
+import { InviteStepActions } from '../Steps/InviteStepActions';
+import { FORM_ID, ItemInviteForm } from './ItemInviteForm';
+
+export const ItemInviteCreate: FC<SelectedItem> = ({ shareId, itemId }) => {
+    const { close, manageItemAccess } = useInviteActions();
+
+    const { form, emailFieldRef, validator, loading } = useInviteForm<ItemInviteFormValues>({
+        onSuccess: ({ shareId, itemId }) => manageItemAccess(shareId, itemId!),
+        initialValues: {
+            itemId,
+            members: [],
+            shareId,
+            target: AccessTarget.Item,
+            step: 'members',
+        },
+    });
+
+    const attributes = ((): InviteStepAttributes => {
+        const submitDisabled = loading || validator?.loading || !form.isValid;
+
+        switch (form.values.step) {
+            case 'members':
+                return {
+                    closeAction: close,
+                    closeIcon: IcCrossBig,
+                    closeLabel: c('Action').t`Close`,
+                    submitDisabled,
+                    submitText: c('Action').t`Continue`,
+                };
+            case 'permissions':
+                return {
+                    closeAction: () => form.setFieldValue('step', 'members'),
+                    closeIcon: IcChevronLeft,
+                    closeLabel: c('Action').t`Back`,
+                    submitDisabled,
+                    submitText: c('Action').t`Continue`,
+                };
+
+            case 'review':
+                return {
+                    closeAction: () => form.setFieldValue('step', 'permissions'),
+                    closeIcon: IcChevronLeft,
+                    closeLabel: c('Action').t`Back`,
+                    submitDisabled,
+                    submitLoading: loading,
+                    submitText: c('Action').t`Share item`,
+                };
+        }
+    })();
+
+    return (
+        <SidebarModal open className={`pass-invite--${form.values.step}`}>
+            {(didEnter): ReactNode => (
+                <Panel loading={loading} header={<PanelHeader actions={InviteStepActions(FORM_ID, attributes)} />}>
+                    <FormikProvider value={form}>
+                        <Form id={FORM_ID} className="flex-1">
+                            <ItemInviteForm
+                                autoFocus={didEnter}
+                                form={form}
+                                ref={emailFieldRef}
+                                validator={validator}
+                            />
+                        </Form>
+                    </FormikProvider>
+                </Panel>
+            )}
+        </SidebarModal>
+    );
+};

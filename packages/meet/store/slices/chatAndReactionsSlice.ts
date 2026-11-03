@@ -1,0 +1,267 @@
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
+
+import type {
+    ChatMessageReactions,
+    ChatMessageStatus,
+    MeetChatMessage,
+    ParticipantEventRecord,
+} from '../../types/types';
+import { isChatThreadExpanded } from '../../utils/isChatThreadExpanded';
+import type { MeetState } from '../rootReducer';
+
+interface ChatReactionRef {
+    messageId: string;
+    emoji: string;
+    identity: string;
+}
+
+export interface MeetingChatAndReactionsState {
+    draftMessage: string;
+    chatMessages: MeetChatMessage[];
+    events: ParticipantEventRecord[];
+    raisedHands: string[];
+    activeReactions: Record<string, { emoji: string; timestamp: number }>;
+    reactionEventIndex: Record<string, ChatReactionRef>;
+}
+
+const initialState: MeetingChatAndReactionsState = {
+    draftMessage: '',
+    chatMessages: [],
+    events: [],
+    raisedHands: [],
+    activeReactions: {},
+    reactionEventIndex: {},
+};
+
+const slice = createSlice({
+    name: 'meetingChatAndReactions',
+    initialState,
+    reducers: {
+        setDraftMessage: (state, action: PayloadAction<string>) => {
+            state.draftMessage = action.payload;
+        },
+        addChatMessages: (state, action: PayloadAction<MeetChatMessage[]>) => {
+            state.chatMessages = [...state.chatMessages, ...action.payload];
+        },
+        updateChatMessageStatus: (state, action: PayloadAction<{ messageId: string; status: ChatMessageStatus }>) => {
+            const { messageId, status } = action.payload;
+            const message = state.chatMessages.find((m) => m.id === messageId);
+            if (!message) {
+                return;
+            }
+            message.status = status;
+        },
+        removeChatMessage: (state, action: PayloadAction<{ messageId: string }>) => {
+            state.chatMessages = state.chatMessages.filter((m) => m.id !== action.payload.messageId);
+        },
+        markChatMessagesAsSeen: (state) => {
+            // Opening the chat sidebar reveals root-level messages and replies of expanded threads.
+            // Replies inside a collapsed thread stay hidden, so they remain unseen until the thread is
+            // expanded, and the collapsed thread carries a badge for them.
+            const collapsedRootIds = new Set(
+                state.chatMessages.filter((m) => !isChatThreadExpanded(m)).map((m) => m.id)
+            );
+            state.chatMessages = state.chatMessages.map((message) => {
+                const isReply = !!message.topicId && message.topicId !== message.id;
+                const isInCollapsedThread = isReply && collapsedRootIds.has(message.topicId as string);
+                return isInCollapsedThread ? message : { ...message, seen: true };
+            });
+        },
+        setChatThreadExpanded: (state, action: PayloadAction<{ messageId: string; expanded: boolean }>) => {
+            const { messageId, expanded } = action.payload;
+            const root = state.chatMessages.find((m) => m.id === messageId);
+            if (!root) {
+                return;
+            }
+            root.expanded = expanded;
+            // Opening a thread reveals its replies, so they are considered seen.
+            if (expanded) {
+                state.chatMessages.forEach((m) => {
+                    if (m.id !== messageId && m.topicId === messageId) {
+                        m.seen = true;
+                    }
+                });
+            }
+        },
+        setChatThreadReplyDraft: (state, action: PayloadAction<{ messageId: string; draft: string }>) => {
+            const { messageId, draft } = action.payload;
+            const root = state.chatMessages.find((m) => m.id === messageId);
+            if (!root) {
+                return;
+            }
+            root.replyDraft = draft;
+        },
+        // Used by the legacy chat handling path (MeetNewChatHandling disabled).
+        toggleChatMessageReaction: (
+            state,
+            action: PayloadAction<{ messageId: string; emoji: string; identity: string }>
+        ) => {
+            const msg = state.chatMessages.find((m) => m.id === action.payload.messageId);
+            if (!msg) {
+                return;
+            }
+            if (!msg.reactions) {
+                msg.reactions = {};
+            }
+            const existing = msg.reactions[action.payload.emoji] ?? [];
+            if (existing.includes(action.payload.identity)) {
+                msg.reactions[action.payload.emoji] = existing.filter((id) => id !== action.payload.identity);
+                if (msg.reactions[action.payload.emoji].length === 0) {
+                    delete msg.reactions[action.payload.emoji];
+                }
+            } else {
+                msg.reactions[action.payload.emoji] = [...existing, action.payload.identity];
+            }
+        },
+        addChatMessageReaction: (
+            state,
+            action: PayloadAction<{ reactionId: string; messageId: string; emoji: string; identity: string }>
+        ) => {
+            const { reactionId, messageId, emoji, identity } = action.payload;
+            const msg = state.chatMessages.find((m) => m.id === messageId);
+            if (!msg) {
+                return;
+            }
+            if (!msg.reactions) {
+                msg.reactions = {};
+            }
+            const existing = msg.reactions[emoji] ?? [];
+            if (!existing.includes(identity)) {
+                msg.reactions[emoji] = [...existing, identity];
+            }
+            state.reactionEventIndex[reactionId] = { messageId, emoji, identity };
+        },
+        removeChatMessageReaction: (state, action: PayloadAction<{ replacesId: string; identity: string }>) => {
+            const { replacesId, identity } = action.payload;
+            const ref = state.reactionEventIndex[replacesId];
+            // Only the participant who created the reaction may remove it.
+            if (!ref || ref.identity !== identity) {
+                return;
+            }
+            const msg = state.chatMessages.find((m) => m.id === ref.messageId);
+            if (msg?.reactions?.[ref.emoji]) {
+                msg.reactions[ref.emoji] = msg.reactions[ref.emoji].filter((id) => id !== ref.identity);
+                if (msg.reactions[ref.emoji].length === 0) {
+                    delete msg.reactions[ref.emoji];
+                }
+            }
+            delete state.reactionEventIndex[replacesId];
+        },
+        addEvent: (state, action: PayloadAction<ParticipantEventRecord[]>) => {
+            state.events = [...state.events, ...action.payload];
+        },
+        raiseHand: (state, action: PayloadAction<string>) => {
+            if (!state.raisedHands.includes(action.payload)) {
+                state.raisedHands = [...state.raisedHands, action.payload];
+            }
+        },
+        lowerHand: (state, action: PayloadAction<string>) => {
+            state.raisedHands = state.raisedHands.filter((identity) => identity !== action.payload);
+            delete state.activeReactions[action.payload];
+        },
+        setActiveReaction: (state, action: PayloadAction<{ identity: string; emoji: string; timestamp: number }>) => {
+            state.activeReactions[action.payload.identity] = {
+                emoji: action.payload.emoji,
+                timestamp: action.payload.timestamp,
+            };
+        },
+        clearActiveReaction: (state, action: PayloadAction<{ identity: string; timestamp: number }>) => {
+            if (state.activeReactions[action.payload.identity]?.timestamp === action.payload.timestamp) {
+                delete state.activeReactions[action.payload.identity];
+            }
+        },
+        resetChatAndReactions: (state) => {
+            state.draftMessage = initialState.draftMessage;
+            state.chatMessages = initialState.chatMessages;
+            state.events = initialState.events;
+            state.raisedHands = initialState.raisedHands;
+            state.activeReactions = initialState.activeReactions;
+            state.reactionEventIndex = initialState.reactionEventIndex;
+        },
+    },
+});
+
+export const {
+    setDraftMessage,
+    addChatMessages,
+    updateChatMessageStatus,
+    removeChatMessage,
+    toggleChatMessageReaction,
+    addChatMessageReaction,
+    removeChatMessageReaction,
+    addEvent,
+    resetChatAndReactions,
+    markChatMessagesAsSeen,
+    setChatThreadExpanded,
+    setChatThreadReplyDraft,
+    raiseHand,
+    lowerHand,
+    setActiveReaction,
+    clearActiveReaction,
+} = slice.actions;
+
+export const selectDraftMessage = (state: MeetState) => {
+    return state.meetingChatAndReactions.draftMessage;
+};
+
+export const selectChatMessages = (state: MeetState) => {
+    return state.meetingChatAndReactions.chatMessages;
+};
+
+export const selectEvents = (state: MeetState) => {
+    return state.meetingChatAndReactions.events;
+};
+
+export const selectChatMessage = (state: MeetState, messageId: string): MeetChatMessage | undefined => {
+    return state.meetingChatAndReactions.chatMessages.find((m) => m.id === messageId);
+};
+
+export const selectChatThreadExpanded = (state: MeetState, messageId: string): boolean => {
+    const root = state.meetingChatAndReactions.chatMessages.find((m) => m.id === messageId);
+    return !root || isChatThreadExpanded(root);
+};
+
+export const selectChatThreadReplyDraft = (state: MeetState, messageId: string): string => {
+    return state.meetingChatAndReactions.chatMessages.find((m) => m.id === messageId)?.replyDraft ?? '';
+};
+
+export const selectRaisedHands = (state: MeetState) => {
+    return state.meetingChatAndReactions.raisedHands;
+};
+
+export const selectParticipantHasRaisedHand = (state: MeetState, identity: string): boolean => {
+    return state.meetingChatAndReactions.raisedHands.includes(identity);
+};
+
+export const selectActiveReaction = (state: MeetState, identity: string) => {
+    return state.meetingChatAndReactions.activeReactions[identity]?.emoji;
+};
+
+export const selectActiveReactions = (state: MeetState) => {
+    return state.meetingChatAndReactions.activeReactions;
+};
+
+const EMPTY_REACTIONS: ChatMessageReactions = {};
+export const selectChatMessageReactions = (state: MeetState, messageId: string) => {
+    return state.meetingChatAndReactions.chatMessages.find((m) => m.id === messageId)?.reactions ?? EMPTY_REACTIONS;
+};
+
+/**
+ * Find the reaction event id created by `identity` for the given message/emoji, if any.
+ * Used to derive the `replaces_id` required to unreact.
+ */
+export const selectChatReactionId = (
+    state: MeetState,
+    messageId: string,
+    emoji: string,
+    identity: string
+): string | undefined => {
+    const index = state.meetingChatAndReactions.reactionEventIndex;
+    return Object.keys(index).find((reactionId) => {
+        const ref = index[reactionId];
+        return ref.messageId === messageId && ref.emoji === emoji && ref.identity === identity;
+    });
+};
+
+export const chatAndReactionsReducer = { meetingChatAndReactions: slice.reducer };

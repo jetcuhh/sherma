@@ -1,0 +1,276 @@
+import { type ElementType, createContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+
+import { Portal } from '@proton/atoms/Portal/Portal';
+import type { HotkeyTuple } from '@proton/hooks/useHotkeys';
+import { useHotkeys } from '@proton/hooks/useHotkeys';
+import useInstance from '@proton/hooks/useInstance';
+import usePrevious from '@proton/hooks/usePrevious';
+import type { PolymorphicPropsWithoutRef } from '@proton/react-polymorphic-types';
+import { modalTwoRootClassName } from '@proton/shared/lib/busy/busy';
+import clsx from '@proton/utils/clsx';
+import generateUID from '@proton/utils/generateUID';
+
+import Dialog from '../dialog/Dialog';
+import useFocusTrap from '../focus/useFocusTrap';
+import { useModalPosition } from './modalPositions';
+
+import './Modal.scss';
+
+export type ModalSize = 'xsmall' | 'small' | 'medium' | 'large' | 'xlarge' | 'full';
+
+/**
+ * Omission of id from ModalOwnProps because in ModalOwnProps "id"
+ * is optional, whereas in ModalContextValue it is guaranteed.
+ * Same for size.
+ */
+type ModalContextValue = ModalOwnProps & { id: string; size: ModalSize };
+
+export const ModalContext = createContext({} as ModalContextValue);
+
+export interface ModalOwnProps {
+    /**
+     * Whether the modal is open or not.
+     */
+    open?: boolean;
+    /**
+     * Whether the modal should render behind the backdrop
+     */
+    behind?: boolean;
+    size?: ModalSize;
+    fullscreenOnMobile?: boolean;
+    fullscreen?: boolean;
+    /**
+     * Disables closing the modal by pressing the 'Escape' key.
+     */
+    disableCloseOnEscape?: boolean;
+    /**
+     * Optional id to overwrite the internally generated id, which
+     * is used for accessibility purposes (e.g.aria-labelledby & id
+     * of the Title in ModalHeader)
+     */
+    id?: string;
+    /**
+     * Allow an additional classname on the root element
+     */
+    rootClassName?: string;
+    /**
+     * Fires when the user clicks on the close button or when he
+     * presses the escape key, unless 'disableCloseOnEscape' is
+     * set to true.
+     */
+    onClose?: () => void;
+    /**
+     * Fires when the Modal has finished its enter animation.
+     */
+    onEnter?: () => void;
+    /**
+     * Fires when the Modal has finished its exit animation.
+     */
+    onExit?: () => void;
+    /**
+     * Fires when the user clicks on the backdrop outside of the Dialog
+     */
+    onBackdropClick?: () => void;
+    /**
+     * Whether the modal should close when clicking outside of it.
+     */
+    enableCloseWhenClickOutside?: boolean;
+    /**
+     * Whether or not to blur the backdrop of the modal
+     */
+    blurBackdrop?: boolean;
+    /**
+     * Extra hotkeys definition for modals
+     */
+    hotkeys?: HotkeyTuple[];
+    /**
+     * Traps and moves focus into the dialog on open. Defaults to `true`. Set to `false` to avoid
+     * stealing focus / auto-announcing the dialog (also disables focus containment).
+     */
+    enableFocusTrap?: boolean;
+}
+
+enum ExitState {
+    idle = 0,
+    exiting = 1,
+    exited = 2,
+}
+
+const defaultElement = 'div';
+
+export type ModalProps<E extends ElementType = typeof defaultElement> = PolymorphicPropsWithoutRef<ModalOwnProps, E>;
+
+const Modal = <E extends ElementType = typeof defaultElement>({
+    open,
+    size = 'medium',
+    fullscreenOnMobile,
+    fullscreen,
+    onClose,
+    onEnter,
+    onExit,
+    onBackdropClick,
+    onAnimationEnd,
+    disableCloseOnEscape,
+    enableCloseWhenClickOutside,
+    className,
+    rootClassName,
+    behind,
+    as,
+    blurBackdrop,
+    hotkeys = [],
+    enableFocusTrap = true,
+    ...rest
+}: PolymorphicPropsWithoutRef<ModalOwnProps, E>) => {
+    const [key, setKey] = useState(() => generateUID());
+    const [exit, setExit] = useState(() => (open ? ExitState.idle : ExitState.exited));
+    const id = useInstance(() => generateUID('modal'));
+    const backdropRef = useRef<HTMLDivElement>(null);
+    const dialogRef = useRef(null);
+
+    const active = exit !== ExitState.exited;
+    const last = useModalPosition(active || false);
+
+    const focusTrapProps = useFocusTrap({
+        active: active && enableFocusTrap,
+        rootRef: dialogRef,
+    });
+
+    const handleExit = () => {
+        setKey(generateUID());
+        onExit?.();
+    };
+
+    const modalContextValue: ModalContextValue = {
+        id,
+        open,
+        size,
+        onClose,
+        disableCloseOnEscape,
+    };
+
+    const previousOpen = usePrevious(open);
+
+    useLayoutEffect(() => {
+        if (!previousOpen && open) {
+            setExit(ExitState.idle);
+        } else if (previousOpen && !open) {
+            setExit(ExitState.exiting);
+        }
+    }, [previousOpen, open]);
+
+    useHotkeys(
+        dialogRef,
+        [
+            [
+                'Escape',
+                (e) => {
+                    if (!active || disableCloseOnEscape) {
+                        return;
+                    }
+                    e.stopPropagation();
+                    onClose?.();
+                },
+            ],
+            ...hotkeys,
+        ],
+        { dependencies: [active, disableCloseOnEscape] }
+    );
+
+    /* Relying on a `click` event listener is unsufficient :
+     * - user might hold his mouse down and try to cancel the
+     * backdrop click by moving away from the backdrop for the
+     * mouse up.
+     * - `mousedown` will trigger before the `click` event and we
+     * may lose focus on any child field currently focused */
+    useEffect(() => {
+        const backdrop = backdropRef.current;
+        if (!active || !backdrop) {
+            return;
+        }
+        const handleBackdropMouseDown = (mouseDownEvt: MouseEvent) => {
+            /* prevents focus loss when mouse down on backdrop */
+            if (mouseDownEvt.target === backdrop) {
+                mouseDownEvt.preventDefault();
+                backdrop.addEventListener(
+                    'mouseup',
+                    (mouseUpEvt) => {
+                        if (mouseUpEvt.target === backdrop) {
+                            mouseUpEvt.preventDefault();
+                            mouseUpEvt.stopPropagation();
+                            onBackdropClick?.();
+                        }
+                    },
+                    { once: true }
+                );
+            }
+        };
+
+        backdrop.addEventListener('mousedown', handleBackdropMouseDown);
+
+        return () => backdrop.removeEventListener('mousedown', handleBackdropMouseDown);
+    }, [onBackdropClick, active]);
+
+    if (!active) {
+        return null;
+    }
+
+    const exiting = exit === ExitState.exiting;
+    const Element: ElementType = as || defaultElement;
+
+    return (
+        <Portal>
+            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+            <div
+                ref={backdropRef}
+                className={clsx([
+                    modalTwoRootClassName,
+                    rootClassName,
+                    exiting && 'modal-two--out',
+                    fullscreenOnMobile && 'modal-two--fullscreen-on-mobile',
+                    fullscreen && 'modal-two--fullscreen',
+                    blurBackdrop && 'modal-two--backdrop-blur',
+                    (!last || behind) && 'modal-two--is-behind-backdrop',
+                ])}
+                onAnimationEnd={({ animationName }) => {
+                    if (animationName === 'anime-modal-two-in') {
+                        onEnter?.();
+                    }
+                    if (exiting && animationName === 'anime-modal-two-out') {
+                        setExit(ExitState.exited);
+                        handleExit();
+                    }
+                }}
+                onClick={(e) => {
+                    // Handle React's synthetic event
+                    e.stopPropagation();
+
+                    if (enableCloseWhenClickOutside && e.target === e.currentTarget) {
+                        onClose?.();
+                    }
+                }}
+            >
+                <Dialog
+                    ref={dialogRef}
+                    aria-labelledby={id}
+                    aria-describedby={`${id}-description`}
+                    {...focusTrapProps}
+                    className={clsx([
+                        'modal-two-dialog outline-none',
+                        className,
+                        size === 'xsmall' && 'modal-two-dialog--xsmall',
+                        size === 'small' && 'modal-two-dialog--small',
+                        size === 'large' && 'modal-two-dialog--large',
+                        size === 'xlarge' && 'modal-two-dialog--xlarge',
+                        size === 'full' && 'modal-two-dialog--full',
+                    ])}
+                >
+                    <ModalContext.Provider value={modalContextValue}>
+                        <Element className="modal-two-dialog-container" {...rest} key={key} />
+                    </ModalContext.Provider>
+                </Dialog>
+            </div>
+        </Portal>
+    );
+};
+
+export default Modal;

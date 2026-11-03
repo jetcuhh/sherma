@@ -1,0 +1,51 @@
+import { CryptoProxy, VERIFICATION_STATUS } from '@protontech/crypto';
+
+import { PassSignatureContext } from '../../../../types/crypto/pass-types';
+import {
+    createRandomKey,
+    createRandomVaultKey,
+    releaseCryptoProxy,
+    setupCryptoProxyForTesting,
+} from '../../../../utils/tests/fixtures/crypto';
+import { createPassCoreProxy } from '../../../core/core.proxy';
+import type { PassCoreProxy } from '../../../core/core.types';
+import { createNewUserSignatureFactory } from './create-new-user-signature';
+
+describe('create new user invite signature', () => {
+    let core: PassCoreProxy;
+
+    beforeAll(async () => {
+        await setupCryptoProxyForTesting();
+        core = createPassCoreProxy({} as any);
+    });
+
+    afterAll(async () => releaseCryptoProxy());
+
+    test('should create valid detached signature payload', async () => {
+        const shareKey = await createRandomVaultKey(0);
+        const addressKey = await createRandomKey();
+        const invitedEmail = 'test@proton.me';
+        const signatureBody = (await core.create_new_user_invite_signature_body(
+            invitedEmail,
+            shareKey.raw
+        )) as Uint8Array<ArrayBuffer>;
+
+        const signature = await createNewUserSignatureFactory(core)({
+            invitedEmail,
+            inviterPrivateKey: addressKey.privateKey,
+            shareKey,
+        });
+
+        const { verificationStatus } = await CryptoProxy.verifyMessage({
+            binaryData: signatureBody,
+            binarySignature: Uint8Array.fromBase64(signature),
+            verificationKeys: [addressKey.publicKey],
+            signatureContext: {
+                value: PassSignatureContext.VaultInviteNewUser,
+                required: true,
+            },
+        });
+
+        expect(verificationStatus).toEqual(VERIFICATION_STATUS.SIGNED_AND_VALID);
+    });
+});

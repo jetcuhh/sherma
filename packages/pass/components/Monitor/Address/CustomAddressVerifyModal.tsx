@@ -1,0 +1,46 @@
+import type { FC } from 'react';
+
+import { c } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+
+import { useCountdown } from '../../../hooks/useCountdown';
+import { useRequest } from '../../../hooks/useRequest';
+import { PassErrorCode } from '../../../lib/api/errors';
+import type { AddressType, MonitorAddress } from '../../../lib/monitor/types';
+import { resendVerificationCode, verifyCustomAddress } from '../../../store/actions/creators/monitor';
+import { EmailVerifyModal, SECONDS_BEFORE_RESEND, getInitialCountdown } from '../../Layout/Modal/EmailVerifyModal';
+
+type Props = { onClose: () => void; sentAt?: number } & MonitorAddress<AddressType.CUSTOM>;
+
+export const CustomAddressVerifyModal: FC<Props> = ({ onClose, email, addressId, sentAt }) => {
+    const [remaining, countdown] = useCountdown(getInitialCountdown(sentAt));
+    const { createNotification } = useNotifications();
+
+    const verify = useRequest(verifyCustomAddress, {
+        onSuccess: onClose,
+        onFailure: ({ code }) => {
+            if (code === PassErrorCode.NOT_ALLOWED) onClose();
+        },
+    });
+
+    const resend = useRequest(resendVerificationCode, {
+        onSuccess: () => {
+            createNotification({ text: c('Info').t`Verification code sent.`, type: 'success' });
+            countdown.start(SECONDS_BEFORE_RESEND);
+        },
+        onFailure: () => countdown.cancel(),
+    });
+
+    return (
+        <EmailVerifyModal
+            email={email}
+            onClose={onClose}
+            onResend={() => resend.dispatch(addressId)}
+            onSubmit={(code) => verify.dispatch({ addressId, code })}
+            remaining={remaining}
+            resendLoading={resend.loading}
+            submitLoading={verify.loading}
+        />
+    );
+};

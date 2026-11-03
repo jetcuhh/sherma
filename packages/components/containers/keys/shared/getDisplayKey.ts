@@ -1,0 +1,108 @@
+import type { KeyMetadata } from '@proton/account/addressKeys/getKeyMetadata';
+import { KEY_FLAG } from '@proton/shared/lib/constants';
+import { hasBit } from '@proton/shared/lib/helpers/bitset';
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import type { Key } from '@proton/shared/lib/interfaces/Key';
+import type { SignedKeyListItem } from '@proton/shared/lib/interfaces/SignedKeyList';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+import type { SimpleMap } from '@proton/shared/lib/interfaces/utils';
+import { getFormattedAlgorithmNames } from '@proton/shared/lib/keys/keyAlgorithm';
+import { getDefaultKeyFlags } from '@proton/shared/lib/keys/keyFlags';
+
+import getPermissions from './getPermissions';
+import type { KeyDisplay, KeyStatus } from './interface';
+import { KeyType } from './interface';
+
+interface Arguments extends KeyMetadata<Key> {
+    type: 'user' | 'address';
+    user: UserModel;
+    address?: Address;
+    isLoading: boolean;
+    signedKeyListMap: SimpleMap<SignedKeyListItem | undefined>;
+    /** whether a v6 primary key is present in the set of keys being parsed */
+    existsPrimaryKeyV6: boolean;
+}
+
+export const getDisplayKey = ({
+    type,
+    user,
+    address,
+    algorithmInfos,
+    fingerprint,
+    version,
+    creationDate,
+    isDecrypted,
+    isLoading,
+    signedKeyListMap,
+    existsPrimaryKeyV6,
+    Key,
+    isWeak,
+    isE2EEForwardingKey,
+    invalidKeyError,
+}: Arguments): KeyDisplay => {
+    const { isPrivate, isSelf } = user;
+    const signedKeyListItem = signedKeyListMap[Key.ID];
+
+    const { ID, Flags, Primary, AddressForwardingID, GroupMemberID } = Key;
+
+    const flags = signedKeyListItem?.Flags ?? Flags ?? getDefaultKeyFlags(address);
+    const primary = signedKeyListItem?.Primary ?? Primary;
+
+    const isAddressKey = type === 'address';
+    const isUserKey = type === 'user';
+    const isAddressDisabled = address?.Status === 0;
+
+    const isPrimary = primary === 1;
+    const isPrimaryFallback = existsPrimaryKeyV6 && isPrimary && version !== 6;
+
+    // Flags undefined for user keys
+    const canEncrypt = flags === undefined ? true : hasBit(flags, KEY_FLAG.FLAG_NOT_OBSOLETE);
+    const canSign = flags === undefined ? true : hasBit(flags, KEY_FLAG.FLAG_NOT_COMPROMISED);
+
+    const canEncryptAndSign = canEncrypt && canSign;
+    const isObsolete = isDecrypted && !isAddressDisabled && !canEncrypt;
+    const isCompromised = !canEncrypt && !canSign;
+    const isForwarding = isE2EEForwardingKey;
+
+    const status: KeyStatus = {
+        isAddressDisabled,
+        isPrimary,
+        isPrimaryFallback,
+        isDecrypted,
+        isLoading,
+        isCompromised,
+        isObsolete,
+        isWeak,
+        isForwarding,
+    };
+
+    const hasUserPermission = isPrivate && isSelf;
+    const canModify = isAddressKey && hasUserPermission && !isPrimary;
+    // A forwarding key may only be deleted once it is no longer linked to an active address forwarding
+    // nor to a group membership. Use falsy checks so both `null` and missing (`undefined`) fields are handled.
+    const isUnlinkedForwardingKey = !AddressForwardingID && !GroupMemberID;
+    const canDeleteForwarding = (isPrivate || !isSelf) && isUnlinkedForwardingKey;
+
+    return {
+        ID,
+        creationDate,
+        fingerprint,
+        algorithmInfos,
+        type: isAddressKey ? KeyType.Address : KeyType.User,
+        flags,
+        primary,
+        version,
+        algorithm: getFormattedAlgorithmNames(algorithmInfos),
+        status,
+        invalidKeyError,
+        permissions: getPermissions({
+            ...status,
+            canModify,
+            canEncryptAndSign,
+            isUserKey,
+            isAddressKey,
+            hasUserPermission,
+            canDeleteForwarding,
+        }),
+    };
+};

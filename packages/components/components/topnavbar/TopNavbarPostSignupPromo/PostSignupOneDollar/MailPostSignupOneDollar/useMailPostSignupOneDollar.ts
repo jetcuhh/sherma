@@ -1,0 +1,64 @@
+import { useLocation } from 'react-router';
+
+import { usePreviousSubscription } from '@proton/account/previousSubscription/hooks';
+import { useUser } from '@proton/account/user/hooks';
+import { useConfig } from '@proton/app-context/useConfig';
+import { FeatureCode } from '@proton/features/interface';
+import useFeature from '@proton/features/useFeature';
+import { domIsBusy } from '@proton/shared/lib/busy/busy';
+import { useFlag } from '@proton/unleash/useFlag';
+
+import type { OfferHookReturnValue } from '../../common/helpers/interface';
+import { isRootFolder } from '../../common/topNavbarPromoHelpers';
+import type { PostSubscriptionOneDollarOfferState } from '../interface';
+import { shouldOpenPostSignupOffer } from '../postSignupOffersHelpers';
+import { getIsUserEligibleForOneDollar } from './mailPostSignupOneDollarHelper';
+
+export const useMailPostSignupOneDollar = (): OfferHookReturnValue => {
+    const protonConfig = useConfig();
+    const [user, userLoading] = useUser();
+
+    const [{ hasHadSubscription }, loadingPreviousSubscription] = usePreviousSubscription();
+
+    // The offer should not be opened if the user has selected a conversation / message.
+    // Only when in the root of a folder, regardless of the folder
+    const { pathname } = useLocation();
+    const isNotInFolder = isRootFolder(pathname);
+
+    const mailPostSignupOneDollarPromoDisabled = useFlag('MailPostSignupOneDollarPromoDisabled');
+
+    // One flag to store the state of the offer and the different modals, and another to manage the progressive rollout
+    const { feature: mailOfferState, loading: mailOfferStateLoading } = useFeature<PostSubscriptionOneDollarOfferState>(
+        FeatureCode.MailPostSignupOneDollarState
+    );
+    const { feature: driveOfferState, loading: driveOfferStateLoading } =
+        useFeature<PostSubscriptionOneDollarOfferState>(FeatureCode.DrivePostSignupOneDollarState);
+
+    // Opting out of the temporary 0.99 promo also opts the user out of this offer, so the two
+    // do not run back to back. Remove this along with the 0.99 promo.
+    const { feature: hideZeroNinetyNineOffer, loading: hideZeroNinetyNineOfferLoading } = useFeature<boolean>(
+        FeatureCode.HideMailPostSignupZeroNinetyNineOffer
+    );
+
+    const isDomBusy = domIsBusy();
+
+    return {
+        isEligible: getIsUserEligibleForOneDollar({
+            user,
+            protonConfig,
+            offerStartDateTimeStamp: mailOfferState?.Value?.offerStartDate ?? 0,
+            mailPostSignupOneDollarPromoDisabled,
+            hasHadSubscription,
+            driveOfferStartDateTimestamp: driveOfferState?.Value,
+            hasHiddenZeroNinetyNineOffer: !!hideZeroNinetyNineOffer?.Value,
+        }),
+        isLoading: !!(
+            userLoading ||
+            mailOfferStateLoading ||
+            driveOfferStateLoading ||
+            hideZeroNinetyNineOfferLoading ||
+            loadingPreviousSubscription
+        ),
+        openSpotlight: isNotInFolder && shouldOpenPostSignupOffer(mailOfferState?.Value) && !isDomBusy,
+    };
+};

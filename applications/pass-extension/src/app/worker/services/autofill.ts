@@ -1,0 +1,568 @@
+import type { CCFieldType } from '@protontech/autofill/types';
+import { FormType } from '@protontech/autofill/types';
+
+import { clientBooted } from '@proton/pass/lib/client';
+import {
+    mergeModelArtifactCache,
+    parseModelArtifactCache,
+} from '@proton/pass/lib/extension/model-artifact/model-artifact-cache';
+import type { ModelArtifactCache } from '@proton/pass/lib/extension/model-artifact/model-artifact-cache';
+import { parseModelRegistry, resolveModelId } from '@proton/pass/lib/extension/model-registry/model-registry';
+import type { ModelRegistry } from '@proton/pass/lib/extension/model-registry/model-registry';
+import { compileRules, matchRules, parseRules } from '@proton/pass/lib/extension/rules/rules';
+import type { CompiledRules } from '@proton/pass/lib/extension/rules/types';
+import browser from '@proton/pass/lib/globals/browser';
+import { deobfuscateItem } from '@proton/pass/lib/items/item.obfuscation';
+import {
+    intoAutofillableCCItem,
+    intoCCItemPreview,
+    intoIdentityItemPreview,
+    intoLoginItemPreview,
+    intoUserIdentifier,
+} from '@proton/pass/lib/items/item.utils';
+import { DEFAULT_RANDOM_PW_OPTIONS } from '@proton/pass/lib/password/constants';
+import type { PrivateDomains } from '@proton/pass/lib/search/types';
+import type { SearchItemsByDomainOptions } from '@proton/pass/lib/urls/types';
+import { isPaidPlan } from '@proton/pass/lib/user/user.predicates';
+import { assignedModelIdUpdated } from '@proton/pass/store/actions/creators/assigned-model-id';
+import { itemAutofilled } from '@proton/pass/store/actions/creators/item';
+import { sagaEvents } from '@proton/pass/store/events';
+import { getInitialSettings } from '@proton/pass/store/reducers/settings';
+import { selectAssignedModelId } from '@proton/pass/store/selectors/assigned-model-id';
+import {
+    selectAutofillCCCandidates,
+    selectAutofillIdentityCandidates,
+    selectAutofillLoginCandidates,
+    selectAutofillableShareIDs,
+} from '@proton/pass/store/selectors/autofill';
+import { selectItem } from '@proton/pass/store/selectors/items';
+import { selectVaultLimits } from '@proton/pass/store/selectors/limits';
+import { selectOrganizationPasswordGeneratorPolicy } from '@proton/pass/store/selectors/organization';
+import {
+    selectAutosuggestCopyToClipboard,
+    selectClipboardTTL,
+    selectPasswordOptions,
+} from '@proton/pass/store/selectors/settings';
+import { selectAutofillModelExperimentGroup, selectPassPlan } from '@proton/pass/store/selectors/user';
+import type { ItemContent, ItemRevision, SelectedItem } from '@proton/pass/types/data/items';
+import type { AutofillPageTelemetryDimensions } from '@proton/pass/types/data/telemetry';
+import type { Maybe, MaybeNull } from '@proton/pass/types/utils';
+import type { CCItemData } from '@proton/pass/types/worker/data';
+import type { FormCredentials } from '@proton/pass/types/worker/form';
+import type { FrameId, TabId } from '@proton/pass/types/worker/runtime';
+import { logger } from '@proton/pass/utils/logger';
+import { deobfuscate } from '@proton/pass/utils/obfuscate/xor';
+import noop from '@proton/utils/noop';
+
+import { backgroundMessage, sendTabMessage } from '../../../lib/message/send-message';
+import type { AutofillableFrame } from '../../../lib/utils/frames';
+import { getAutofillableFrames } from '../../../lib/utils/frames';
+import { setPopupIconBadge } from '../../../lib/utils/popup';
+import { isContentScriptPort } from '../../../lib/utils/port';
+import { BUNDLED_MODEL_ID } from '../../../lib/utils/version';
+import type { AutofillActionDTO, AutofillRequest, AutofillSequence } from '../../../types/autofill';
+import type { FrameFormsResult } from '../../../types/frames';
+import { WorkerMessageType } from '../../../types/messages';
+import WorkerMessageBroker from '../channel';
+import { onContextReady, withContext } from '../context/inject';
+import { createBasicAuthController } from '../listeners/auth-required';
+import { resolveCCFormFields } from './autofill.cc';
+
+type AutofillServiceState = {
+    modelArtifacts: ModelArtifactCache;
+    modelRegistry: MaybeNull<ModelRegistry>;
+    privateDomains: PrivateDomains;
+    rules: MaybeNull<CompiledRules>;
+};
+
+export const createAutoFillService = () => {
+    const state: AutofillServiceState = { modelArtifacts: {}, modelRegistry: null, privateDomains: null, rules: null };
+
+    /** Guards sub-frame content-script injection. Gated only on the global
+     * killswitch: per-type user settings (eg: `autofill.cc`) are enforced
+     * per-handler, not at injection time. Feature flags are resolved via the
+     * service rather than redux state so this remains safe when the extension
+     * is locked and the store is empty. */
+    const iframeAutofillEnabled = withContext<() => Promise<boolean>>(async (ctx) => {
+        const { features } = await ctx.service.featureFlags.resolve();
+        return Boolean(!features.PassIFrameKillswitch);
+    });
+
+    /** Assigned model, distinct from the one actually used for a given page load. */
+    const getAssignedModelId = withContext((ctx) =>
+        resolveModelId(
+            state.modelRegistry,
+            selectAutofillModelExperimentGroup(ctx.service.store.getState()),
+            BUNDLED_MODEL_ID
+        )
+    );
+
+    /** Recomputes and dispatches `assignedModelId`; call on registry or group changes. */
+    const refreshAssignedModelId = withContext((ctx) => {
+        const modelId = getAssignedModelId();
+        if (modelId !== selectAssignedModelId(ctx.service.store.getState())) {
+            ctx.service.store.dispatch(assignedModelIdUpdated(modelId));
+        }
+    });
+
+    const init = withContext(async (ctx) => {
+        const result = await ctx.service.storage.local.getItems([
+            'websiteRules',
+            'privateDomains',
+            'modelRegistry',
+            'modelArtifacts',
+        ]);
+
+        const rules = parseRules(result.websiteRules ?? null);
+        state.rules = rules ? compileRules(rules) : null;
+        if (state.rules) logger.info(`[AutofillService] Compiled website rules v${rules?.version}`);
+
+        state.privateDomains = result.privateDomains ? new Set(result.privateDomains.split('\n')) : null;
+        if (state.privateDomains) logger.info(`[AutofillService] Hydrated private domains`);
+
+        const parsed = parseModelRegistry(result.modelRegistry ?? null);
+        if (parsed.ok) {
+            state.modelRegistry = parsed.registry;
+            if (state.modelRegistry) logger.info(`[AutofillService] Hydrated model registry`);
+        } else logger.warn(`[AutofillService] ${parsed.error}`);
+
+        const parsedArtifacts = parseModelArtifactCache(result.modelArtifacts ?? null);
+        if (parsedArtifacts.ok) {
+            state.modelArtifacts = parsedArtifacts.cache;
+            if (Object.keys(state.modelArtifacts).length) logger.info(`[AutofillService] Hydrated model artifacts`);
+        } else logger.warn(`[AutofillService] ${parsedArtifacts.error}`);
+
+        refreshAssignedModelId();
+    });
+
+    const getLoginCandidates = withContext<
+        (url: Maybe<string>, options?: SearchItemsByDomainOptions) => ItemRevision<'login'>[]
+    >((ctx, url, options = {}) =>
+        selectAutofillLoginCandidates(url, {
+            privateDomains: state.privateDomains ?? undefined,
+            ...options,
+        })(ctx.service.store.getState())
+    );
+
+    const getCredentials = withContext<(item: SelectedItem) => Maybe<FormCredentials>>((ctx, { shareId, itemId }) => {
+        const state = ctx.service.store.getState();
+        const item = selectItem<'login'>(shareId, itemId)(state);
+
+        if (item?.data.type === 'login') {
+            ctx.service.store.dispatch(itemAutofilled({ shareId, itemId }));
+            return {
+                /** For autofill we use the username if not empty, otherwise the email */
+                userIdentifier: intoUserIdentifier(item),
+                password: deobfuscate(item.data.content.password),
+            };
+        }
+    });
+
+    const getIdentity = withContext<(item: SelectedItem) => Maybe<ItemContent<'identity'>>>(
+        (ctx, { shareId, itemId }) => {
+            const state = ctx.service.store.getState();
+            const item = selectItem<'identity'>(shareId, itemId)(state);
+
+            if (item?.data.type === 'identity') {
+                ctx.service.store.dispatch(itemAutofilled({ shareId, itemId }));
+                return item.data.content;
+            }
+        }
+    );
+
+    const getCreditCard = withContext<(item: SelectedItem) => Maybe<CCItemData>>((ctx, { shareId, itemId }) => {
+        const state = ctx.service.store.getState();
+        const item = selectItem<'creditCard'>(shareId, itemId)(state);
+
+        if (item?.data.type === 'creditCard') {
+            ctx.service.store.dispatch(itemAutofilled({ shareId, itemId }));
+            return deobfuscateItem<'creditCard'>(item.data).content;
+        }
+    });
+
+    const getAutofillOptions = withContext<
+        (writableOnly?: boolean) => { needsUpgrade: boolean; shareIds: Maybe<string[]>; isPaid: boolean }
+    >((ctx, writableOnly) => {
+        const state = ctx.service.store.getState();
+        const shareIds = selectAutofillableShareIDs(state, writableOnly);
+        const needsUpgrade = selectVaultLimits(state).didDowngrade;
+        const isPaid = isPaidPlan(selectPassPlan(state));
+
+        return { needsUpgrade, shareIds, isPaid };
+    });
+
+    const sync = withContext(({ status }) => {
+        if (!clientBooted(status)) return;
+
+        browser.tabs
+            .query({ active: true })
+            .then((tabs) =>
+                Promise.all(
+                    tabs.map(({ id: tabId, url }) => {
+                        if (tabId) {
+                            const items = getLoginCandidates(url);
+                            setPopupIconBadge(tabId, items.length);
+
+                            WorkerMessageBroker.ports.broadcast({ type: WorkerMessageType.AUTOFILL_SYNC }, (name) =>
+                                isContentScriptPort(name, tabId)
+                            );
+                        }
+                    })
+                )
+            )
+            .catch(noop);
+    });
+
+    /* Clears badge count for each valid tab - Triggered on logout
+     * detection to avoid showing stale counts */
+    const clear = () => {
+        browser.tabs
+            .query({})
+            .then((tabs) => tabs.forEach(({ id: tabId }) => tabId && setPopupIconBadge(tabId, 0)))
+            .catch(noop);
+    };
+
+    const queryFrameForms = async (tabId: TabId, frameId: FrameId): Promise<Maybe<FrameFormsResult>> => {
+        const message = backgroundMessage({ type: WorkerMessageType.FRAME_FORMS_QUERY });
+        return sendTabMessage(message, { tabId, frameId }).catch(noop);
+    };
+
+    const queryTabLoginForms = async (
+        tabId: TabId
+    ): Promise<{ loginFormDetected: boolean; telemetry: AutofillPageTelemetryDimensions }> => {
+        /* shared so the top frame is only queried once, whether it's visited
+         * by the login-form scan below or read for its `pageLanguage` */
+        const topFrameResult = queryFrameForms(tabId, 0);
+
+        const findLoginForm = async () => {
+            const frames = (await browser.webNavigation.getAllFrames({ tabId })) ?? [];
+
+            for (const frame of frames) {
+                const result = frame.frameId === 0 ? await topFrameResult : await queryFrameForms(tabId, frame.frameId);
+                if (result?.formTypes.some((type) => type === FormType.LOGIN)) return true;
+            }
+
+            return false;
+        };
+
+        /** A real tab exists here, so a failed/timed-out query falls back to the assigned model, not `'n/a'`. */
+        const [loginFormDetected, telemetry] = await Promise.all([
+            findLoginForm().catch(() => false),
+            topFrameResult.then(
+                (result) => result?.telemetry ?? { pageLanguage: 'n/a', modelVersion: getAssignedModelId() }
+            ),
+        ]);
+
+        return { loginFormDetected, telemetry };
+    };
+
+    const onAutofillSequenceUpdate = <T extends AutofillSequence['status']>(
+        payload: Extract<AutofillRequest, { status: T }>,
+        tabId: TabId,
+        frames: AutofillableFrame[]
+    ) =>
+        Promise.all(
+            frames.map(({ frame }) =>
+                sendTabMessage(
+                    backgroundMessage({
+                        type: WorkerMessageType.AUTOFILL_SEQUENCE,
+                        payload,
+                    }),
+                    { tabId, frameId: frame.frameId }
+                ).catch(noop)
+            )
+        );
+
+    const onAutofillLogin = async (payload: AutofillActionDTO<'login'>, tabId: TabId) => {
+        const { fieldId, formId, frameId, itemId, shareId, notification } = payload;
+        const credentials = getCredentials(payload);
+        if (!credentials) throw new Error('AutofillLogin: no credentials');
+
+        await sendTabMessage(
+            backgroundMessage({
+                type: WorkerMessageType.AUTOFILL_SEQUENCE,
+                payload: {
+                    status: 'fill',
+                    type: 'login',
+                    credentials,
+                    field: { fieldId, frameId, formId },
+                    itemId,
+                    shareId,
+                    notification,
+                },
+            }),
+            { tabId, frameId }
+        );
+
+        return true;
+    };
+
+    const onAutofillIdentity = async (payload: AutofillActionDTO<'identity'>, tabId: TabId) => {
+        const { fieldId, formId, frameId, itemId, shareId } = payload;
+        const identity = getIdentity(payload);
+        if (!identity) throw new Error('AutofillIdentity: no identity');
+
+        await sendTabMessage(
+            backgroundMessage({
+                type: WorkerMessageType.AUTOFILL_SEQUENCE,
+                payload: {
+                    status: 'fill',
+                    type: 'identity',
+                    identity,
+                    field: { fieldId, frameId, formId },
+                    itemId,
+                    shareId,
+                },
+            }),
+            { tabId, frameId }
+        );
+
+        return true;
+    };
+
+    const onAutofillCreditCard = async (payload: AutofillActionDTO<'creditCard'>, tabId: TabId) => {
+        const item = getCreditCard(payload);
+        if (!item) throw new Error('AutofillCreditCard: no card');
+
+        const { itemId, shareId } = payload;
+        const { frameOrigin, frameId, fieldId, formId } = payload;
+        const refocus = { fieldId, formId, frameId };
+
+        /** Collect autofilled field types across frames to avoid duplicate autofill
+         * attempts. Frames are ordered by sender frame origin to start the autofill
+         * sequence from the source field. */
+        const autofilledFields = new Set<CCFieldType>();
+        const autofillableFrames = await getAutofillableFrames(tabId, frameOrigin, frameId);
+        const frames = Array.from(autofillableFrames.values());
+
+        await onAutofillSequenceUpdate({ status: 'start' }, tabId, frames);
+        const frameFields = await resolveCCFormFields(autofillableFrames, tabId, payload);
+
+        /** Process each cluster sequentially, building up the set of autofilled fields.
+         * Generates frame-specific autofill data that respects cross-origin restrictions
+         * and previously filled fields, then tracks which fields were successfully filled
+         * for use in subsequent frames. */
+        for (const { frameId, fields } of frameFields) {
+            const frame = autofillableFrames.get(frameId);
+            if (!frame) continue;
+
+            const data = intoAutofillableCCItem(item, autofilledFields, frame.crossOrigin);
+            const request = { status: 'fill', type: 'creditCard', data, fields, itemId, shareId } as const;
+            const [res] = await onAutofillSequenceUpdate(request, tabId, [frame]);
+            if (res && res.ok && res.type === 'creditCard') res.autofilled.forEach((t) => autofilledFields.add(t));
+        }
+
+        await onAutofillSequenceUpdate({ status: 'completed', refocus }, tabId, frames);
+
+        return true;
+    };
+
+    const onAutofillEmail = async (payload: AutofillActionDTO<'email'>, tabId: TabId) => {
+        const { fieldId, formId, frameId, value } = payload;
+        if (!value) throw new Error('AutofillEmail: no email');
+
+        await sendTabMessage(
+            backgroundMessage({
+                type: WorkerMessageType.AUTOFILL_SEQUENCE,
+                payload: {
+                    status: 'fill',
+                    type: 'email',
+                    email: value,
+                    field: { fieldId, frameId, formId },
+                },
+            }),
+            { tabId, frameId }
+        );
+
+        return true;
+    };
+
+    const onAutofillPassword = async (payload: AutofillActionDTO<'password'>, tabId: TabId) => {
+        const { fieldId, formId, frameId, value } = payload;
+        if (!value) throw new Error('AutofillPassword: no password');
+
+        await sendTabMessage(
+            backgroundMessage({
+                type: WorkerMessageType.AUTOFILL_SEQUENCE,
+                payload: {
+                    status: 'fill',
+                    type: 'password',
+                    password: value,
+                    field: { fieldId, frameId, formId },
+                },
+            }),
+            { tabId, frameId }
+        );
+
+        return true;
+    };
+
+    WorkerMessageBroker.registerMessage(
+        WorkerMessageType.AUTOFILL_LOGIN_QUERY,
+        onContextReady(async ({ getState }, { payload }, sender) => {
+            const tabId = sender.tab?.id;
+            const frameId = payload.frameId ?? sender.frameId;
+
+            if (!getState().authorized || tabId === undefined || frameId === undefined) {
+                throw new Error('Invalid autofill query');
+            }
+
+            /** Callers that are NOT in the field's frame must pass `frameId`.
+             * Candidates are scoped to the focused field's frame so top-level credentials
+             * are never offered in (and thus filled into) a cross-origin sub-frame:
+             * - `domain`: caller-provided scope (eg: passkey create).
+             * - `frameId`: the caller sits in a different frame than the field (the dropdown
+             *   runs in its own extension frame), so resolve that frame's url worker-side.
+             * - neither: the caller is the field's own content-script, so `sender.url` is
+             *   already the authoritative frame url. */
+            const host =
+                payload.domain ??
+                (payload.frameId === undefined ? sender.url : null) ??
+                (await (async () => {
+                    if (frameId > 0) return (await browser.webNavigation.getFrame({ tabId, frameId }))?.url;
+                    return (await browser.tabs.get(tabId))?.url;
+                })().catch(noop));
+
+            const { shareIds, needsUpgrade } = getAutofillOptions(payload.writable);
+
+            const items = getLoginCandidates(host, { shareIds }).map(intoLoginItemPreview);
+
+            /** Only top-frame queries reflect the tab-level badge count */
+            const shouldUpdateBadge = !payload.domain && frameId === 0;
+            if (shouldUpdateBadge) setPopupIconBadge(tabId, items.length);
+
+            return { items, needsUpgrade };
+        })
+    );
+
+    WorkerMessageBroker.registerMessage(
+        WorkerMessageType.AUTOFILL_IDENTITY_QUERY,
+        onContextReady(async (ctx, _, sender) => {
+            const tabId = sender.tab?.id;
+            if (!ctx.getState().authorized || tabId === undefined) throw new Error('Invalid autofill query');
+
+            const state = ctx.service.store.getState();
+            const { shareIds, needsUpgrade } = getAutofillOptions();
+            const items = selectAutofillIdentityCandidates(shareIds)(state).map(intoIdentityItemPreview);
+
+            return { items, needsUpgrade };
+        })
+    );
+
+    WorkerMessageBroker.registerMessage(
+        WorkerMessageType.AUTOFILL_CC_QUERY,
+        onContextReady(async (ctx, _, sender) => {
+            const tabId = sender.tab?.id;
+            if (!ctx.getState().authorized || tabId === undefined) throw new Error('Invalid autofill query');
+
+            const state = ctx.service.store.getState();
+            const { shareIds, needsUpgrade } = getAutofillOptions();
+            const items = selectAutofillCCCandidates(shareIds)(state).map(intoCCItemPreview);
+
+            return { items, needsUpgrade };
+        })
+    );
+
+    WorkerMessageBroker.registerMessage(
+        WorkerMessageType.AUTOSUGGEST_PASSWORD,
+        withContext((ctx) => {
+            const state = ctx.service.store.getState();
+            const copy = selectAutosuggestCopyToClipboard(state) ?? getInitialSettings().autosuggest.passwordCopy;
+
+            return {
+                config: selectPasswordOptions(state) ?? DEFAULT_RANDOM_PW_OPTIONS,
+                policy: selectOrganizationPasswordGeneratorPolicy(state),
+                clipboardSettings: copy ? { copy: true, clipboardTTL: selectClipboardTTL(state) } : { copy: false },
+            };
+        })
+    );
+
+    WorkerMessageBroker.registerMessage(
+        WorkerMessageType.AUTOFILL_ACTION,
+        onContextReady(async (_, { payload }, sender) => {
+            const tabId = sender.tab?.id;
+            if (!tabId) throw new Error('AutofillAction: no tab ID');
+
+            switch (payload.type) {
+                case 'login':
+                    return onAutofillLogin(payload, tabId);
+                case 'identity':
+                    return onAutofillIdentity(payload, tabId);
+                case 'email':
+                    return onAutofillEmail(payload, tabId);
+                case 'creditCard':
+                    return onAutofillCreditCard(payload, tabId);
+                case 'password':
+                    return onAutofillPassword(payload, tabId);
+            }
+        })
+    );
+
+    WorkerMessageBroker.registerMessage(WorkerMessageType.WEBSITE_RULES_REQUEST, (_, sender) => ({
+        rules: state.rules && sender.url ? matchRules(state.rules, new URL(sender.url)) : null,
+    }));
+
+    /** Responds from cache only — never waits on an in-flight fetch, so a page opened before a fetch resolves gets `null`. */
+    WorkerMessageBroker.registerMessage(WorkerMessageType.MODEL_ARTIFACT_REQUEST, () => ({
+        artifact: state.modelArtifacts[getAssignedModelId()] ?? null,
+    }));
+
+    /* onUpdated will be triggered every time a tab has been loaded with a new url :
+     * update the badge count accordingly. `ensureReady` is used in place instead of
+     * leveraging `onContextReady` to properly handle errors.  */
+    browser.tabs.onUpdated.addListener(
+        withContext(async (ctx, tabId, __, tab) => {
+            try {
+                await ctx.ensureReady();
+                if (tabId) {
+                    const items = getLoginCandidates(tab.url);
+                    setPopupIconBadge(tabId, items.length);
+                }
+            } catch {}
+        })
+    );
+
+    sagaEvents.subscribe(
+        withContext(async (ctx, evt) => {
+            switch (evt.type) {
+                case 'website-rules::resolved':
+                    void ctx.service.storage.local.setItem('websiteRules', JSON.stringify(evt.data));
+                    state.rules = compileRules(evt.data);
+                    break;
+
+                case 'private-domains::resolved':
+                    void ctx.service.storage.local.setItem('privateDomains', evt.data.join('\n'));
+                    state.privateDomains = new Set(evt.data);
+                    break;
+
+                case 'model-registry::resolved':
+                    void ctx.service.storage.local.setItem('modelRegistry', JSON.stringify(evt.data));
+                    state.modelRegistry = evt.data;
+                    refreshAssignedModelId();
+                    break;
+
+                case 'model-artifact::resolved':
+                    state.modelArtifacts = mergeModelArtifactCache(state.modelArtifacts, evt.data);
+                    void ctx.service.storage.local.setItem('modelArtifacts', JSON.stringify(state.modelArtifacts));
+                    break;
+            }
+        })
+    );
+
+    return {
+        basicAuth: createBasicAuthController(),
+        iframeAutofillEnabled,
+        init,
+        clear,
+        getAssignedModelId,
+        getLoginCandidates,
+        getModelArtifact: (modelId: string) => state.modelArtifacts[modelId] ?? null,
+        getModelRegistry: () => state.modelRegistry,
+        getRules: () => state.rules,
+        refreshAssignedModelId,
+        queryTabLoginForms,
+        sync,
+    };
+};
+
+export type AutoFillService = ReturnType<typeof createAutoFillService>;

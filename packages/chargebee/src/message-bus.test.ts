@@ -1,0 +1,772 @@
+import { fireEvent } from '@testing-library/dom';
+
+import type {
+    BinData,
+    ChargebeeSubmitEventResponse,
+    FormValidationErrors,
+    GetHeightResponsePayload,
+    IdealAuthorizedPayload,
+    MessageBusResponse,
+    PaymentIntent,
+    PaypalAuthorizedPayload,
+    ThreeDsChallengePayload,
+} from '../lib/types';
+import { chargebeeWrapperVersion } from './checkpoints';
+import type {
+    ChargebeeSubmitEvent,
+    DirectDebitSubmitEvent,
+    GetBinEvent,
+    GetHeightEvent,
+    ParentMessagesProps,
+    SetConfigurationEvent,
+    SetPaypalPaymentIntentEvent,
+    ValidateFormEvent,
+    VerifySavedCardEvent,
+} from './message-bus';
+import { MessageBus, createMessageBus, getMessageBus, verifySavedCardMessageType } from './message-bus';
+
+window.parent.postMessage = jest.fn();
+
+Object.defineProperty(window, 'location', {
+    value: new URL('https://account-api.proton.me'),
+    writable: true,
+    configurable: true,
+});
+
+const expectedParentOrigin = 'https://account.proton.me';
+
+let messageBus: MessageBus | null = null;
+beforeEach(() => {
+    jest.clearAllMocks();
+
+    const config: ParentMessagesProps = {
+        onSetConfiguration: jest.fn(),
+        onSubmit: jest.fn(),
+        onSetPaypalPaymentIntent: jest.fn(),
+        onGetHeight: jest.fn(),
+        onGetBin: jest.fn(),
+        onValidateForm: jest.fn(),
+        onVerifySavedCard: jest.fn(),
+    };
+
+    createMessageBus(config);
+
+    messageBus = getMessageBus();
+});
+
+it('should create message bus', () => {
+    const messageBus = getMessageBus();
+    expect(messageBus).toBeInstanceOf(MessageBus);
+});
+
+it('should ignore messages from a foreign origin', () => {
+    const event: SetConfigurationEvent = {
+        type: 'set-configuration',
+        correlationId: 'id-1',
+        paymentMethodType: 'card',
+        publishableKey: 'pk',
+        site: 'site',
+        domain: 'domain',
+        cssVariables: {
+            '--signal-danger': '#000000',
+            '--border-radius-md': '#000000',
+            '--border-norm': '#000000',
+            '--focus-outline': '#000000',
+            '--focus-ring': '#000000',
+            '--field-norm': '#000000',
+            '--field-background-color': '#000000',
+            '--field-focus-background-color': '#000000',
+            '--field-focus-text-color': '#000000',
+            '--field-placeholder-color': '#000000',
+            '--field-text-color': '#000000',
+            '--selection-text-color': '#000000',
+            '--selection-background-color': '#000000',
+            '--interaction-norm': '#000000',
+            '--interaction-norm-contrast': '#000000',
+            '--interaction-norm-major-1': '#000000',
+            '--interaction-norm-major-2': '#000000',
+        },
+        translations: {
+            cardNumberPlaceholder: '0000 0000 0000 0000',
+            cardExpiryPlaceholder: 'MM/YY',
+            cardCvcPlaceholder: '000',
+            invalidCardNumberMessage: 'Invalid card number',
+            invalidCardExpiryMessage: 'Invalid card expiry',
+            invalidCardCvcMessage: 'Invalid card cvc',
+        },
+        renderMode: 'one-line',
+        themeType: 'light',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: 'https://evil.example.com',
+        })
+    );
+
+    expect(messageBus?.onSetConfiguration).not.toHaveBeenCalled();
+});
+
+it('should listen to set configuration event', () => {
+    const event: SetConfigurationEvent = {
+        type: 'set-configuration',
+        correlationId: 'id-1',
+        paymentMethodType: 'card',
+        publishableKey: 'pk',
+        site: 'site',
+        domain: 'domain',
+        cssVariables: {
+            '--signal-danger': '#000000',
+            '--border-radius-md': '#000000',
+            '--border-norm': '#000000',
+            '--focus-outline': '#000000',
+            '--focus-ring': '#000000',
+            '--field-norm': '#000000',
+            '--field-background-color': '#000000',
+            '--field-focus-background-color': '#000000',
+            '--field-focus-text-color': '#000000',
+            '--field-placeholder-color': '#000000',
+            '--field-text-color': '#000000',
+            '--selection-text-color': '#000000',
+            '--selection-background-color': '#000000',
+            '--interaction-norm': '#000000',
+            '--interaction-norm-contrast': '#000000',
+            '--interaction-norm-major-1': '#000000',
+            '--interaction-norm-major-2': '#000000',
+        },
+        translations: {
+            cardNumberPlaceholder: '0000 0000 0000 0000',
+            cardExpiryPlaceholder: 'MM/YY',
+            cardCvcPlaceholder: '000',
+            invalidCardNumberMessage: 'Invalid card number',
+            invalidCardExpiryMessage: 'Invalid card expiry',
+            invalidCardCvcMessage: 'Invalid card cvc',
+        },
+        renderMode: 'one-line',
+        themeType: 'light',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+    expect(messageBus?.onSetConfiguration).toHaveBeenCalled();
+    const firstArg = (messageBus?.onSetConfiguration as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onSetConfiguration as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<{}> = {
+        status: 'success',
+        data: {},
+    };
+    secondArg(response);
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'set-configuration-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {},
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to submit event', () => {
+    const event: ChargebeeSubmitEvent = {
+        type: 'chargebee-submit',
+        correlationId: 'id-1',
+        paymentIntent: {
+            type: 'payment_intent',
+        } as any,
+        countryCode: 'US',
+        zip: '12345',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onSubmit).toHaveBeenCalled();
+    const firstArg = (messageBus?.onSubmit as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onSubmit as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<{}> = {
+        status: 'success',
+        data: {},
+    };
+    secondArg(response);
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'chargebee-submit-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {},
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to set paypal payment intent event', () => {
+    const event: SetPaypalPaymentIntentEvent = {
+        type: 'set-paypal-payment-intent',
+        correlationId: 'id-1',
+        paymentIntent: {
+            type: 'payment_intent',
+        } as any,
+
+        // todo: perhaps remove it
+        countryCode: 'US',
+        zip: '12345',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onSetPaypalPaymentIntent).toHaveBeenCalled();
+    const firstArg = (messageBus?.onSetPaypalPaymentIntent as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onSetPaypalPaymentIntent as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<ChargebeeSubmitEventResponse> = {
+        status: 'success',
+        data: {
+            authorized: false,
+            approvalUrl: 'https://proton.me',
+        } as any, // todo: fix types
+    };
+
+    secondArg(response);
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'set-paypal-payment-intent-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {
+                authorized: false,
+                approvalUrl: 'https://proton.me',
+            },
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to get height event', () => {
+    const event: GetHeightEvent = {
+        type: 'get-height',
+        correlationId: 'id-1',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onGetHeight).toHaveBeenCalled();
+    const firstArg = (messageBus?.onGetHeight as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onGetHeight as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<GetHeightResponsePayload> = {
+        status: 'success',
+        data: {
+            height: 100,
+            extraBottom: 8,
+        },
+    };
+    secondArg(response);
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'get-height-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {
+                height: 100,
+                extraBottom: 8,
+            },
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to get bin event', () => {
+    const event: GetBinEvent = {
+        type: 'get-bin',
+        correlationId: 'id-1',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onGetBin).toHaveBeenCalled();
+    const firstArg = (messageBus?.onGetBin as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onGetBin as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<BinData> = {
+        status: 'success',
+        data: {
+            bin: '424242',
+            last4: '4242',
+        },
+    };
+    secondArg(response);
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'get-bin-response',
+            correlationId: event.correlationId,
+            ...response,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to validate form event', () => {
+    const event: ValidateFormEvent = {
+        type: 'validate-form',
+        correlationId: 'id-1',
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onValidateForm).toHaveBeenCalled();
+    const firstArg = (messageBus?.onValidateForm as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onValidateForm as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<FormValidationErrors> = {
+        status: 'success',
+        data: [],
+    };
+
+    secondArg(response);
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'validate-form-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: [],
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should listen to verify saved card event', () => {
+    const event: VerifySavedCardEvent = {
+        type: verifySavedCardMessageType,
+        correlationId: 'id-1',
+        paymentIntent: {
+            type: 'payment_intent',
+        } as any,
+    };
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(messageBus?.onVerifySavedCard).toHaveBeenCalled();
+
+    const firstArg = (messageBus?.onVerifySavedCard as jest.Mock).mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = (messageBus?.onVerifySavedCard as jest.Mock).mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<ChargebeeSubmitEventResponse> = {
+        status: 'success',
+        data: {
+            authorized: false,
+            approvalUrl: 'https://proton.me',
+        } as any, // todo: fix types
+    };
+    secondArg(response);
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'chargebee-verify-saved-card-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {
+                authorized: false,
+                approvalUrl: 'https://proton.me',
+            },
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send paypal authorized message', () => {
+    const data: PaypalAuthorizedPayload = {
+        paymentIntent: {
+            type: 'payment_intent',
+        } as any,
+    };
+
+    messageBus?.sendPaypalAuthorizedMessage(data);
+    const expectedMessage = {
+        status: 'success',
+        data,
+    };
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'paypal-authorized',
+            ...expectedMessage,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send 3ds challenge message', () => {
+    const data: ThreeDsChallengePayload = {
+        url: 'https://proton.me',
+    };
+
+    const correlationId = 'id-1';
+
+    messageBus?.send3dsChallengeMessage(data, correlationId);
+    const expectedMessage = {
+        status: 'success',
+        data,
+        correlationId,
+    };
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: '3ds-challenge',
+            ...expectedMessage,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send 3ds failed message', () => {
+    const error = {
+        message: 'error',
+    };
+
+    const correlationId = 'id-1';
+
+    messageBus?.send3dsFailedMessage(error, correlationId);
+    const expectedMessage = {
+        status: 'failure',
+        error,
+        correlationId,
+    };
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'chargebee-submit-response',
+            ...expectedMessage,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send form validation error message', () => {
+    const errors: FormValidationErrors = [
+        {
+            message: 'error',
+            error: 'error',
+        },
+    ];
+
+    const correlationId = 'id-1';
+
+    messageBus?.sendFormValidationErrorMessage(errors, correlationId);
+    const expectedMessage = {
+        status: 'failure',
+        error: errors,
+        correlationId,
+    };
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'chargebee-submit-response',
+            ...expectedMessage,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send 3ds success message', () => {
+    const paymentIntent: PaymentIntent = {
+        type: 'payment_intent',
+    } as any;
+
+    const correlationId = 'id-1';
+
+    messageBus?.send3dsSuccessMessage(
+        paymentIntent as any, // todo: fix types
+        correlationId
+    );
+
+    const expectedMessage = {
+        status: 'success',
+        data: paymentIntent,
+        correlationId,
+    };
+
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'chargebee-submit-response',
+            ...expectedMessage,
+        }),
+        expectedParentOrigin
+    );
+});
+
+it('should send unhandled error message', () => {
+    const error = new Error('Unhandled error');
+
+    messageBus?.sendUnhandledErrorMessage(error);
+
+    expect(window.parent.postMessage).toHaveBeenCalled();
+
+    const postMessageArg = (window.parent.postMessage as jest.Mock).mock.calls[0][0];
+    const parsedArg = JSON.parse(postMessageArg);
+
+    expect(parsedArg).toEqual({
+        type: 'chargebee-unhandled-error',
+        status: 'failure',
+        error: expect.objectContaining({
+            message: 'Unhandled error',
+            stack: error.stack,
+            name: 'Error',
+            checkpoints: expect.any(Array),
+            chargebeeWrapperVersion,
+        }),
+    });
+});
+
+it('should report a script that failed long after load on an unrelated error', () => {
+    // The Apple Pay SDK is injected during renderApplePay, well after DOMContentLoaded.
+    window.__chargebeeScriptErrors = ['https://applepay.cdn-apple.com/jsapi/1.latest/apple-pay-sdk.js'];
+
+    messageBus?.sendUnhandledErrorMessage(new Error('Payment button never became clickable'));
+
+    const parsedArg = JSON.parse((window.parent.postMessage as jest.Mock).mock.calls[0][0]);
+
+    expect(parsedArg.error.message).toBe('Payment button never became clickable');
+    expect(parsedArg.error.scriptLoadErrors).toBe('https://applepay.cdn-apple.com/jsapi/1.latest/apple-pay-sdk.js');
+    expect(parsedArg.error.scriptLoadErrorCount).toBe(1);
+});
+
+it('should report no script failures when every script loaded', () => {
+    window.__chargebeeScriptErrors = [];
+
+    messageBus?.sendUnhandledErrorMessage(new Error('Unrelated failure'));
+
+    const parsedArg = JSON.parse((window.parent.postMessage as jest.Mock).mock.calls[0][0]);
+
+    expect(parsedArg.error.scriptLoadErrors).toBeNull();
+    expect(parsedArg.error.scriptLoadErrorCount).toBe(0);
+});
+
+const flushListener = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const getFailureCheckpoint = () => {
+    const calls = (window.parent.postMessage as jest.Mock).mock.calls;
+    const unhandledError = calls
+        .map(([message]) => JSON.parse(message))
+        .find(({ type }) => type === 'chargebee-unhandled-error');
+
+    return unhandledError?.error.checkpoints.find(
+        ({ name }: { name: string }) => name === 'failed_to_handle_parent_message'
+    );
+};
+
+const postToIframe = (data: any) =>
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+it('should report the redacted event when a handler throws', async () => {
+    messageBus!.onGetHeight = jest.fn(() => {
+        throw new Error('Chargebee is not defined');
+    });
+
+    postToIframe(JSON.stringify({ type: 'get-height', correlationId: 'id-7' }));
+    await flushListener();
+
+    const checkpoint = getFailureCheckpoint();
+    expect(checkpoint.data.errorMessage).toBe('Chargebee is not defined');
+    expect(checkpoint.data.errorName).toBe('Error');
+    expect(JSON.parse(checkpoint.data.eventRawData)).toEqual({ type: 'get-height', correlationId: 'id-7' });
+});
+
+it('should ignore a payload that is not valid JSON instead of reporting it', async () => {
+    postToIframe('{"type":"get-height",');
+    await flushListener();
+
+    expect(getFailureCheckpoint()).toBeUndefined();
+    expect(messageBus?.onGetHeight).not.toHaveBeenCalled();
+});
+
+it('should listen to direct debit submit event', () => {
+    const event: DirectDebitSubmitEvent = {
+        type: 'direct-debit-submit',
+        correlationId: 'dd-123',
+        paymentIntent: {
+            id: 'pi_123',
+            status: 'inited',
+            amount: 1000,
+            currency_code: 'USD',
+            gateway_account_id: 'ga_123',
+            gateway: 'stripe',
+            customer_id: 'cust_123',
+            payment_method_type: 'card',
+            expires_at: 1234567890,
+            created_at: 1234567890,
+            modified_at: 1234567890,
+            updated_at: 1234567890,
+            resource_version: 1234567890,
+            object: 'payment_intent',
+        },
+        customer: {
+            email: 'test@example.com',
+            company: 'Test Company',
+            firstName: 'John',
+            lastName: 'Doe',
+            customerNameType: 'individual',
+            countryCode: 'US',
+            addressLine1: '123 Test St',
+        },
+        bankAccount: {
+            iban: 'DE89370400440532013000',
+        },
+    };
+
+    // Mock the onDirectDebitSubmit handler
+    const mockOnDirectDebitSubmit = jest.fn();
+    messageBus!.onDirectDebitSubmit = mockOnDirectDebitSubmit;
+
+    fireEvent(
+        window,
+        new MessageEvent('message', {
+            data: event,
+            source: window.parent,
+            origin: expectedParentOrigin,
+        })
+    );
+
+    expect(mockOnDirectDebitSubmit).toHaveBeenCalled();
+    const firstArg = mockOnDirectDebitSubmit.mock.calls[0][0];
+    expect(firstArg).toEqual(event);
+
+    const secondArg = mockOnDirectDebitSubmit.mock.calls[0][1];
+    expect(secondArg).toBeInstanceOf(Function);
+
+    const response: MessageBusResponse<{}> = {
+        status: 'success',
+        data: {},
+    };
+    secondArg(response);
+    expect(window.parent.postMessage).toHaveBeenCalledWith(
+        JSON.stringify({
+            type: 'direct-debit-submit-response',
+            correlationId: event.correlationId,
+            status: 'success',
+            data: {},
+        }),
+        expectedParentOrigin
+    );
+});
+
+const expectPostedMessage = (nthCall: number, message: object) =>
+    expect(window.parent.postMessage).toHaveBeenNthCalledWith(nthCall, JSON.stringify(message), expectedParentOrigin);
+
+it('should send ideal authorized message on both the legacy and the generic apm event', () => {
+    const data: IdealAuthorizedPayload = {
+        paymentIntent: {
+            type: 'payment_intent',
+        } as any,
+    };
+
+    messageBus?.sendIdealAuthorizedMessage(data);
+
+    expectPostedMessage(1, { type: 'ideal-authorized', status: 'success', data });
+    expectPostedMessage(2, { type: 'apm-authorized', method: 'ideal', status: 'success', data });
+});
+
+it('should send ideal failed message on both the legacy and the generic apm event', () => {
+    const error = { message: 'error' };
+
+    messageBus?.sendIdealFailedMessage(error);
+
+    expectPostedMessage(1, { type: 'ideal-failed', status: 'failure', error });
+    expectPostedMessage(2, { type: 'apm-failed', method: 'ideal', status: 'failure', error });
+});
+
+it('should send ideal clicked message on both the legacy and the generic apm event', () => {
+    messageBus?.sendIdealClickedMessage();
+
+    expectPostedMessage(1, { type: 'ideal-clicked', status: 'success', data: {} });
+    expectPostedMessage(2, { type: 'apm-clicked', method: 'ideal', status: 'success', data: {} });
+});
+
+it('should send ideal cancelled message on both the legacy and the generic apm event', () => {
+    messageBus?.sendIdealCancelledMessage();
+
+    expectPostedMessage(1, { type: 'ideal-cancelled', status: 'success', data: {} });
+    expectPostedMessage(2, { type: 'apm-cancelled', method: 'ideal', status: 'success', data: {} });
+});

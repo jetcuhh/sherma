@@ -1,0 +1,388 @@
+import { c } from 'ttag';
+
+import { ADDON_PREFIXES, PLANS } from '@proton/payments/core/constants';
+import type { PlanIDs } from '@proton/payments/core/interface';
+import { hasAddonFromPlanIDs } from '@proton/payments/core/plan/addons';
+import {
+    CALENDAR_SHORT_APP_NAME,
+    DARK_WEB_MONITORING_NAME,
+    DRIVE_SHORT_APP_NAME,
+    DUO_MAX_USERS,
+    FAMILY_MAX_USERS,
+    MAIL_SHORT_APP_NAME,
+    VPN_SHORT_APP_NAME,
+} from '@proton/shared/lib/constants';
+import type { Included } from '@proton/shared/lib/helpers/checkout';
+import { getPremiumPasswordManagerText } from '@proton/shared/lib/helpers/checkout';
+import humanSize from '@proton/shared/lib/helpers/humanSize';
+import { getPremium } from '@proton/shared/lib/helpers/premium';
+import type { FreePlanDefault, PlansMap } from '@proton/shared/lib/payments/plan/interface';
+import { getVpnConnections, getVpnServers } from '@proton/shared/lib/vpn/features';
+import { VPN_SERVERS } from '@proton/shared/lib/vpn/vpnServers';
+
+import { getNUsersText } from '../../../features/highlights';
+import { getAccessToAdvancedAIText, getFullChatHistoryText, getUnlimitedChatsText } from '../../../features/lumo';
+import {
+    PAID_MAX_ACTIVE_MEETINGS,
+    PAID_MAX_PARTICIPANTS,
+    getMaxMeetingsPerDayText,
+    getMaxMeetingsText,
+    getMaxParticipantsText,
+    getMeetMeetingRecordingText,
+    getMeetingMaxLengthText,
+} from '../../../features/meet';
+import {
+    get2FAAuthenticatorText,
+    getAdvancedAliasFeaturesText,
+    getLoginsAndNotesText,
+    getPassUsersText,
+    getProtonPassFeatureTooltipText,
+    getSecureSharingText,
+    getUnlimitedHideMyEmailAliasesText,
+} from '../../../features/pass';
+import { getScribeWritingAssistantText } from '../../assistant/helpers';
+
+export const getWhatsIncluded = ({
+    planIDs,
+    plansMap,
+    freePlan,
+    scribeToLumo,
+}: {
+    planIDs: PlanIDs;
+    plansMap: PlansMap;
+    freePlan: FreePlanDefault;
+    scribeToLumo: boolean;
+}): Included[] => {
+    const summary = Object.entries(planIDs).reduce(
+        (acc, [planNameValue, quantity]) => {
+            const planName = planNameValue as keyof PlansMap;
+            const plan = plansMap[planName];
+            if (!plan || !quantity || quantity <= 0) {
+                return acc;
+            }
+            acc.addresses += plan.MaxAddresses * quantity;
+            acc.domains += plan.MaxDomains * quantity;
+            acc.space += plan.MaxSpace * quantity;
+            acc.vpn += plan.MaxVPN * quantity;
+            return acc;
+        },
+        { space: 0, addresses: 0, domains: 0, vpn: 0 }
+    );
+
+    const writingAssistantText = getScribeWritingAssistantText(scribeToLumo);
+
+    // Default included features
+    let included: Included[] = [
+        {
+            type: 'value',
+            text: c('Info').t`Total storage`,
+            value: humanSize({ bytes: summary.space || freePlan.MaxSpace, fraction: 0 }),
+        },
+        { type: 'value', text: c('Info').t`Total email addresses`, value: summary.addresses || freePlan.MaxAddresses },
+        { type: 'value', text: c('Info').t`Total supported domains`, value: summary.domains || freePlan.MaxDomains },
+        { type: 'value', text: c('Info').t`Total VPN connections`, value: summary.vpn || freePlan.MaxVPN },
+    ];
+
+    const vpnPassBundle = planIDs[PLANS.VPN_PASS_BUNDLE];
+    if (vpnPassBundle) {
+        included = [
+            {
+                type: 'text',
+                text: getPremium(VPN_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremiumPasswordManagerText(),
+            },
+        ];
+    }
+
+    const unlimited = planIDs[PLANS.BUNDLE];
+    const unlimitedPlan = plansMap[PLANS.BUNDLE];
+    if (unlimited && unlimitedPlan) {
+        const storage = humanSize({
+            bytes: unlimitedPlan.MaxSpace,
+            fraction: 0,
+        });
+        included = [
+            {
+                type: 'text',
+                text: storage,
+            },
+            {
+                type: 'text',
+                text: getPremium(MAIL_SHORT_APP_NAME, CALENDAR_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(VPN_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(DRIVE_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremiumPasswordManagerText(),
+            },
+        ];
+    }
+
+    const vpn = planIDs[PLANS.VPN2024];
+    if (vpn !== undefined && vpn > 0) {
+        included = [
+            {
+                type: 'text',
+                text: getVpnServers(VPN_SERVERS.paid.servers),
+            },
+            {
+                type: 'text',
+                text: c('specialoffer: Deal details').t`Highest VPN speed`,
+            },
+            {
+                type: 'text',
+                text: c('specialoffer: Deal details').t`Secure streaming`,
+            },
+            {
+                type: 'text',
+                text: getVpnConnections(10),
+            },
+        ];
+    }
+
+    const passFeatures: Included[] = [
+        {
+            type: 'text',
+            text: getLoginsAndNotesText(),
+        },
+        {
+            type: 'text',
+            text: getUnlimitedHideMyEmailAliasesText(),
+        },
+        {
+            type: 'text',
+            text: getAdvancedAliasFeaturesText(),
+        },
+        {
+            type: 'text',
+            text: getSecureSharingText(),
+        },
+        {
+            type: 'text',
+            text: get2FAAuthenticatorText(),
+        },
+    ];
+
+    const passPremium = planIDs[PLANS.PASS];
+    if (passPremium !== undefined && passPremium > 0) {
+        included = passFeatures;
+    }
+
+    const passLifetime = planIDs[PLANS.PASS_LIFETIME];
+    if (passLifetime !== undefined && passLifetime > 0) {
+        included = [
+            {
+                type: 'text',
+                text: getProtonPassFeatureTooltipText(),
+            },
+            ...passFeatures,
+        ];
+    }
+
+    const passFamily = planIDs[PLANS.PASS_FAMILY];
+    if (passFamily !== undefined && passFamily > 0) {
+        included = [
+            {
+                type: 'text',
+                text: getPassUsersText(FAMILY_MAX_USERS),
+            },
+            {
+                type: 'text',
+                text: getLoginsAndNotesText(),
+            },
+            {
+                type: 'text',
+                text: getUnlimitedHideMyEmailAliasesText(),
+            },
+            {
+                type: 'text',
+                text: getAdvancedAliasFeaturesText(),
+            },
+            {
+                type: 'text',
+                text: getSecureSharingText(true),
+            },
+            {
+                type: 'text',
+                text: DARK_WEB_MONITORING_NAME,
+            },
+            {
+                type: 'text',
+                text: get2FAAuthenticatorText(),
+            },
+        ];
+    }
+
+    if (planIDs[PLANS.PASS_BASIC]) {
+        included = [
+            {
+                type: 'text',
+                text: getLoginsAndNotesText(),
+            },
+            {
+                type: 'text',
+                text: c('Info').t`1 device per user`,
+            },
+            {
+                type: 'text',
+                text: c('Info').t`1 vault per user`,
+            },
+            {
+                type: 'text',
+                text: get2FAAuthenticatorText(),
+            },
+            {
+                type: 'text',
+                text: getSecureSharingText(true),
+            },
+        ];
+    }
+
+    const family = planIDs[PLANS.FAMILY];
+    if (family !== undefined && family > 0) {
+        const storage = humanSize({
+            bytes: summary.space || freePlan.MaxSpace,
+            fraction: 0,
+        });
+
+        included = [
+            {
+                type: 'text',
+                text: getNUsersText(FAMILY_MAX_USERS),
+            },
+            {
+                type: 'text',
+                text: c('Info').t`${storage} storage`,
+            },
+            {
+                type: 'text',
+                text: getPremium(MAIL_SHORT_APP_NAME, CALENDAR_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(VPN_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(DRIVE_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremiumPasswordManagerText(),
+            },
+            {
+                type: 'text',
+                text: writingAssistantText,
+            },
+        ];
+    }
+
+    const duo = planIDs[PLANS.DUO];
+    if (duo !== undefined && duo > 0) {
+        const storage = humanSize({
+            bytes: summary.space || freePlan.MaxSpace,
+            fraction: 0,
+        });
+
+        included = [
+            {
+                type: 'text',
+                text: getNUsersText(DUO_MAX_USERS),
+            },
+            {
+                type: 'text',
+                text: c('Info').t`${storage} storage`,
+            },
+            {
+                type: 'text',
+                text: getPremium(MAIL_SHORT_APP_NAME, CALENDAR_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(VPN_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremium(DRIVE_SHORT_APP_NAME),
+            },
+            {
+                type: 'text',
+                text: getPremiumPasswordManagerText(),
+            },
+            {
+                type: 'text',
+                text: writingAssistantText,
+            },
+        ];
+    }
+
+    const meetPlan = planIDs[PLANS.MEET] || planIDs[PLANS.MEET_BUSINESS];
+    const meetAddon = hasAddonFromPlanIDs(ADDON_PREFIXES.MEET, planIDs);
+    const meetFeatures: Included[] = [
+        {
+            type: 'text',
+            text: getMeetingMaxLengthText('paid'),
+        },
+        {
+            type: 'text',
+            text: getMaxParticipantsText(PAID_MAX_PARTICIPANTS),
+        },
+        {
+            type: 'text',
+            text: getMaxMeetingsText(PAID_MAX_ACTIVE_MEETINGS),
+        },
+        {
+            type: 'text',
+            text: getMaxMeetingsPerDayText('unlimited'),
+        },
+        {
+            type: 'text',
+            text: getMeetMeetingRecordingText(),
+        },
+    ];
+
+    if (meetPlan !== undefined && meetPlan > 0) {
+        included = meetFeatures;
+    } else if (meetAddon) {
+        included = [...included, ...meetFeatures];
+    }
+
+    const lumoPlan = planIDs[PLANS.LUMO];
+    const lumoAddon = hasAddonFromPlanIDs(ADDON_PREFIXES.LUMO, planIDs);
+    const lumoFeatures: Included[] = [
+        {
+            type: 'text',
+            text: getAccessToAdvancedAIText(),
+        },
+        {
+            type: 'text',
+            text: getUnlimitedChatsText(),
+        },
+        {
+            type: 'text',
+            text: getFullChatHistoryText(),
+        },
+        {
+            type: 'text',
+            text: c('collider_2025: feature').t`Large file upload support`,
+        },
+    ];
+
+    if (lumoPlan !== undefined && lumoPlan > 0) {
+        included = lumoFeatures;
+    } else if (lumoAddon) {
+        included = [...included, ...lumoFeatures];
+    }
+
+    return included;
+};

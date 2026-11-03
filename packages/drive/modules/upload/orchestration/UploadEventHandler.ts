@@ -1,0 +1,320 @@
+import { NodeType } from '@protontech/drive-sdk';
+
+import metrics from '@proton/metrics/metricsInstance';
+
+import { TransferSpeedMetrics } from '../../transferPerformance';
+import { UploadDriveClientRegistry } from '../UploadDriveClientRegistry';
+import type { CapacityManager } from '../scheduling/CapacityManager';
+import { useUploadControllerStore } from '../store/uploadController.store';
+import { useUploadQueueStore } from '../store/uploadQueue.store';
+import type {
+    FileUploadEvent,
+    FolderCreationEvent,
+    PhotosUploadEvent,
+    UploadEvent,
+    UploadEventSubscriberCallback,
+} from '../types';
+import { UploadStatus, isPhotosUploadItem } from '../types';
+import { getBlockedDescendants, getDirectChildren } from '../utils/dependencyHelpers';
+import { uploadLogDebug, uploadLogError } from '../utils/uploadLogger';
+import type { ConflictManager } from './ConflictManager';
+import type { SDKTransferActivity } from './SDKTransferActivity';
+
+/**
+ * Handles upload events from executors and updates stores accordingly
+ * Delegates to specialized managers for specific concerns
+ */
+export class UploadEventHandler {
+    // Unlisted events are notify-only (broadcast to subscribers, no internal handler).
+    private eventHandlers: {
+        [K in UploadEvent['type']]?: (event: Extract<UploadEvent, { type: K }>) => void | Promise<void>;
+    };
+    private eventSubscriptions = new Map<string, UploadEventSubscriberCallback>();
+    private uploadSpeedMetrics = new TransferSpeedMetrics((values) => {
+        uploadLogDebug('Upload speed metrics', values);
+        metrics.drive_upload_speed_histogram.observe({
+            Labels: { context: 'foreground', pipeline: 'default' },
+            Value: Math.round(values.kibibytesPerSecond),
+        });
+    });
+
+    constructor(
+        private capacityManager: CapacityManager,
+        private conflictManager: ConflictManager,
+        private sdkTransferActivity: SDKTransferActivity,
+        private sdkPhotosTransferActivity: SDKTransferActivity,
+        private cancelFolderChildren: (uploadId: string) => void,
+        private onWakeOrchestrator: () => void = () => {}
+    ) {
+        this.eventHandlers = {
+            'file:preparing': (event: Extract<UploadEvent, { type: 'file:preparing' }>) =>
+                this.handleFilePreparing(event),
+            'file:prepared': (event: Extract<UploadEvent, { type: 'file:prepared' }>) => this.handleFilePrepared(event),
+            'file:started': (event: Extract<UploadEvent, { type: 'file:started' }>) => this.handleFileStarted(event),
+            'file:progress': (event: Extract<UploadEvent, { type: 'file:progress' }>) => this.handleFileProgress(event),
+            'file:complete': (event: Extract<UploadEvent, { type: 'file:complete' }>) => this.handleFileComplete(event),
+            'file:error': (event: Extract<UploadEvent, { type: 'file:error' }>) => this.handleFileError(event),
+            'photo:exist': (event: Extract<UploadEvent, { type: 'photo:exist' }>) => this.handlePhotoExist(event),
+            'photo:unsupported': (event: Extract<UploadEvent, { type: 'photo:unsupported' }>) =>
+                this.handlePhotoUnsupported(event),
+            'file:conflict': (event: Extract<UploadEvent, { type: 'file:conflict' }>) =>
+                this.conflictManager.handleConflict(event.uploadId, event.error),
+            'file:empty': (event: Extract<UploadEvent, { type: 'file:empty' }>) => this.handleFileEmpty(event),
+            'folder:conflict': (event: Extract<UploadEvent, { type: 'folder:conflict' }>) =>
+                this.conflictManager.handleConflict(event.uploadId, event.error),
+            'folder:complete': (event: Extract<UploadEvent, { type: 'folder:complete' }>) =>
+                this.handleFolderComplete(event),
+            'folder:error': (event: Extract<UploadEvent, { type: 'folder:error' }>) => this.handleFolderError(event),
+        };
+    }
+
+    subscribeToEvents(context: string, callback: UploadEventSubscriberCallback): () => void {
+        this.eventSubscriptions.set(context, callback);
+        return () => {
+            this.eventSubscriptions.delete(context);
+        };
+    }
+
+    hasSubscriptions(): boolean {
+        return this.eventSubscriptions.size > 0;
+    }
+
+    async handleEvent(event: UploadEvent): Promise<void> {
+        const isForPhotos = 'isForPhotos' in event && event.isForPhotos;
+        const driveClient = isForPhotos
+            ? UploadDriveClientRegistry.getDrivePhotosClient()
+            : UploadDriveClientRegistry.getDriveClient();
+        const results = await Promise.allSettled(
+            Array.from(this.eventSubscriptions.values()).map((callback) => {
+                return callback(event, driveClient);
+            })
+        );
+        for (const result of results) {
+            if (result.status === 'rejected') {
+                uploadLogError('Upload event subscriber failed', result.reason, {
+                    uploadId: event.uploadId,
+                    eventType: event.type,
+                });
+            }
+        }
+
+        const handler = this.eventHandlers[event.type];
+        if (handler) {
+            await (handler as (event: UploadEvent) => void | Promise<void>)(event);
+        }
+    }
+
+    private handleFilePreparing(event: FileUploadEvent & { type: 'file:preparing' }): void {
+        const queueStore = useUploadQueueStore.getState();
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.Preparing,
+        });
+    }
+
+    private handleFilePrepared(event: FileUploadEvent & { type: 'file:prepared' }): void {
+        const queueStore = useUploadQueueStore.getState();
+        const item = queueStore.getItem(event.uploadId);
+
+        this.capacityManager.releasePreparing(event.uploadId);
+        this.onWakeOrchestrator();
+
+        if (!item || item.status === UploadStatus.Cancelled) {
+            return;
+        }
+
+        queueStore.updateQueueItems(event.uploadId, { status: UploadStatus.Waiting });
+    }
+
+    private handleFileStarted(event: FileUploadEvent & { type: 'file:started' }): void {
+        const controllerStore = useUploadControllerStore.getState();
+        const queueStore = useUploadQueueStore.getState();
+        controllerStore.setUploadController(event.uploadId, event.controller);
+        queueStore.updateQueueItems(event.uploadId, { status: UploadStatus.InProgress });
+        this.uploadSpeedMetrics.onFileStarted(event.uploadId);
+    }
+
+    private handleFileProgress(event: FileUploadEvent & { type: 'file:progress' }): void {
+        const queueStore = useUploadQueueStore.getState();
+        const isPaused = event.isForPhotos
+            ? this.sdkPhotosTransferActivity.isPaused()
+            : this.sdkTransferActivity.isPaused();
+        this.uploadSpeedMetrics.onFileProgress(event.uploadId, event.uploadedBytes, isPaused);
+        if (isPaused || queueStore.getItem(event.uploadId)?.status === UploadStatus.Cancelled) {
+            return;
+        }
+
+        queueStore.updateQueueItems(event.uploadId, {
+            uploadedBytes: event.uploadedBytes,
+            status: UploadStatus.InProgress,
+        });
+        this.capacityManager.updateProgress(event.uploadId, event.uploadedBytes);
+    }
+
+    private async handleFileComplete(event: FileUploadEvent & { type: 'file:complete' }): Promise<void> {
+        const queueStore = useUploadQueueStore.getState();
+        const controllerStore = useUploadControllerStore.getState();
+
+        this.uploadSpeedMetrics.onFileEnded(event.uploadId);
+        queueStore.updateQueueItems(event.uploadId, {
+            status: event.isEmpty ? UploadStatus.EmptyFile : UploadStatus.Finished,
+            nodeUid: event.nodeUid,
+        });
+        controllerStore.removeControllers([event.uploadId]);
+        if (event.isForPhotos) {
+            this.sdkPhotosTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        } else {
+            this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        }
+    }
+
+    private async handleFileError(event: FileUploadEvent & { type: 'file:error' }): Promise<void> {
+        const queueStore = useUploadQueueStore.getState();
+        this.uploadSpeedMetrics.onFileEnded(event.uploadId);
+        if (queueStore.getItem(event.uploadId)?.status === UploadStatus.Cancelled) {
+            return;
+        }
+        const controllerStore = useUploadControllerStore.getState();
+
+        uploadLogError('File upload failed', event.error, {
+            uploadId: event.uploadId,
+        });
+
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.Failed,
+            error: event.error,
+        });
+        controllerStore.removeControllers([event.uploadId]);
+        if (event.isForPhotos) {
+            this.sdkPhotosTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        } else {
+            this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        }
+    }
+
+    private async handleFolderComplete(event: FolderCreationEvent & { type: 'folder:complete' }): Promise<void> {
+        const queueStore = useUploadQueueStore.getState();
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.Finished,
+            nodeUid: event.nodeUid,
+        });
+
+        const allItems = Array.from(queueStore.queue.values());
+        const childrenIds = getDirectChildren(event.uploadId, allItems);
+        if (childrenIds.length > 0) {
+            queueStore.updateQueueItems(childrenIds, {
+                parentUid: event.nodeUid,
+            });
+        }
+
+        this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+    }
+
+    private handleFolderError(event: FolderCreationEvent & { type: 'folder:error' }): void {
+        const queueStore = useUploadQueueStore.getState();
+
+        uploadLogError('Folder creation failed', event.error, {
+            uploadId: event.uploadId,
+        });
+
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.Failed,
+            error: event.error,
+        });
+        this.cancelFolderChildren(event.uploadId);
+        this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+    }
+
+    private async handlePhotoUnsupported(event: PhotosUploadEvent & { type: 'photo:unsupported' }): Promise<void> {
+        const queueStore = useUploadQueueStore.getState();
+
+        this.uploadSpeedMetrics.onFileEnded(event.uploadId);
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.NotSupportedForPhotos,
+        });
+        this.sdkPhotosTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+    }
+
+    private async handlePhotoExist(event: PhotosUploadEvent & { type: 'photo:exist' }): Promise<void> {
+        const queueStore = useUploadQueueStore.getState();
+
+        this.uploadSpeedMetrics.onFileEnded(event.uploadId);
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.PhotosDuplicate,
+            nodeUid: event.duplicateUids[0],
+        });
+    }
+
+    private handleFileEmpty(event: FileUploadEvent & { type: 'file:empty' }): void {
+        const queueStore = useUploadQueueStore.getState();
+        const controllerStore = useUploadControllerStore.getState();
+
+        queueStore.updateQueueItems(event.uploadId, {
+            status: UploadStatus.EmptyFile,
+        });
+        controllerStore.removeControllers([event.uploadId]);
+        if (event.isForPhotos) {
+            this.sdkPhotosTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        } else {
+            this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        }
+    }
+
+    /**
+     * Cancel one or many uploads (files, photos and/or folders) in a single store update,
+     * so cancelling triggers a single store notification (and selector recompute) rather than
+     * one per upload.
+     */
+    cancel(uploadIds: string[]): void {
+        if (uploadIds.length === 0) {
+            return;
+        }
+
+        const queueStore = useUploadQueueStore.getState();
+        const controllerStore = useUploadControllerStore.getState();
+        const allItems = Array.from(queueStore.queue.values());
+        const itemsById = new Map(allItems.map((item) => [item.uploadId, item]));
+
+        const cancelledIds = uploadIds.filter((uploadId) => itemsById.has(uploadId));
+        if (cancelledIds.length === 0) {
+            return;
+        }
+        const parentCancelledIds = getBlockedDescendants(cancelledIds, allItems);
+
+        for (const uploadId of cancelledIds) {
+            // Folders aren't tracked by the speed metrics, so only report file/photo ends.
+            if (itemsById.get(uploadId)?.type !== NodeType.Folder) {
+                this.uploadSpeedMetrics.onFileEnded(uploadId);
+            }
+            const controller = controllerStore.getController(uploadId);
+            if (controller) {
+                controller.abortController.abort();
+            }
+        }
+
+        controllerStore.removeControllers(cancelledIds);
+        queueStore.updateQueueItems(cancelledIds, { status: UploadStatus.Cancelled });
+        if (parentCancelledIds.length > 0) {
+            queueStore.updateQueueItems(parentCancelledIds, { status: UploadStatus.ParentCancelled });
+        }
+
+        // Notify subscribers; the store writes above already ran in one batch.
+        for (const uploadId of cancelledIds) {
+            const item = itemsById.get(uploadId);
+            if (!item) {
+                continue;
+            }
+            void this.handleEvent(
+                item.type === NodeType.Folder
+                    ? { type: 'folder:cancelled', uploadId }
+                    : { type: 'file:cancelled', uploadId, isForPhotos: isPhotosUploadItem(item) }
+            );
+        }
+
+        this.sdkTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+        this.sdkPhotosTransferActivity.checkAndUnsubscribeIfQueueEmpty();
+    }
+
+    dispose(): void {
+        this.uploadSpeedMetrics.dispose();
+    }
+}

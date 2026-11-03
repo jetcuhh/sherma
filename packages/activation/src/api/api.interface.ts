@@ -1,0 +1,394 @@
+import type { EVENT_ACTIONS } from '@proton/shared/lib/constants';
+import type { ApiResponse } from '@proton/shared/lib/interfaces/Api';
+
+import type {
+    AuthenticationMethod,
+    CalendarImporterPayload,
+    ContactsImporterPayload,
+    ImportType,
+    MailImportDestinationFolder,
+    MailImportGmailCategories,
+    MailImporterPayload,
+} from '../interface';
+
+/**
+ * API EVENTS
+ */
+interface ApiEventType {
+    ID: string;
+    Action: EVENT_ACTIONS;
+}
+
+export interface ApiEvent {
+    More?: 0 | 1;
+    EventID?: string;
+    Refresh?: number;
+    Imports?: ApiImportEvent[];
+    ImportReports?: ApiImportReportEvent[];
+    ImporterSyncs?: ApiSyncEvent[];
+}
+
+interface ApiImportReportEvent extends ApiEventType {
+    ImportReport?: ApiReport;
+}
+
+interface ApiImportEvent extends ApiEventType {
+    Importer?: ApiImporter;
+}
+
+interface ApiSyncEvent extends ApiEventType {
+    ImporterSync?: ApiSync;
+}
+
+/**
+ * API CALLS RESPONSES
+ */
+
+export interface ApiMailImporterFolder {
+    Source: string;
+    /** The hierarchy delimiter in the Source field */
+    Separator: string;
+    Size: number;
+    Hierarchy?: string[];
+    /**
+     * TODO
+     * Flags seem to deliver inconsistent results between
+     * IMAP and OAuth calls. We will not rely on it ATM
+     * */
+    Flags: string[];
+    Total?: number;
+    DestinationCategory?: MailImportGmailCategories;
+    DestinationFolder?: MailImportDestinationFolder;
+}
+
+export enum ApiReportRollbackState {
+    CANNOT_ROLLBACK = 0,
+    CAN_ROLLBACK = 1,
+    ROLLING_BACK = 2,
+    ROLLED_BACK = 3,
+}
+
+export enum ApiImporterState {
+    QUEUED = 0,
+    RUNNING = 1,
+    DONE = 2,
+    FAILED = 3,
+    PAUSED = 4,
+    CANCELED = 5,
+    DELAYED = 6,
+}
+
+/**
+ * Payload changes depending of the import type (Contacts, Mail, Calendar)
+ * This is just the list of the common fields
+ * Please look at API docs to find more infos
+ */
+export interface ApiReportSummary {
+    State: ApiImporterState;
+    TotalSize: number;
+    RollbackState?: ApiReportRollbackState;
+    NumMessages?: number;
+    NumContacts?: number;
+    NumGroups?: number;
+    NumEvents?: number;
+    DestinationFiles?: number;
+    SourceFiles?: number;
+    SourceBytes?: number;
+}
+
+export enum ApiImportProvider {
+    IMAP = 0,
+    GOOGLE = 1,
+    OUTLOOK = 2,
+}
+
+export enum ApiReportState {
+    UNSENT = 0,
+    SENT = 1,
+}
+
+export interface ApiReport {
+    ID: string;
+    CreateTime: number;
+    EndTime: number;
+    Provider: ApiImportProvider;
+    /** Email */
+    Account: string;
+    State: ApiReportState;
+    Summary: Partial<Record<ImportType, ApiReportSummary>>;
+    TotalSize: number;
+}
+
+export enum ApiImporterError {
+    ERROR_CODE_IMAP_CONNECTION = 1,
+    ERROR_CODE_QUOTA_LIMIT = 2,
+}
+
+export interface ApiImporterFolder {
+    SourceFolder: string;
+    DestinationFolder?: MailImportDestinationFolder;
+    Processed: number;
+    Total: number;
+    Source?: string;
+}
+
+export interface ApiImporterActive {
+    CreateTime: number;
+    State: ApiImporterState;
+    ErrorCode?: ApiImporterError;
+    Mapping?: ApiImporterFolder[];
+    Processed?: number;
+    Total?: number;
+    AttemptTime?: number;
+    NumContacts?: number;
+    FilterStartDate?: string;
+    FilterEndDate?: string;
+    /** Only for Drive importer: bytes imported so far. */
+    ImportedBytes?: number;
+}
+
+export interface ApiImporter {
+    ID: string;
+    /** Only on IMAP flow */
+    TokenID?: string;
+    Account: string;
+    Provider: ApiImportProvider;
+    Product: ImportType[];
+    Active?: Partial<Record<ImportType, ApiImporterActive>>;
+    ModifyTime: number;
+    /** Only on IMAP flow */
+    ImapHost?: string;
+    /** Only on IMAP flow */
+    ImapPort?: string;
+    /** Only on IMAP flow */
+    Sasl?: AuthenticationMethod;
+    /** Only on IMAP flow */
+    AllowSelfSigned?: boolean;
+    /** @deprecated replaced by account */
+    Email: string;
+}
+
+/**
+ * GET importer/v1/reports
+ */
+export interface ApiImportReportListResponse extends ApiResponse {
+    Reports: ApiReport[];
+}
+
+/**
+ * GET importer/v1/importers
+ */
+export interface ApiImportListResponse extends ApiResponse {
+    Importers: ApiImporter[];
+}
+
+/**
+ * GET importer/v1/importers/{enc_importerID}
+ */
+export interface ApiImportResponse extends ApiResponse {
+    Importer: ApiImporter;
+}
+
+/**
+ * POST importer/v1/mail/importers/authinfo
+ */
+export interface ApiImporterAuthInfoResponse extends ApiResponse {
+    Authentication: {
+        Sasl: string;
+        OAuthUrl: string;
+        OAuthParams: string[];
+        ImapHost: string;
+        ImapPort: number;
+        ImporterID: string;
+    };
+}
+
+/**
+ * POST importer/v1/importers
+ */
+export interface ApiCreateImporterResponse extends ApiResponse {
+    ImporterID: string;
+}
+
+/**
+ * GET importer/v1/mail/importers/${importerID}
+ */
+export interface ApiImporterImportResponse extends ApiResponse {
+    Folders: ApiMailImporterFolder[];
+}
+
+/**
+ * POST importer/v1/importers/start
+ */
+export interface ApiStartImportParams {
+    ImporterID: string;
+    [ImportType.MAIL]?: MailImporterPayload;
+    [ImportType.CALENDAR]?: CalendarImporterPayload;
+    [ImportType.CONTACTS]?: ContactsImporterPayload;
+}
+export interface ApiStartImportResponse extends ApiResponse {}
+
+/**
+ * importer/v1/sync
+ */
+
+export enum ApiSyncState {
+    OFFLINE = 0,
+    ACTIVE = 1,
+    EXPIRED = 2,
+}
+export interface ApiSync {
+    Account: string;
+    ID: string;
+    ImporterID: string;
+    Product: ImportType;
+    State: ApiSyncState;
+    CreateTime: number;
+    LastImportTime: number;
+    LastRenewTime: number;
+}
+
+export interface APIImportSyncListResponse extends ApiResponse {
+    Syncs: ApiSync[];
+}
+
+export interface CreateSignupOAuthTokenResponse {
+    ValidatedOAuthTokenOutput: {
+        Account: string;
+        Provider: ApiImportProvider;
+    };
+}
+
+export enum ProductStatusState {
+    Initialized = 0,
+    Active = 1,
+    Completed = 2,
+    Error = 3,
+}
+
+type ProductStatus = {
+    Product: ApiImporterProduct;
+    State: ProductStatusState;
+    Error: string;
+};
+
+interface ApiImporterOrganizationUserEligibility {
+    IsEligible: boolean;
+    Reasons: string[];
+}
+
+export interface ApiImporterOrganizationUser {
+    ID: string;
+    Email: string;
+    AdminSetName: string;
+    Domain: string;
+    FirstName: string;
+    LastName: string;
+    TotalQuota: number;
+    UsedQuota: number;
+    ProductQuotas: {
+        Mail: number;
+    };
+    ImporterOrganizationUser?: {
+        UserID: string;
+        ProductStatuses: ProductStatus[];
+        HasTemporaryPassword: boolean;
+    };
+    Eligibility: ApiImporterOrganizationUserEligibility;
+}
+
+export interface ApiImporterOrganizationUsers {
+    Users: ApiImporterOrganizationUser[];
+    /**
+     * Temporary failsafe: true when the organization has more users than we
+     * can currently import.
+     * TODO: remove once the org-size import limit is lifted.
+     */
+    TooManyUsers?: boolean;
+}
+
+export type ApiImporterProduct = 'Mail' | 'Contacts' | 'Calendar';
+
+export enum ApiImporterOrganizationState {
+    INITIALIZED = 0,
+    ACTIVE = 1,
+    COMPLETED = 2,
+    FINALIZED = 3,
+}
+
+export interface ApiImporterOrganization {
+    AdminUserID: string;
+    CreateTime: string;
+    DomainName: string;
+    ExternalCustomerID: string;
+    ImporterConfig: {
+        Products: ApiImporterProduct[];
+        ImportOrganizationSettings: boolean;
+    };
+    ImporterOrganizationID: string;
+    ModifyTime: string;
+    OrganizationID: string;
+    Provider: ApiImportProvider;
+    State: ApiImporterOrganizationState;
+}
+
+export interface ApiCreateImporterOrganization {
+    Provider: ApiImportProvider;
+    Products: ApiImporterProduct[];
+    ImportOrganizationSettings: boolean;
+    DomainName?: string;
+}
+
+export interface ApiImporterOrganizationDomains {
+    DomainsNames: string[];
+}
+
+export interface ApiCreateImporterOrganizationMigration {
+    ImporterOrganizationId: string;
+    AddressIds: string[];
+}
+
+export interface ApiImporterConnectionStatus {
+    IsConnected: boolean;
+}
+
+export interface ApiImporterOrganizationProductReport {
+    UserID: string;
+    Product: ApiImporterProduct;
+    Report: ApiImporterOrganizationReport;
+}
+
+export interface ApiImporterOrganizationReport {
+    State: number;
+    NumMessages?: number;
+    TotalSize: number;
+    Journal: {
+        ImportDate: string;
+        Name?: string;
+        Email?: string;
+        Reason: string;
+        Source?: string;
+        UID?: string;
+    }[];
+    NumContacts?: number;
+    NumGroups?: number;
+    Groups?: any[];
+    Failures?: number;
+    NumEvents?: number;
+}
+
+export enum ApiOrganizationInviteTokenState {
+    Disabled = 0,
+    Enabled = 1,
+}
+
+export interface ApiJoiningLinkData {
+    Token: string;
+    EncryptedTempPassword: string;
+    TokenStatus: ApiOrganizationInviteTokenState;
+    TokenExpirationTime: number;
+}
+
+export interface ApiCreateJoiningLink {
+    EncryptedTempPassword: string;
+}

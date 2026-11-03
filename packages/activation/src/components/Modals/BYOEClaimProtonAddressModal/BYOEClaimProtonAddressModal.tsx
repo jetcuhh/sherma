@@ -1,0 +1,192 @@
+import { type FormEvent, useEffect, useState } from 'react';
+
+import { c } from 'ttag';
+
+import { setupExternalUserForProton } from '@proton/account/addresses/actions';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { Button } from '@proton/atoms/Button/Button';
+import Form from '@proton/components/components/form/Form';
+import InputFieldStacked from '@proton/components/components/inputFieldStacked/InputFieldStacked';
+import ModalTwo, { type ModalProps } from '@proton/components/components/modalTwo/Modal';
+import ModalTwoContent from '@proton/components/components/modalTwo/ModalContent';
+import ModalTwoFooter from '@proton/components/components/modalTwo/ModalFooter';
+import ModalTwoHeader from '@proton/components/components/modalTwo/ModalHeader';
+import { InputField as InputFieldTwo } from '@proton/components/components/v2/field/InputField';
+import useFormErrors from '@proton/components/components/v2/useFormErrors';
+import useAuthentication from '@proton/components/hooks/useAuthentication';
+import useErrorHandler from '@proton/components/hooks/useErrorHandler';
+import useEventManager from '@proton/components/hooks/useEventManager';
+import { useSilentApi } from '@proton/components/hooks/useSilentApi';
+import useLoading from '@proton/hooks/useLoading';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import { queryCheckUsernameAvailability } from '@proton/shared/lib/api/user';
+import { type APP_NAMES, BRAND_NAME, MAIL_APP_NAME } from '@proton/shared/lib/constants';
+import {
+    requiredValidator,
+    usernameCharacterValidator,
+    usernameEndCharacterValidator,
+    usernameLengthValidator,
+    usernameNoEmailValidator,
+    usernameStartCharacterValidator,
+} from '@proton/shared/lib/helpers/formValidators';
+import type { CalendarUserSettings, VisualCalendar } from '@proton/shared/lib/interfaces/calendar/Calendar';
+import claimProtonAddressImg from '@proton/styles/assets/img/illustrations/claim-proton-address.svg';
+
+import type { BYOE_CLAIM_PROTON_ADDRESS_SOURCE } from '../../../constants';
+import useBYOEAddressData from '../../../hooks/useBYOEAddressData';
+import { trackAccountImportClaimProtonAddressCompleted } from '../../../telemetry/accountImportFlow';
+
+interface Props extends ModalProps {
+    toApp: APP_NAMES;
+    title?: string;
+    description?: string;
+    onCreateCalendar?: () => Promise<{
+        calendars: VisualCalendar[];
+        calendarUserSettings: CalendarUserSettings;
+    }>;
+    source: BYOE_CLAIM_PROTON_ADDRESS_SOURCE;
+}
+
+const BYOEClaimProtonAddressModal = ({
+    toApp,
+    title = c('Title').t`Claim your ${MAIL_APP_NAME} address`,
+    description = c('Info')
+        .t`Ensure fully private and encrypted communication. Claim your free ${BRAND_NAME} email address now.`,
+    onClose,
+    onCreateCalendar,
+    source,
+    ...rest
+}: Props) => {
+    const { createNotification } = useNotifications();
+    const silentApi = useSilentApi();
+    const { call } = useEventManager();
+    const errorHandler = useErrorHandler();
+    const authentication = useAuthentication();
+    const dispatch = useDispatch();
+    const [addressData, loadingAddressData] = useBYOEAddressData();
+    const [username, setUsername] = useState('');
+    const [loadingSubmit, withLoading] = useLoading();
+
+    const { validator, onFormSubmit } = useFormErrors();
+
+    useEffect(() => {
+        if (addressData?.claimableAddress?.username) {
+            setUsername(addressData.claimableAddress.username);
+        }
+    }, [addressData?.claimableAddress?.username]);
+
+    const trimmedUsername = username.trim();
+    const domain = addressData?.domains.length ? addressData.domains[0] : undefined;
+
+    const handleCreateProtonAddress = async ({
+        username,
+        domain,
+        onCreateCallback,
+        toApp,
+    }: {
+        username: string;
+        domain: string;
+        onCreateCallback?: () => void;
+        toApp: APP_NAMES;
+    }) => {
+        try {
+            await silentApi(queryCheckUsernameAvailability(`${username}@${domain}`, true));
+        } catch (e) {
+            errorHandler(e);
+            return;
+        }
+
+        const payload = {
+            username,
+            domain,
+            address: `${username}@${domain}`,
+            setup: {
+                mode: 'create',
+                keyPassword: authentication.getPassword(),
+            } as const,
+        };
+
+        try {
+            await dispatch(setupExternalUserForProton({ payload, app: toApp }));
+
+            createNotification({
+                type: 'success',
+                text: c('Notification').t`Your ${BRAND_NAME} address is ready to use`,
+            });
+            onCreateCallback?.();
+
+            trackAccountImportClaimProtonAddressCompleted(source);
+
+            // Call the event manager so that we update the get-started checklist items
+            void call();
+        } catch (e) {
+            errorHandler(e);
+        }
+    };
+
+    const handleSubmit = async (event: FormEvent) => {
+        event.preventDefault();
+        if (loadingAddressData || !onFormSubmit() || !domain) {
+            return;
+        }
+
+        await handleCreateProtonAddress({ username, domain, onCreateCallback: () => onClose?.(), toApp });
+
+        // In some cases (e.g. in settings import modal) we also want to create a calendar right away
+        if (onCreateCalendar) {
+            await onCreateCalendar();
+        }
+    };
+
+    const suffix = domain && !loadingAddressData ? `@${domain}` : undefined;
+
+    return (
+        <ModalTwo as={Form} onSubmit={(e: FormEvent) => withLoading(handleSubmit(e))} onClose={onClose} {...rest}>
+            <ModalTwoHeader />
+            <ModalTwoContent>
+                <div className="text-center mb-4">
+                    <img src={claimProtonAddressImg} alt="" />
+                </div>
+                <h1 className="text-center text-bold text-2xl">{title}</h1>
+                <p className="text-center color-weak">{description}</p>
+
+                <InputFieldStacked classname="mb-2 relative">
+                    <InputFieldTwo
+                        type="text"
+                        label={<span className="expand-click-area">{c('Label').t`Username`}</span>}
+                        inputClassName="rounded-none"
+                        autoFocus
+                        unstyled
+                        disabled={loadingAddressData}
+                        value={username}
+                        onValue={setUsername}
+                        suffix={suffix}
+                        error={validator([
+                            requiredValidator(trimmedUsername),
+                            usernameLengthValidator(trimmedUsername),
+                            usernameNoEmailValidator(trimmedUsername),
+                            usernameStartCharacterValidator(trimmedUsername),
+                            usernameEndCharacterValidator(trimmedUsername),
+                            usernameCharacterValidator(trimmedUsername),
+                        ])}
+                    />
+                </InputFieldStacked>
+            </ModalTwoContent>
+            <ModalTwoFooter className="flex-column">
+                <Button
+                    color="norm"
+                    disabled={loadingAddressData || loadingSubmit}
+                    type="submit"
+                    loading={loadingSubmit}
+                >
+                    {c('Action').t`Claim this address`}
+                </Button>
+                <Button shape="outline" onClick={() => onClose?.()}>
+                    {c('Action').t`Cancel`}
+                </Button>
+            </ModalTwoFooter>
+        </ModalTwo>
+    );
+};
+
+export default BYOEClaimProtonAddressModal;

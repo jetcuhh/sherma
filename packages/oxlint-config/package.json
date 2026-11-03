@@ -1,0 +1,36 @@
+{
+    "name": "@proton/oxlint-config",
+    "version": "0.1.0",
+    "description": "Shared oxlint config, Proton's oxlint rules, and the restriction lists workspaces build their own configs from",
+    "type": "module",
+    "exports": {
+        "./brandNames": "./src/brandNames.ts",
+        "./createOxlintConfig": "./src/createOxlintConfig.ts",
+        "./extraneousDependencies": "./src/extraneousDependencies.ts",
+        "./globs": "./src/globs.ts",
+        "./namingConvention": "./src/namingConvention.ts",
+        "./plugin": "./src/plugin/index.ts",
+        "./restrictedImports": "./src/restrictedImports.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "rename-disable-comments": "node scripts/renameDisableComments.ts",
+        "test": "vitest",
+        "test:ci": "pnpm run test --run"
+    },
+    "dependencies": {
+        "@oxlint/plugins": "catalog:",
+        "eslint-plugin-compat": "^7.0.2",
+        "eslint-plugin-custom-rules": "workspace:^",
+        "ignore": "^7.0.5",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:",
+        "@typescript/native": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

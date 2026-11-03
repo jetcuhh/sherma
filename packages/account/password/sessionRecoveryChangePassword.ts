@@ -1,0 +1,104 @@
+import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { CacheType } from '@proton/redux-utilities/interface';
+import { getSilentApi } from '@proton/shared/lib/api/helpers/customConfig';
+import { consumeSessionRecovery } from '@proton/shared/lib/api/sessionRecovery';
+import { lockSensitiveSettings } from '@proton/shared/lib/api/user';
+import mutatePassword from '@proton/shared/lib/authentication/mutate';
+import { getArmoredPrivateUserKeys, getEncryptedArmoredOrganizationKey } from '@proton/shared/lib/keys/changePassword';
+import { getHasMigratedAddressKeys } from '@proton/shared/lib/keys/keyMigration';
+import { generateKeySaltAndPassphrase } from '@proton/shared/lib/keys/keys';
+import { srpVerify } from '@proton/shared/lib/srp';
+import noop from '@proton/utils/noop';
+
+import type { AddressKeysState } from '../addressKeys';
+import { addressesThunk } from '../addresses';
+import { signoutAction } from '../authenticationService/authenticationListener';
+import { type OrganizationKeyState, organizationKeyThunk } from '../organizationKey';
+import { type UserState, userThunk } from '../user';
+import { userKeysThunk } from '../userKeys';
+import { type UserSettingsState, userSettingsThunk } from '../userSettings';
+
+type RequiredState = UserState & AddressKeysState & OrganizationKeyState & UserSettingsState;
+export const sessionRecoveryChangePassword = ({
+    newPassword,
+}: {
+    newPassword: string;
+}): ThunkAction<Promise<void>, RequiredState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch, getState, extra) => {
+        try {
+            extra.eventManager.stop();
+
+            const api = getSilentApi(extra.api);
+
+            const [user, addresses, userKeysList, organizationKey] = await Promise.all([
+                dispatch(userThunk()),
+                dispatch(addressesThunk()),
+                dispatch(userKeysThunk()),
+                dispatch(organizationKeyThunk()),
+            ]);
+
+            /**
+             * This is the case for a user who does not have any keys set-up.
+             * This should never happen for a user who initiates a session recovery change password flow, because
+             * it is only available to users who have setup keys.
+             */
+            if (userKeysList.length === 0) {
+                throw new Error('Changing password through session recovery is disabled for users without keys');
+            }
+
+            const hasMigratedAddressKeys = getHasMigratedAddressKeys(addresses);
+            if (!hasMigratedAddressKeys) {
+                throw new Error(
+                    c('session_recovery:available:error').t`Account recovery not available for legacy address keys`
+                );
+            }
+
+            const { passphrase: keyPassword, salt: keySalt } = await generateKeySaltAndPassphrase(newPassword);
+
+            const [armoredUserKeys, armoredOrganizationKey] = await Promise.all([
+                getArmoredPrivateUserKeys(userKeysList, keyPassword),
+                getEncryptedArmoredOrganizationKey(organizationKey?.privateKey, keyPassword),
+            ]);
+
+            await srpVerify({
+                api,
+                credentials: {
+                    password: newPassword,
+                },
+                config: consumeSessionRecovery({
+                    UserKeys: armoredUserKeys,
+                    KeySalt: keySalt,
+                    OrganizationKey: armoredOrganizationKey,
+                }),
+            });
+
+            try {
+                await mutatePassword({
+                    api,
+                    authentication: extra.authentication,
+                    User: user,
+                    keyPassword,
+                    clearKeyPassword: newPassword,
+                });
+            } catch (e) {
+                // If there was an error persisting the session, we have no choice but to logout
+                dispatch(signoutAction({ clearDeviceRecovery: true }));
+                throw e;
+            }
+
+            api(lockSensitiveSettings()).catch(noop);
+
+            await Promise.all([
+                dispatch(userThunk({ cache: CacheType.None })), // User keys affected
+                dispatch(userSettingsThunk({ cache: CacheType.None })), // User settings for two password mode
+                dispatch(addressesThunk({ cache: CacheType.None })), // Address keys affected
+                dispatch(organizationKeyThunk({ cache: CacheType.None })), // Organization key potentially affected
+            ]);
+        } finally {
+            extra.eventManager.start();
+        }
+    };
+};

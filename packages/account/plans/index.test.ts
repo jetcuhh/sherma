@@ -1,0 +1,477 @@
+import { DEFAULT_PAYMENT_VENDOR_STATES, PLANS } from '@proton/payments/core/constants';
+import type { Currency, PaymentStatus } from '@proton/payments/core/interface';
+import { FREE_PLAN } from '@proton/payments/core/subscription/freePlans';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { getTestStore } from '@proton/redux-shared-store/test';
+import type { UserModel } from '@proton/shared/lib/interfaces/User';
+import type { Plan } from '@proton/shared/lib/payments/plan/interface';
+
+import { paymentStatusReducer } from '../paymentStatus';
+import { type SubscriptionState, subscriptionReducer } from '../subscription';
+import { getModelState } from '../testing/getModelState';
+import { userReducer } from '../user';
+import { plansReducer, plansThunk, selectPlans } from './index';
+
+describe('plans', () => {
+    let mockPlans: Record<Currency, Plan[]>;
+
+    let mockDefaultCurrency: Currency = 'USD';
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockPlans = {
+            USD: [],
+            EUR: [],
+            CHF: [],
+            BRL: [],
+            AUD: [],
+            CAD: [],
+            GBP: [],
+            JPY: [],
+            KRW: [],
+            PLN: [],
+            SGD: [],
+            HKD: [],
+        };
+        mockDefaultCurrency = 'USD';
+    });
+
+    const apiMock = jest.fn().mockImplementation(({ url, params }) => {
+        // handling free plan route
+        if (url.includes('plans/default')) {
+            // we reject this call, because the helper for free plan includes the hardcoded fallback that we will use
+            // as free plan state in these tests
+            return Promise.reject();
+        }
+
+        if (url.includes('plans')) {
+            const currency = params?.Currency ?? mockDefaultCurrency;
+            return Promise.resolve({ Plans: mockPlans[currency as Currency] });
+        }
+    });
+
+    const defaultPaymentStatus: PaymentStatus = {
+        CountryCode: 'CH',
+        State: null,
+        VendorStates: DEFAULT_PAYMENT_VENDOR_STATES,
+    };
+
+    const defaultUser = {
+        Currency: 'USD',
+    } as UserModel;
+
+    const defaultSubscription = {
+        Currency: 'USD',
+    } as Subscription;
+
+    const setup = (
+        paymentStatus: PaymentStatus = defaultPaymentStatus,
+        user: UserModel | null = defaultUser,
+        subscription: Subscription | null = defaultSubscription
+    ) => {
+        const extraThunkArguments = {
+            api: apiMock,
+        } as unknown as ProtonThunkArguments;
+
+        const subscriptionState: SubscriptionState['subscription'] = {
+            ...getModelState(subscription ?? undefined),
+            meta: {
+                ...getModelState(subscription ?? undefined).meta,
+                type: 1,
+            },
+        };
+
+        return getTestStore({
+            reducer: { ...userReducer, ...paymentStatusReducer, ...subscriptionReducer, ...plansReducer },
+            preloadedState: {
+                user: getModelState(user ?? undefined),
+                paymentStatus: getModelState(paymentStatus),
+                subscription: subscriptionState,
+            },
+            extraThunkArguments,
+        });
+    };
+
+    it('should get plans from API', async () => {
+        mockPlans.USD = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'USD',
+            },
+        ] as Plan[];
+
+        const { store } = setup();
+        await store.dispatch(plansThunk());
+        expect(apiMock).toHaveBeenCalled();
+
+        expect(selectPlans(store.getState())).toMatchObject({
+            value: {
+                plans: [
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'USD',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'EUR',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'CHF',
+                    },
+                ],
+                freePlan: FREE_PLAN,
+            },
+        });
+    });
+
+    it('should store plans with different currencies', async () => {
+        mockPlans.USD = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'USD',
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'USD',
+            },
+        ] as Plan[];
+
+        mockPlans.EUR = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'EUR',
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'EUR',
+            },
+        ] as Plan[];
+
+        const { store } = setup();
+        await store.dispatch(plansThunk());
+
+        expect(selectPlans(store.getState())).toMatchObject({
+            value: {
+                plans: [
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'USD',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'USD',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'EUR',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'EUR',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'CHF',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'CHF',
+                    },
+                ],
+                freePlan: FREE_PLAN,
+            },
+        });
+
+        await store.dispatch(plansThunk());
+
+        expect(selectPlans(store.getState())).toMatchObject({
+            value: {
+                plans: [
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'USD',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'USD',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'EUR',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'EUR',
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'CHF',
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'CHF',
+                    },
+                ],
+                freePlan: FREE_PLAN,
+            },
+        });
+    });
+
+    it(`should fetch BRL plans if backend didn't return them - only if user exists`, async () => {
+        const { store } = setup({ ...defaultPaymentStatus, CountryCode: 'BR' });
+
+        mockPlans.USD = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'USD',
+                Pricing: {
+                    1: 100,
+                    12: 1000,
+                    24: 1800,
+                },
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'USD',
+                Pricing: {
+                    1: 200,
+                    12: 2000,
+                    24: 3600,
+                },
+            },
+        ] as Plan[];
+
+        mockPlans.BRL = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'BRL',
+                Pricing: {
+                    1: 80,
+                    12: 800,
+                    24: 1440,
+                },
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'BRL',
+                Pricing: {
+                    1: 160,
+                    12: 1600,
+                    24: 2880,
+                },
+            },
+        ] as Plan[];
+
+        await store.dispatch(plansThunk());
+
+        expect(selectPlans(store.getState())).toMatchObject({
+            value: {
+                plans: [
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'USD',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'USD',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'BRL',
+                        Pricing: {
+                            1: 80,
+                            12: 800,
+                            24: 1440,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'BRL',
+                        Pricing: {
+                            1: 160,
+                            12: 1600,
+                            24: 2880,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'EUR',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'EUR',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'CHF',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'CHF',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                ],
+                freePlan: FREE_PLAN,
+            },
+        });
+    });
+
+    it(`should fetch BRL plans if backend didn't return them, if user doesn't exist`, async () => {
+        const { store } = setup({ ...defaultPaymentStatus, CountryCode: 'BR' }, null, null);
+
+        mockPlans.USD = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'USD',
+                Pricing: {
+                    1: 100,
+                    12: 1000,
+                    24: 1800,
+                },
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'USD',
+                Pricing: {
+                    1: 200,
+                    12: 2000,
+                    24: 3600,
+                },
+            },
+        ] as Plan[];
+
+        mockPlans.BRL = [
+            {
+                Name: PLANS.MAIL,
+                Currency: 'BRL',
+                Pricing: {
+                    1: 80,
+                    12: 800,
+                    24: 1440,
+                },
+            },
+            {
+                Name: PLANS.BUNDLE,
+                Currency: 'BRL',
+                Pricing: {
+                    1: 160,
+                    12: 1600,
+                    24: 2880,
+                },
+            },
+        ] as Plan[];
+
+        await store.dispatch(plansThunk());
+
+        expect(selectPlans(store.getState())).toMatchObject({
+            value: {
+                plans: [
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'USD',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'USD',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'BRL',
+                        Pricing: {
+                            1: 80,
+                            12: 800,
+                            24: 1440,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'BRL',
+                        Pricing: {
+                            1: 160,
+                            12: 1600,
+                            24: 2880,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'EUR',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'EUR',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                    {
+                        Name: PLANS.MAIL,
+                        Currency: 'CHF',
+                        Pricing: {
+                            1: 100,
+                            12: 1000,
+                            24: 1800,
+                        },
+                    },
+                    {
+                        Name: PLANS.BUNDLE,
+                        Currency: 'CHF',
+                        Pricing: {
+                            1: 200,
+                            12: 2000,
+                            24: 3600,
+                        },
+                    },
+                ],
+                freePlan: FREE_PLAN,
+            },
+        });
+    });
+});

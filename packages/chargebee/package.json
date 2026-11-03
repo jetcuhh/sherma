@@ -1,0 +1,49 @@
+{
+    "name": "@proton/chargebee",
+    "version": "0.0.0",
+    "private": true,
+    "exports": {
+        "./lib/constants": "./lib/constants.ts",
+        "./lib/css-variables": "./lib/css-variables.ts",
+        "./lib/getCanMakePaymentsWithActiveCard": "./lib/getCanMakePaymentsWithActiveCard.ts",
+        "./lib/types": "./lib/types.ts"
+    },
+    "scripts": {
+        "build": "tsc && NODE_ENV='production' vite build",
+        "build:watch": "tsc && NODE_ENV='development' vite build --watch",
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "serve": "serve dist -p 5173",
+        "start": "concurrently \"npm run build:watch\" \"npm run serve\"",
+        "test": "jest",
+        "test:ci": "jest --runInBand --ci --logHeapUsage",
+        "test:dev": "jest --watch"
+    },
+    "dependencies": {
+        "@proton/styles": "workspace:^",
+        "@proton/utils": "workspace:^"
+    },
+    "devDependencies": {
+        "@fullhuman/postcss-purgecss": "^7.0.2",
+        "@proton/jest-env": "workspace:^",
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@testing-library/dom": "catalog:",
+        "@testing-library/jest-dom": "catalog:",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "concurrently": "^8.2.2",
+        "jest": "catalog:",
+        "jest-junit": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "postcss": "catalog:",
+        "serve": "^14.2.6",
+        "typescript": "catalog:",
+        "vite": "catalog:",
+        "vite-plugin-mkcert": "^1.17.12",
+        "vite-plugin-singlefile": "^2.3.3"
+    }
+}

@@ -1,0 +1,24 @@
+{
+    "name": "@proton/cross-storage",
+    "exports": {
+        "./host": "./lib/host.ts",
+        "./account/guest": "./account-impl/guestInstance.ts",
+        "./account/interface": "./account-impl/interface.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet"
+    },
+    "dependencies": {
+        "@proton/shared": "workspace:^"
+    },
+    "devDependencies": {
+        "@proton/oxlint-config": "workspace:^",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "typescript": "catalog:"
+    }
+}

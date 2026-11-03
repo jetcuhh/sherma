@@ -1,0 +1,37 @@
+import { useOrganization } from '@proton/account/organization/hooks';
+import { useUser } from '@proton/account/user/hooks';
+import { useWelcomeFlags } from '@proton/account/welcomeFlags';
+import { useConfig } from '@proton/app-context/useConfig';
+import { FeatureCode } from '@proton/features/interface';
+import useFeature from '@proton/features/useFeature';
+import { APPS } from '@proton/shared/lib/constants';
+import { hasOrganizationSetupWithKeys } from '@proton/shared/lib/helpers/organization';
+
+import { useOrganizationTheme } from './useOrganizationTheme';
+
+export const useShowLightLabellingFeatureModal = () => {
+    const { APP_NAME } = useConfig();
+    const [{ isAdmin }] = useUser();
+    const [organization] = useOrganization();
+    const hasOrganizationKey = hasOrganizationSetupWithKeys(organization);
+    const organizationTheme = useOrganizationTheme();
+    const { welcomeFlags } = useWelcomeFlags();
+
+    const seenLightLabellingFeatureModal = useFeature<boolean>(FeatureCode.SeenLightLabellingFeatureModal);
+
+    const hasOrganizationUsage = organization && organization.UsedDomains >= 1 && organization.UsedMembers >= 2;
+
+    if (
+        ((APP_NAME !== APPS.PROTONACCOUNT && welcomeFlags.isDone) || APP_NAME === APPS.PROTONACCOUNT) &&
+        hasOrganizationKey &&
+        seenLightLabellingFeatureModal.feature?.Value === false &&
+        isAdmin &&
+        hasOrganizationUsage &&
+        organizationTheme.access &&
+        !organizationTheme.logoURL
+    ) {
+        return true;
+    }
+
+    return false;
+};

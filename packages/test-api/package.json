@@ -1,0 +1,33 @@
+{
+    "name": "@proton/test-api",
+    "description": "Framework-agnostic API mocking primitives for tests",
+    "type": "module",
+    "exports": {
+        "./api": "./src/api.ts",
+        "./flush-promises": "./src/flush-promises.ts",
+        "./mockApiWithServer": "./src/mockApiWithServer.ts",
+        "./mockRandomValues": "./src/mockRandomValues.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "lint:fix": "pnpm run lint --fix"
+    },
+    "dependencies": {
+        "@proton/utils": "workspace:^"
+    },
+    "devDependencies": {
+        "@jest/globals": "catalog:",
+        "@proton/oxlint-config": "workspace:^",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "typescript": "catalog:"
+    },
+    "peerDependencies": {
+        "@jest/globals": "^30.5.2"
+    }
+}

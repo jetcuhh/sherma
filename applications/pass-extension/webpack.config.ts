@@ -1,0 +1,436 @@
+import CircularDependencyPlugin from 'circular-dependency-plugin';
+import CopyPlugin from 'copy-webpack-plugin';
+import fs from 'fs';
+import MiniCssExtractPlugin from 'mini-css-extract-plugin';
+import path from 'path';
+import type { Configuration, PathData } from 'webpack';
+import webpack from 'webpack';
+import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
+
+import getAssetsLoaders from '@proton/pack/webpack/assets.loader';
+import getCssLoaders from '@proton/pack/webpack/css.loader';
+import { getJsLoader } from '@proton/pack/webpack/js.loader.swc.js';
+import getOptimizations from '@proton/pack/webpack/optimization';
+import { coreJsUint8ArrayFromBase64Rule, sideEffectsRule, zipJSRule } from '@proton/pass/utils/webpack/rules';
+
+import { CRYPTO_DYNAMIC_IMPORTS_CHUNKS, IGNORED_DYNAMIC_IMPORTS_CHUNKS } from './src/app/worker/chunks';
+import envVars from './tools/env';
+import { MANIFEST_PATH, getAppVersion, webpackOptions } from './webpack.options';
+
+const {
+    API_ENV,
+    BETA,
+    BUILD_TARGET,
+    BUILD_STORE_TARGET,
+    E2E_TESTS,
+    ENV,
+    HOT_MANIFEST_UPDATE,
+    HTTP_DEBUGGER_PORT,
+    HTTP_DEBUGGER,
+    MANIFEST_KEY,
+    OUTPUT_PATH,
+    REDUX_DEVTOOLS,
+    REDUX_DEVTOOLS_PORT,
+    RELEASE,
+    RESUME_FALLBACK,
+    RUNTIME_RELOAD_PORT,
+    RUNTIME_RELOAD,
+    WEBPACK_CIRCULAR_DEPS,
+    WEBPACK_BUNDLE_ANALYZER,
+    WEBPACK_DEV_PORT,
+} = envVars;
+
+if (!['chrome', 'firefox', 'safari'].includes(BUILD_TARGET)) {
+    throw new Error(`Build target "${BUILD_TARGET}" is not supported`);
+}
+
+const MANIFEST_KEYS = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'manifest-keys.json'), 'utf8'));
+const PUBLIC_KEY = BUILD_TARGET === 'chrome' ? MANIFEST_KEYS?.[MANIFEST_KEY] : null;
+
+const section = (title: string, content: () => void) => {
+    const width = process.stdout.columns || 80;
+    const sep = '-'.repeat(width);
+    console.log(`${sep}\n ${title}\n${sep}`);
+    content();
+    console.log(`${sep}\n`);
+};
+
+section('Build configuration', () => {
+    console.log(` ENV = ${ENV}`);
+    console.log(` API_ENV=${API_ENV}`);
+    console.log(` RELEASE = ${RELEASE}`);
+    console.log(` OUTPUT_PATH = ${OUTPUT_PATH}`);
+    console.log(` BUILD_TARGET = ${BUILD_TARGET}`);
+    console.log(` BUILD_STORE_TARGET = ${BUILD_STORE_TARGET}`);
+    console.log(` BETA = ${BETA}`);
+    console.log(` MANIFEST_KEY = ${MANIFEST_KEY || 'none'}`);
+    console.log(` MANIFEST_VERSION = ${JSON.parse(getAppVersion())}`);
+    console.log(` PUBLIC_KEY = ${PUBLIC_KEY || 'none'}`);
+    console.log(` HTTP_DEBUGGER = ${HTTP_DEBUGGER}`);
+
+    if (HTTP_DEBUGGER) console.log(` HTTP_DEBUGGER_PORT = ${HTTP_DEBUGGER_PORT}`);
+
+    if (ENV !== 'production') {
+        console.log(` HOT_MANIFEST_UPDATE = ${HOT_MANIFEST_UPDATE}`);
+        console.log(` REDUX_DEVTOOLS = ${REDUX_DEVTOOLS}`);
+        console.log(` REDUX_DEVTOOLS_PORT = ${REDUX_DEVTOOLS_PORT}`);
+        console.log(` RESUME_FALLBACK = ${RESUME_FALLBACK}`);
+        console.log(` RUNTIME_RELOAD = ${RUNTIME_RELOAD}`);
+        console.log(` RUNTIME_RELOAD_PORT = ${RUNTIME_RELOAD_PORT}`);
+        console.log(` WEBPACK_DEV_PORT = ${WEBPACK_DEV_PORT}`);
+    }
+});
+
+section('Proton Configuration', () => {
+    const configLock = fs.existsSync('./config.lock.json')
+        ? fs.readFileSync('./config.lock.json', { encoding: 'utf-8' })
+        : null;
+
+    if (configLock) {
+        console.log(' ⚠️ Using `config.lock.json` override\n');
+        webpackOptions.defineWebpackConfig = JSON.parse(configLock);
+    }
+
+    Object.entries(webpackOptions.defineWebpackConfig).forEach(([key, value]) => {
+        if (typeof value === 'object') console.log(` ${key} = ${Object.values(value)}`);
+        else console.log(` ${key} = ${value}`);
+    });
+});
+
+const USE_IMPORT_SCRIPTS = BUILD_TARGET === 'chrome' || BUILD_TARGET === 'safari';
+const CHROME_STORE_RELEASE = BUILD_TARGET === 'chrome' && BUILD_STORE_TARGET !== 'edge';
+
+const hasReactRefresh = !webpackOptions.isProduction && !RUNTIME_RELOAD;
+
+/** Disables corejs polyfills in injected scripts */
+const scriptJSLoader = getJsLoader({ ...webpackOptions, hasReactRefresh: false });
+scriptJSLoader.use.options.env = {};
+
+/** Force "usage" mode for other extension components */
+const appJSLoader = getJsLoader({ ...webpackOptions, hasReactRefresh });
+appJSLoader.use.options.env.mode = 'usage';
+appJSLoader.use.options.env.shippedProposals = false;
+appJSLoader.use.options.env.include = [
+    'esnext.uint8-array.from-base64',
+    'esnext.uint8-array.from-hex',
+    'esnext.uint8-array.set-from-hex',
+    'esnext.uint8-array.set-from-base64',
+    'esnext.uint8-array.to-base64',
+    'esnext.uint8-array.to-hex',
+];
+
+const CS_LAYER = 'injection-client';
+const INJECTION_LAYERS = ['injection', CS_LAYER];
+
+const layeredJSLoaders = { oneOf: [{ issuerLayer: INJECTION_LAYERS, ...scriptJSLoader }, appJSLoader] };
+
+/** webpack calls `output.chunkFilename` without a chunk graph when it renders the chunk loading
+ * runtime, so keep a reference to the compilation to read it from. */
+let compilation: webpack.Compilation | undefined;
+const captureCompilation: webpack.WebpackPluginInstance = {
+    apply: (compiler) => compiler.hooks.thisCompilation.tap('CaptureCompilation', (c) => (compilation = c)),
+};
+
+/** Identifies a lazy chunk by the paths of its root modules: relative to their package for
+ * dependencies, relative to this app otherwise. Unlike chunk ids, these don't depend on where
+ * the package manager stores a package or on its version. */
+const getRootModulePaths = (chunk: PathData['chunk'], chunkGraph = compilation?.chunkGraph): string[] => {
+    /** The webpack running the build (`compiler.webpack`) can be another copy than the one this
+     * file imports (pnpm installs one per peer set), so `instanceof webpack.Chunk` would fail. */
+    const Chunk = compilation?.compiler.webpack.Chunk;
+    if (!chunkGraph || !Chunk || !(chunk instanceof Chunk)) return [];
+    return chunkGraph.getChunkRootModules(chunk).flatMap((module) => {
+        const resource = module.nameForCondition()?.split(path.sep).join('/');
+        if (!resource) return [];
+        const nodeModulesIdx = resource.lastIndexOf('/node_modules/');
+        return nodeModulesIdx === -1
+            ? [path.relative(__dirname, resource).split(path.sep).join('/')]
+            : [resource.slice(nodeModulesIdx + '/node_modules/'.length)];
+    });
+};
+
+const nonAccessibleWebResource = (entry: string) => [entry, './src/lib/utils/web-accessible-resource.ts'];
+const disableBrowserTrap = (entry: string) => [entry, './src/lib/utils/disable-browser-trap.ts'];
+const safariPatch = (entry: string) => (BUILD_TARGET === 'safari' ? [entry, './src/lib/utils/safari-patch.ts'] : entry);
+
+const config: Configuration = {
+    ...(webpackOptions.isProduction
+        ? { mode: 'production', devtool: 'source-map' }
+        : { mode: 'development', devtool: 'inline-source-map' }),
+    entry: {
+        background: {
+            import: './src/app/worker/index.ts',
+            filename: 'background.js',
+            /* MV3 implementations of non-persistent background scripts change
+             * depending on the platform. On chromium based browsers, we'll be
+             * in a ServiceWorker environment whereas on FF it'll actually be a
+             * non-persistent event page. One of the quirks of chunk loading in
+             * a service-worker is that you have to register any imported script
+             * during the service worker's oninstall phase (`/worker/index.ts`)
+             * https://bugs.chromium.org/p/chromium/issues/detail?id=1198822#c10  */
+            chunkLoading: USE_IMPORT_SCRIPTS ? 'import-scripts' : 'jsonp',
+        },
+        client: {
+            import: './src/app/content/client.ts',
+            layer: CS_LAYER,
+        },
+        dropdown: nonAccessibleWebResource('./src/app/content/services/inline/dropdown/app/index.tsx'),
+        elements: {
+            import: './src/app/content/elements.ts',
+            layer: 'injection',
+        },
+        internal: './src/app/pages/internal/index.tsx',
+        notification: nonAccessibleWebResource('./src/app/content/services/inline/notification/app/index.tsx'),
+        onboarding: './src/app/pages/onboarding/index.tsx',
+        orchestrator: {
+            import: disableBrowserTrap('./src/app/content/orchestrator.ts'),
+            layer: 'injection',
+        },
+        popup: safariPatch('./src/app/popup/index.tsx'),
+        settings: './src/app/pages/settings/index.tsx',
+        webauthn: {
+            import: './src/app/content/webauthn.ts',
+            layer: 'injection',
+        },
+        offscreen: './src/app/worker/offscreen/offscreen.ts',
+
+        ...(BUILD_TARGET === 'firefox'
+            ? {
+                  external: {
+                      /* FF account communication fallback */
+                      import: disableBrowserTrap('./src/app/content/firefox/index.ts'),
+                      layer: 'injection',
+                  },
+              }
+            : {}),
+
+        ...(BUILD_TARGET === 'safari'
+            ? {
+                  fork: {
+                      /* Safari fork fallback */
+                      import: disableBrowserTrap('./src/app/content/safari/index.ts'),
+                      layer: 'injection',
+                  },
+              }
+            : {}),
+    },
+    module: {
+        strictExportPresence: true,
+        rules: [
+            {
+                /** @protontech ML packages ship unbundled but are declared as ESM modules
+                 * in their package.json. Set `fullySpecified: false` so webpack allows
+                 * extensionless imports without throwing ESM resolution errors. */
+                test: /\.m?js$/,
+                include: /node_modules\/@protontech\/(autofill|ml-inference|fathom)/,
+                resolve: { fullySpecified: false },
+            },
+            sideEffectsRule,
+            zipJSRule,
+            layeredJSLoaders,
+            ...(BUILD_TARGET === 'safari' ? [coreJsUint8ArrayFromBase64Rule] : []),
+            ...getCssLoaders({ browserslist: undefined, noLogicalScss: true }),
+            ...getAssetsLoaders(),
+        ],
+    },
+    optimization: {
+        ...getOptimizations(webpackOptions),
+        runtimeChunk: false,
+        splitChunks: {
+            cacheGroups: {
+                default: false,
+                defaultVendors: false,
+                corejs: {
+                    test: /[\\/]node_modules[\\/]core-js[\\/]/,
+                    name: 'polyfills',
+                    /** Keep polyfills inlined in service-worker */
+                    chunks: (chunk) => chunk.canBeInitial() && chunk.name !== 'background',
+                    priority: 10,
+                },
+            },
+        },
+        usedExports: true,
+        chunkIds: 'named',
+    },
+    resolve: {
+        extensions: ['.js', '.tsx', '.ts'],
+        fallback: {
+            crypto: false,
+            buffer: false,
+            stream: false,
+            iconv: false,
+            path: false,
+            punycode: false,
+        },
+        modules: [path.resolve(__dirname), 'node_modules'],
+        alias: {
+            ...(BUILD_TARGET === 'safari'
+                ? /* exclude `webextension-polyfill` from safari build to avoid
+                   * service-worker registration errors when worker fails. */
+                  {
+                      'webextension-polyfill': path.resolve(
+                          __dirname,
+                          'node_modules/@proton/pass/lib/globals/webextension-polyfill.stub.ts'
+                      ),
+                  }
+                : {}),
+            /* friends don't let friends publish code with `eval` : but that didn't stop `ttag`  */
+            ttag$: path.resolve(__dirname, 'node_modules/ttag/dist/ttag.min.js'),
+
+            /** Patch openpgp argon2id.min.mjs to avoid WASM base64 inlining
+             * which gets flagged as code-obfuscation on chrome store review */
+            ...(CHROME_STORE_RELEASE
+                ? { './argon2id.min.mjs': path.resolve(__dirname, 'vendor/argon2id.loader.ts') }
+                : {}),
+        },
+    },
+    output: {
+        filename: '[name].js',
+        webassemblyModuleFilename: 'assets/wasm/[hash].wasm',
+        /** Some chunks need to be predictable in order for
+         * importScripts to work properly in the context of
+         * chromium builds (eg crypto lazy loaded modules) */
+        chunkFilename: ({ chunk, chunkGraph }) => {
+            if (!chunk?.name) {
+                if (chunk?.id) {
+                    const modulePaths = getRootModulePaths(chunk, chunkGraph);
+                    const maybeCryptoChunkName = modulePaths.map((p) => CRYPTO_DYNAMIC_IMPORTS_CHUNKS[p]).find(Boolean);
+                    if (maybeCryptoChunkName) return maybeCryptoChunkName;
+
+                    /** throw on all unhandled chunks for chrome/safari builds requiring manual
+                     * dynamic import registration in service-worker importScripts sequence */
+                    if (USE_IMPORT_SCRIPTS && !modulePaths.some((p) => IGNORED_DYNAMIC_IMPORTS_CHUNKS.has(p))) {
+                        throw new Error(`lazy loaded chunk needs manual handling: ${modulePaths.join(', ')}`);
+                    }
+                }
+
+                return 'chunk.[contenthash:8].js';
+            }
+
+            return 'chunk.[name].js';
+        },
+        path: path.resolve(__dirname, OUTPUT_PATH),
+        clean: true,
+        assetModuleFilename: (asset) => {
+            if (asset.filename && /\.wasm$/.test(asset.filename)) return 'assets/wasm/[hash].wasm';
+            return 'assets/[hash][ext][query]';
+        },
+        publicPath: '/',
+    },
+    plugins: [
+        captureCompilation,
+        new webpack.EnvironmentPlugin({ NODE_ENV: ENV }),
+        new webpack.DefinePlugin({
+            /** ProtonConfigV2 (see `packages/pack/webpack/plugins.js`) */
+            ...Object.fromEntries(
+                Object.entries(webpackOptions.defineWebpackConfig).map(([key, value]) => [
+                    `process.env.${key}`,
+                    JSON.stringify(value),
+                ])
+            ),
+            BETA: JSON.stringify(BETA),
+            BUILD_TARGET: JSON.stringify(BUILD_TARGET),
+            BUILD_STORE_TARGET: JSON.stringify(BUILD_STORE_TARGET),
+            DESKTOP_BUILD: false,
+            E2E_TESTS,
+            ENV: JSON.stringify(ENV),
+            EXTENSION_BUILD: true,
+            HTTP_DEBUGGER_PORT,
+            HTTP_DEBUGGER,
+            OFFLINE_SUPPORTED: false,
+            REDUX_DEVTOOLS,
+            REDUX_DEVTOOLS_PORT,
+            RESUME_FALLBACK,
+            RUNTIME_RELOAD_PORT,
+            RUNTIME_RELOAD,
+            VERSION: webpackOptions.isProduction
+                ? getAppVersion()
+                : webpack.DefinePlugin.runtimeValue(getAppVersion, true),
+        }),
+        new MiniCssExtractPlugin({ filename: 'styles/[name].css' }),
+        new CopyPlugin({
+            patterns: [
+                { from: 'public' },
+                {
+                    from: MANIFEST_PATH,
+                    to: 'manifest.json',
+                    transform(content) {
+                        const data = content.toString('utf-8');
+                        const manifest = JSON.parse(data);
+
+                        if (PUBLIC_KEY) manifest.key = PUBLIC_KEY;
+
+                        /* sanitize manifest when building for production */
+                        switch (BUILD_TARGET) {
+                            case 'firefox':
+                                /* add the appropriate CSP policies for the development build to connect
+                                 * to unsecure ws:// protocols without firefox trying to upgrade it to
+                                 * wss:// - currently the redux cli tools do not support https */
+                                if (ENV !== 'production') {
+                                    manifest.content_security_policy = {
+                                        extension_pages:
+                                            "connect-src 'self' https: ws:; script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; ",
+                                    };
+                                }
+
+                                manifest.content_scripts[1].matches = [
+                                    `https://account.${API_ENV}/*`,
+                                    `https://pass.${API_ENV}/*`,
+                                ];
+                                break;
+                            case 'chrome':
+                                manifest.externally_connectable.matches = [
+                                    `https://account.${API_ENV}/*`,
+                                    `https://pass.${API_ENV}/*`,
+                                ];
+                                break;
+                            case 'safari':
+                                manifest.content_scripts[1].matches = [`https://account.${API_ENV}/*`];
+                                manifest.externally_connectable.matches = [
+                                    `https://account.${API_ENV}/*`,
+                                    `https://pass.${API_ENV}/*`,
+                                ];
+                                break;
+                        }
+
+                        /* onboarding is only opened from the account app */
+                        const onboardingResource = manifest.web_accessible_resources.find(
+                            ({ resources }: { resources: string[] }) => resources.includes('onboarding.html')
+                        );
+                        onboardingResource.matches = [`https://account.${API_ENV}/*`];
+
+                        if (BETA) {
+                            manifest.name = 'sherma (BETA)';
+                            manifest.icons = {
+                                16: '/assets/sherma-icon-16.png',
+                                32: '/assets/sherma-icon-32.png',
+                                48: '/assets/sherma-icon-48.png',
+                                128: '/assets/sherma-icon-128.png',
+                            };
+                        }
+
+                        return Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8');
+                    },
+                },
+            ],
+        }),
+        ...(WEBPACK_CIRCULAR_DEPS
+            ? [
+                  new CircularDependencyPlugin({
+                      exclude: /node_modules/,
+                      include: /(packages\/pass|applications\/pass-extension)/,
+                      failOnError: false,
+                      allowAsyncCycles: false,
+                      cwd: process.cwd(),
+                  }),
+              ]
+            : []),
+        ...(WEBPACK_BUNDLE_ANALYZER ? [new BundleAnalyzerPlugin({ generateStatsFile: true })] : []),
+    ],
+    experiments: {
+        asyncWebAssembly: true,
+        layers: true,
+    },
+};
+
+export default config;

@@ -1,0 +1,323 @@
+import { type ProductParam, getProductHeaders } from '@proton/shared/lib/apps/product';
+import type { APP_NAMES } from '@proton/shared/lib/constants';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+import { getPlanNameFromIDs, isLifetimePlanSelected } from '@proton/shared/lib/payments/plan/helpers';
+
+import { capturePaymentMessage } from '../../sentry/capture';
+import type { PaymentTelemetryContext } from '../../telemetry/helpers';
+import type { PaymentTelemetryPayload } from '../../telemetry/shared-checkout-telemetry';
+import { checkoutTelemetry } from '../../telemetry/telemetry';
+import {
+    type BillingAddress,
+    type BillingAddressProperty,
+    getBillingAddressPayload,
+} from '../billing-address/billing-address';
+import { PLANS } from '../constants';
+import { isCountryWithRequiredPostalCode, isCountryWithStates } from '../countries';
+import { getCurrencyFormattingConfig } from '../currencies';
+import { captureWrongPlanIDs } from '../helpers';
+import type {
+    AmountAndCurrency,
+    Currency,
+    Cycle,
+    FreeSubscription,
+    PaymentMethodType,
+    PlainPaymentMethodType,
+    PlanIDs,
+    TokenPaymentMethod,
+    V5PaymentToken,
+} from '../interface';
+import type { GuardFields } from '../subscription/guard';
+import { normalizeGuardResult } from '../subscription/guard';
+import type { Subscription } from '../subscription/interface';
+import { isTokenPaymentMethod, isV5PaymentToken } from '../type-guards';
+
+interface BuyProductConfigParams {
+    PaymentToken: string | undefined;
+    ProductType: string;
+    Amount: number;
+    Currency: Currency;
+    BillingAddress: BillingAddress;
+    Quantity: number;
+}
+
+type CommonSubscribeData = {
+    Plans: PlanIDs;
+    Currency: Currency;
+    Cycle: Cycle;
+    Codes?: string[];
+    StartTrial?: boolean;
+    VatId?: string;
+    /**
+     * Sales-provisioned signup link token. When present, the backend redeems the provisioning
+     * record in the same request and creates the subscription from its negotiated terms.
+     */
+    ProvisioningToken?: string;
+} & AmountAndCurrency;
+
+type SubscribeDataV4 = CommonSubscribeData & TokenPaymentMethod & BillingAddressProperty;
+type SubscribeDataV5 = CommonSubscribeData & V5PaymentToken & BillingAddressProperty;
+type SubscribeDataNoPayment = CommonSubscribeData & BillingAddressProperty;
+export type SubscribeData = SubscribeDataV4 | SubscribeDataV5 | SubscribeDataNoPayment;
+
+function prepareSubscribeDataPayload(data: SubscribeData): SubscribeData {
+    const allowedProps: (keyof SubscribeDataV4 | keyof SubscribeDataV5)[] = [
+        'Plans',
+        'Currency',
+        'Cycle',
+        'Codes',
+        'PaymentToken',
+        'Payment',
+        'Amount',
+        'Currency',
+        'BillingAddress',
+        'StartTrial',
+        'VatId',
+        'ProvisioningToken',
+    ];
+    const payload: any = {};
+    Object.keys(data).forEach((key: any) => {
+        if (allowedProps.includes(key)) {
+            payload[key] = (data as any)[key];
+        }
+    });
+
+    if (!payload.VatId) {
+        delete payload.VatId;
+    }
+
+    return payload as SubscribeData;
+}
+
+function getPaymentTokenFromSubscribeData(data: SubscribeData): string | undefined {
+    return (data as any)?.PaymentToken ?? (data as any)?.Payment?.Details?.Token;
+}
+
+export function getLifetimeProductType(data: Pick<SubscribeData, 'Plans'>) {
+    const planName = getPlanNameFromIDs(data.Plans);
+    if (planName === PLANS.PASS_LIFETIME) {
+        return 'pass-lifetime' as const;
+    }
+}
+
+/**
+ * Builds the request config for payments/v5/products (used by buyProduct and by donation capture).
+ */
+export function getBuyProductConfig(product: ProductParam, params: BuyProductConfigParams) {
+    const url = 'payments/v5/products';
+    return {
+        url,
+        method: 'post',
+        data: {
+            Quantity: params.Quantity,
+            PaymentToken: params.PaymentToken,
+            ProductType: params.ProductType,
+            Amount: params.Amount,
+            Currency: params.Currency,
+            BillingAddress: params.BillingAddress,
+        },
+        headers: getProductHeaders(product, {
+            endpoint: url,
+            product,
+        }),
+        timeout: 60000 * 2,
+    };
+}
+
+export function getBuyLumoCreditConfig(
+    product: ProductParam,
+    params: Omit<BuyProductConfigParams, 'ProductType' | 'Quantity'>
+) {
+    const { divisor } = getCurrencyFormattingConfig(params.Currency);
+    return getBuyProductConfig(product, {
+        ...params,
+        ProductType: 'lumo-credit',
+        Quantity: params.Amount / divisor,
+    });
+}
+
+const buyProduct = (rawData: SubscribeData, product: ProductParam) => {
+    const sanitizedData = prepareSubscribeDataPayload(rawData) as SubscribeDataV5;
+    return getBuyProductConfig(product, {
+        PaymentToken: getPaymentTokenFromSubscribeData(sanitizedData)!,
+        ProductType: getLifetimeProductType(sanitizedData)!,
+        Amount: sanitizedData.Amount,
+        Currency: sanitizedData.Currency,
+        BillingAddress: sanitizedData.BillingAddress,
+        Quantity: 1,
+    });
+};
+
+function isCommonSubscribeData(data: any): data is CommonSubscribeData {
+    const props = ['Plans', 'Currency', 'Cycle', 'Amount'];
+    return data && props.every((prop) => Object.prototype.hasOwnProperty.call(data, prop));
+}
+
+function isSubscribeDataV4(data: any): data is SubscribeDataV4 {
+    return isCommonSubscribeData(data) && isTokenPaymentMethod(data as any);
+}
+
+function isSubscribeDataV5(data: any): data is SubscribeDataV5 {
+    return isCommonSubscribeData(data) && isV5PaymentToken(data as any);
+}
+
+function isSubscribeDataNoPayment(data: any): data is SubscribeDataNoPayment {
+    return isCommonSubscribeData(data);
+}
+
+export function isSubscribeData(data: any): data is SubscribeData {
+    return isSubscribeDataV4(data) || isSubscribeDataV5(data) || isSubscribeDataNoPayment(data);
+}
+
+const createSubscriptionQuery = (rawData: SubscribeData, product: ProductParam) => {
+    const sanitizedData = prepareSubscribeDataPayload(rawData);
+
+    // This covers both buyProduct + v4 and v5 createSubscription.
+    if ('BillingAddress' in sanitizedData && sanitizedData.BillingAddress) {
+        sanitizedData.BillingAddress = getBillingAddressPayload({
+            billingAddress: sanitizedData.BillingAddress,
+            vatId: sanitizedData.VatId,
+            keepPostalCode: !!sanitizedData.ProvisioningToken,
+        });
+    }
+
+    if (isLifetimePlanSelected(sanitizedData.Plans)) {
+        return buyProduct(sanitizedData, product);
+    }
+
+    let data: SubscribeData = sanitizedData;
+    if (isSubscribeDataV4(sanitizedData)) {
+        const v5Data: SubscribeDataV5 = {
+            ...sanitizedData,
+            PaymentToken: sanitizedData.Payment.Details.Token,
+            v: 5,
+        };
+
+        data = v5Data;
+        delete (data as any).Payment;
+    }
+
+    if (data.VatId) {
+        (data as any).BillingAddress.VatId = data.VatId;
+        delete (data as any).VatId;
+    }
+
+    const config = {
+        url: `payments/v5/subscription`,
+        method: 'post',
+        data,
+        headers: getProductHeaders(product, {
+            endpoint: `payments/v5/subscription`,
+            product,
+        }),
+        timeout: 60000 * 2,
+    };
+
+    return config;
+};
+
+function reportWrongBillingAddress(data: SubscribeData) {
+    try {
+        const extra = {
+            billingAddress: data?.BillingAddress,
+            CountryCode: data?.BillingAddress?.CountryCode,
+            State: data?.BillingAddress?.State,
+            hasZipCode: !!data?.BillingAddress?.ZipCode,
+            amount: data?.Amount,
+            currency: data?.Currency,
+            codes: data?.Codes,
+            cycle: data?.Cycle,
+            plans: data?.Plans,
+            startTrial: data?.StartTrial,
+            hasVatId: !!data?.VatId,
+            planName: data?.Plans ? getPlanNameFromIDs(data.Plans) : undefined,
+        };
+
+        if (!data?.BillingAddress?.CountryCode) {
+            capturePaymentMessage('Payments: missing CountryCode in billing address', {
+                component: 'create-payment-subscription',
+                level: 'warning',
+                extra,
+            });
+        }
+
+        if (isCountryWithStates(data?.BillingAddress?.CountryCode) && !data?.BillingAddress?.State) {
+            capturePaymentMessage('Payments: missing State in billing address', {
+                component: 'create-payment-subscription',
+                level: 'warning',
+                extra,
+            });
+        }
+
+        if (isCountryWithRequiredPostalCode(data?.BillingAddress?.CountryCode) && !data?.BillingAddress?.ZipCode) {
+            capturePaymentMessage('Payments: missing ZipCode in billing address', {
+                component: 'create-payment-subscription',
+                level: 'warning',
+                extra,
+            });
+        }
+    } catch {}
+}
+
+export const createPaymentSubscription = async (
+    api: Api,
+    data: SubscribeData,
+    {
+        build,
+        telemetryContext,
+        userCurrency,
+        subscription,
+        product,
+        paymentMethodType,
+        paymentMethodValue,
+    }: {
+        build: APP_NAMES;
+        telemetryContext: PaymentTelemetryContext;
+        userCurrency: Currency | undefined;
+        subscription: Subscription | FreeSubscription | undefined;
+        product: ProductParam;
+        paymentMethodType: PlainPaymentMethodType | undefined;
+        paymentMethodValue: PaymentMethodType | undefined;
+    }
+) => {
+    const telemetryProps: Omit<PaymentTelemetryPayload, 'stage'> = {
+        userCurrency,
+        subscription,
+        amount: data.Amount,
+        selectedCurrency: data.Currency,
+        selectedPlanIDs: data.Plans,
+        selectedCycle: data.Cycle,
+        selectedCoupon: data.Codes?.[0] ?? null,
+        build,
+        product,
+        context: telemetryContext,
+        paymentMethodType,
+        paymentMethodValue,
+        isTrial: Boolean(data.StartTrial),
+    };
+
+    const createSubscriptionQueryConfig = createSubscriptionQuery(data, product);
+
+    reportWrongBillingAddress(data);
+    captureWrongPlanIDs(data.Plans, { source: 'subscribe', cycle: data.Cycle, currency: data.Currency });
+
+    try {
+        // TODO: remove when the API will serve the new contract
+        const createSubscriptionResponse = normalizeGuardResult(
+            await api<{ Subscription: Subscription } & GuardFields>(createSubscriptionQueryConfig)
+        );
+
+        checkoutTelemetry.reportPayment({
+            stage: 'payment_success',
+            ...telemetryProps,
+        });
+
+        return createSubscriptionResponse;
+    } catch (error) {
+        checkoutTelemetry.reportPayment({
+            stage: 'payment_declined',
+            ...telemetryProps,
+        });
+        throw error;
+    }
+};

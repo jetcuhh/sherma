@@ -1,0 +1,72 @@
+import type { SanitizedPasskey } from '../../lib/passkeys/types';
+import type { AliasMailbox } from '../data/alias';
+import type { FileAttachmentValues } from '../data/files';
+import type { DeobfuscatedItemExtraField, ItemContent } from '../data/items';
+import type { ItemCustomType, WifiSecurity } from '../protobuf';
+import type { ExtractKeysOfType, MaybeNull } from '../utils';
+import type { CustomSectionGroupValues, ExtraFieldGroupValues, UrlGroupValues } from './fields';
+
+export type BaseItemValues = {
+    name: string;
+    note: string;
+    shareId: string;
+    folderId: MaybeNull<string>;
+} & FileAttachmentValues &
+    ExtraFieldGroupValues;
+
+export type NoteFormValues = BaseItemValues;
+
+export type LoginItemFormValues = BaseItemValues & {
+    itemEmail: string;
+    itemUsername: string;
+    passkeys: SanitizedPasskey[];
+    password: string;
+    totpUri: string;
+    withAlias: boolean;
+    withUsername: boolean;
+} & AliasFormValues &
+    UrlGroupValues;
+
+export type AliasFormValues = {
+    aliasPrefix: string;
+    aliasSuffix?: { signature: string; value: string };
+    mailboxes: AliasMailbox[];
+};
+
+export type DomainFormValues = { domain: string };
+
+export type AliasCreateContactValues = { email: string };
+export type NewAliasFormValues = BaseItemValues & AliasFormValues;
+export type EditAliasFormValues = BaseItemValues &
+    Pick<AliasFormValues, 'mailboxes'> & {
+        displayName: string;
+        slNote: string;
+    };
+
+export type IdentityValues = ItemContent<'identity'>;
+export type IdentityItemFormValues = { shareId: string } & BaseItemValues & IdentityValues;
+export type ItemSectionFormValues = { sectionName: string };
+export type IdentityFieldName = ExtractKeysOfType<IdentityValues, string>;
+export type IdentityExtraFieldsKey = ExtractKeysOfType<IdentityValues, DeobfuscatedItemExtraField[]>;
+
+export type CreditCardItemFormValues = BaseItemValues & {
+    shareId: string;
+    name: string;
+    cardholderName: string;
+    number: string;
+    expirationDate: string;
+    verificationNumber: string;
+    pin: string;
+    note: string;
+};
+
+export type CustomItemFormValues<T extends ItemCustomType = ItemCustomType> = Extract<
+    BaseItemValues &
+        CustomSectionGroupValues &
+        (
+            | { type: 'wifi'; password: string; security: WifiSecurity; ssid: string }
+            | { type: 'sshKey'; privateKey: string; publicKey: string }
+            | { type: 'custom' }
+        ),
+    { type: T }
+>;

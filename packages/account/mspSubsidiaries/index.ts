@@ -1,0 +1,120 @@
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import { createAsyncModelThunk, handleAsyncModel, previousSelector } from '@proton/redux-utilities/creator';
+import { getInitialModelState } from '@proton/redux-utilities/initialModelState';
+import type { ModelState } from '@proton/redux-utilities/initialModelState/interface';
+import { processApiRequestsSafe } from '@proton/shared/lib/api/helpers/safeApiRequests';
+import { getAllMspSubsidiaries, getAllMspSubsidiaryManagers } from '@proton/shared/lib/api/msp';
+import type { MspDelegatedManager } from '@proton/shared/lib/api/msp';
+import type { ORGANIZATION_STATE } from '@proton/shared/lib/constants';
+import type { MspSubsidiary } from '@proton/shared/lib/interfaces/Msp';
+import { removeById } from '@proton/utils/removeById';
+import { upsertById } from '@proton/utils/upsertById';
+
+import { type UserPermissionsState, isOrganizationOwnerThunk } from '../userPermissions';
+
+const name = 'mspSubsidiaries' as const;
+
+export interface MspSubsidiariesState extends UserPermissionsState {
+    [name]: ModelState<MspSubsidiary[]>;
+}
+
+type SliceState = MspSubsidiariesState[typeof name];
+type Model = NonNullable<SliceState['value']>;
+
+export const selectMspSubsidiaries = (state: MspSubsidiariesState) => state[name];
+
+const modelThunk = createAsyncModelThunk<Model, MspSubsidiariesState, ProtonThunkArguments>(`${name}/fetch`, {
+    miss: async ({ extraArgument, dispatch }) => {
+        // The subsidiaries routes are MSP-owner only, IT Managers (non-owner members of the MSP
+        // org) get an empty list here and are shown their managed organizations instead.
+        const isOwner = await dispatch(isOrganizationOwnerThunk());
+        if (!isOwner) {
+            return [];
+        }
+        const subsidiaries = await getAllMspSubsidiaries(extraArgument.api);
+        // The list needs delegated managers immediately (rendered as a table column), and there's
+        // no bulk endpoint, so fetch them per-subsidiary and merge before returning the model.
+        // Requests are throttled to avoid getting API-jailed when an MSP has many companies.
+        const managersBySubsidiary = await processApiRequestsSafe(
+            subsidiaries.map(
+                (subsidiary) => () => getAllMspSubsidiaryManagers(extraArgument.api, subsidiary.ID).catch(() => [])
+            )
+        );
+        return subsidiaries.map((subsidiary, index) => ({
+            ...subsidiary,
+            DelegatedManagers: managersBySubsidiary[index],
+        }));
+    },
+    previous: previousSelector(selectMspSubsidiaries),
+});
+
+const initialState = getInitialModelState<Model>();
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {
+        upsert: (state, action: PayloadAction<MspSubsidiary>) => {
+            if (!state.value) {
+                return;
+            }
+            const idx = state.value.findIndex((s) => s.ID === action.payload.ID);
+            if (idx >= 0) {
+                state.value[idx] = action.payload;
+            } else {
+                state.value.push(action.payload);
+            }
+        },
+        patch: (state, action: PayloadAction<{ id: string; changes: Partial<MspSubsidiary> }>) => {
+            if (!state.value) {
+                return;
+            }
+            const item = state.value.find((s) => s.ID === action.payload.id);
+            if (item) {
+                Object.assign(item, action.payload.changes);
+            }
+        },
+        remove: (state, action: PayloadAction<string>) => {
+            if (!state.value) {
+                return;
+            }
+            state.value = state.value.filter((s) => s.ID !== action.payload);
+        },
+        setStatus: (state, action: PayloadAction<{ id: string; status: ORGANIZATION_STATE }>) => {
+            if (!state.value) {
+                return;
+            }
+            const item = state.value.find((s) => s.ID === action.payload.id);
+            if (item) {
+                item.Status = action.payload.status;
+            }
+        },
+        addDelegatedManager: (state, action: PayloadAction<{ id: string; manager: MspDelegatedManager }>) => {
+            if (!state.value) {
+                return;
+            }
+            const item = state.value.find((s) => s.ID === action.payload.id);
+            if (item) {
+                item.DelegatedManagers = upsertById(item.DelegatedManagers, action.payload.manager, 'ID');
+            }
+        },
+        removeDelegatedManager: (state, action: PayloadAction<{ id: string; managerId: string }>) => {
+            if (!state.value) {
+                return;
+            }
+            const item = state.value.find((s) => s.ID === action.payload.id);
+            if (item) {
+                item.DelegatedManagers = removeById(item.DelegatedManagers, { ID: action.payload.managerId }, 'ID');
+            }
+        },
+    },
+    extraReducers: (builder) => {
+        handleAsyncModel(builder, modelThunk);
+    },
+});
+
+export const mspSubsidiariesReducer = { [name]: slice.reducer };
+export const mspSubsidiariesThunk = modelThunk.thunk;
+export const mspSubsidiariesActions = slice.actions;

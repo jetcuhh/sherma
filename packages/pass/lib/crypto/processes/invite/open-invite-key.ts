@@ -1,0 +1,37 @@
+import type { PrivateKeyReference, PublicKeyReference } from '@protontech/crypto';
+import { CryptoProxy, VERIFICATION_STATUS } from '@protontech/crypto';
+
+import type { KeyRotationKeyPair } from '../../../../types/api/pass';
+import { PassSignatureContext } from '../../../../types/crypto/pass-types';
+import { PassCryptoError } from '../../utils/errors';
+
+type OpenInviteKeyProcessParams = {
+    inviteKey: KeyRotationKeyPair;
+    invitedPrivateKey: PrivateKeyReference;
+    inviterPublicKeys: PublicKeyReference[];
+};
+
+export const openInviteKey = async ({
+    inviteKey,
+    invitedPrivateKey,
+    inviterPublicKeys,
+}: OpenInviteKeyProcessParams): Promise<Uint8Array<ArrayBuffer>> => {
+    if (inviterPublicKeys.length === 0) throw new PassCryptoError(`No inviter public keys available`);
+
+    const { data, verificationStatus } = await CryptoProxy.decryptMessage({
+        binaryMessage: Uint8Array.fromBase64(inviteKey.Key),
+        decryptionKeys: invitedPrivateKey,
+        verificationKeys: inviterPublicKeys,
+        format: 'binary',
+        signatureContext: {
+            value: PassSignatureContext.VaultInviteExistingUser,
+            required: true,
+        },
+    });
+
+    if (verificationStatus !== VERIFICATION_STATUS.SIGNED_AND_VALID) {
+        throw new PassCryptoError(`Invite key signature verification failed [${verificationStatus}]`);
+    }
+
+    return data;
+};

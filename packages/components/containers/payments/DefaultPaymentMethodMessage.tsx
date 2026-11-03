@@ -1,0 +1,78 @@
+import { c } from 'ttag';
+
+import { Banner, BannerVariants } from '@proton/atoms/Banner/Banner';
+import { markPaymentMethodAsDefault } from '@proton/payments/core/api/api';
+import type { PaymentMethodType, SavedPaymentMethod } from '@proton/payments/core/interface';
+import { isSavablePaymentMethod } from '@proton/payments/core/payment-methods/helpers';
+import { isExistingPaymentMethod } from '@proton/payments/core/type-guards';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+
+function backendWillChangeDefaultPaymentMethod(selectedPaymentMethod: PaymentMethodType): boolean {
+    return !isExistingPaymentMethod(selectedPaymentMethod) && isSavablePaymentMethod(selectedPaymentMethod);
+}
+
+function frontendMustChangeDefaultPaymentMethod(
+    methods: SavedPaymentMethod[],
+    selectedPaymentMethod: PaymentMethodType
+): boolean {
+    if (!isExistingPaymentMethod(selectedPaymentMethod)) {
+        return false;
+    }
+
+    const defaultMethod = methods.find((method) => method.IsDefault);
+    if (!defaultMethod) {
+        return false;
+    }
+
+    const userSelectedNonDefaultSavedMethod = defaultMethod.ID !== selectedPaymentMethod;
+    return userSelectedNonDefaultSavedMethod;
+}
+
+function showDefaultPaymentMethodMessage(
+    methods: SavedPaymentMethod[],
+    selectedPaymentMethodTypeOrValue: PaymentMethodType | undefined
+): boolean {
+    if (methods.length === 0) {
+        return false;
+    }
+
+    if (!selectedPaymentMethodTypeOrValue) {
+        return false;
+    }
+
+    return (
+        backendWillChangeDefaultPaymentMethod(selectedPaymentMethodTypeOrValue) ||
+        frontendMustChangeDefaultPaymentMethod(methods, selectedPaymentMethodTypeOrValue)
+    );
+}
+
+export async function changeDefaultPaymentMethodBeforePayment(
+    api: Api,
+    paymentMethodValue: PaymentMethodType,
+    savedMethods: SavedPaymentMethod[]
+) {
+    try {
+        if (frontendMustChangeDefaultPaymentMethod(savedMethods, paymentMethodValue)) {
+            await markPaymentMethodAsDefault(api, paymentMethodValue, savedMethods);
+        }
+    } catch {}
+}
+
+interface Props {
+    savedPaymentMethods: SavedPaymentMethod[];
+    selectedPaymentMethod?: PaymentMethodType;
+    className?: string;
+}
+
+const DefaultPaymentMethodMessage = ({ savedPaymentMethods, selectedPaymentMethod, className }: Props) => {
+    if (!showDefaultPaymentMethodMessage(savedPaymentMethods, selectedPaymentMethod)) {
+        return null;
+    }
+
+    return (
+        <Banner variant={BannerVariants.INFO} className={className}>{c('Payments')
+            .t`This payment method will become your new default for all future renewals.`}</Banner>
+    );
+};
+
+export default DefaultPaymentMethodMessage;

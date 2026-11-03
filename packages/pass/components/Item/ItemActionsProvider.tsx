@@ -1,0 +1,301 @@
+import { type FC, type PropsWithChildren, createContext, useCallback, useContext, useMemo } from 'react';
+import { useDispatch, useStore } from 'react-redux';
+
+import { c, msgid } from 'ttag';
+
+import { useAutotypeExecute } from '../../hooks/autotype/useAutotypeExecute';
+import type { ItemCloneLocationState } from '../../hooks/items/useInitialValues';
+import { useConfirm } from '../../hooks/useConfirm';
+import { useStatefulRef } from '../../hooks/useStatefulRef';
+import { isAliasItem, isDisabledAlias } from '../../lib/items/item.predicates';
+import { cloneItemName, getBulkSelectionCount } from '../../lib/items/item.utils';
+import { isVaultShare } from '../../lib/shares/share.predicates';
+import { shareLeaveIntent } from '../../store/actions/creators/access';
+import {
+    itemBulkDeleteIntent,
+    itemBulkMoveIntent,
+    itemBulkRestoreIntent,
+    itemBulkTrashIntent,
+    itemDelete,
+    itemMove,
+    itemRestore,
+    itemTrash,
+} from '../../store/actions/creators/item';
+import { selectItemsByEmail } from '../../store/selectors/items';
+import { selectAliasTrashAcknowledged } from '../../store/selectors/settings';
+import { selectShareOrThrow } from '../../store/selectors/shares';
+import { selectMostRecentVaultShareID } from '../../store/selectors/vaults';
+import type { State } from '../../store/types';
+import type { ItemRevision } from '../../types/data/items';
+import type { BulkSelectionDTO, ItemMoveIntent } from '../../types/data/items.dto';
+import { ShareType } from '../../types/data/shares';
+import type { AutotypeConfirmProps } from '../../types/desktop/autotype';
+import type { MaybeNull } from '../../types/utils';
+import { partialMerge } from '../../utils/object/merge';
+import { useBulkActions } from '../Bulk/BulkSelectionActions';
+import { useNavigate } from '../Navigation/NavigationActions';
+import { useItemScope } from '../Navigation/NavigationMatches';
+import { getNewItemRoute } from '../Navigation/routing';
+import { VaultSelect, VaultSelectMode, useVaultSelectModalHandles } from '../Vault/VaultSelect';
+import { ConfirmTrashAlias } from './Actions/ConfirmAliasActions';
+import { ConfirmDeleteManyItems, ConfirmMoveManyItems, ConfirmTrashManyItems } from './Actions/ConfirmBulkActions';
+import { ConfirmDeleteItem, ConfirmLeaveItem, ConfirmMoveItem } from './Actions/ConfirmItemActions';
+import { ConfirmAutotype, ConfirmAutotypeShortcut } from './Autotype/ConfirmAutotype';
+
+/** Ongoing: move every item action definition to this
+ * context object. This context should be loosely connected */
+interface ItemActionsContextType {
+    clone: (item: ItemRevision) => void;
+    delete: (item: ItemRevision) => void;
+    deleteMany: (items: BulkSelectionDTO) => void;
+    leave: (item: ItemRevision) => void;
+    move: (item: ItemRevision, mode: VaultSelectMode) => void;
+    moveMany: (items: BulkSelectionDTO, shareId?: string, folderId?: MaybeNull<string>) => void;
+    restore: (item: ItemRevision) => void;
+    restoreMany: (items: BulkSelectionDTO) => void;
+    trash: (item: ItemRevision) => void;
+    trashMany: (items: BulkSelectionDTO) => void;
+    autotypeConfirm: (autotypeProps: AutotypeConfirmProps) => void;
+    autotypeConfirmShortcut: (autotypeProps: AutotypeConfirmProps) => void;
+}
+
+const ItemActionsContext = createContext<MaybeNull<ItemActionsContextType>>(null);
+
+export const ItemActionsProvider: FC<PropsWithChildren> = ({ children }) => {
+    const bulk = useBulkActions();
+    const dispatch = useDispatch();
+    const navigate = useNavigate();
+    const store = useStore<State>();
+    const scope = useStatefulRef(useItemScope());
+    const executeAutotype = useAutotypeExecute();
+
+    const { closeVaultSelect, openVaultSelect, modalState } = useVaultSelectModalHandles();
+
+    const moveItem = useConfirm(useCallback((dto: ItemMoveIntent) => dispatch(itemMove.intent(dto)), []));
+
+    const moveManyItems = useConfirm(
+        useCallback(
+            (options: { selected: BulkSelectionDTO; targetShareId: string; targetFolderId?: MaybeNull<string> }) => {
+                dispatch(itemBulkMoveIntent(options));
+                bulk.disable();
+            },
+            []
+        )
+    );
+
+    const trashItem = useConfirm(
+        useCallback(
+            (item: ItemRevision) =>
+                dispatch(
+                    itemTrash.intent({
+                        itemId: item.itemId,
+                        shareId: item.shareId,
+                        revision: item.revision,
+                    })
+                ),
+            []
+        )
+    );
+
+    const trashManyItems = useConfirm(
+        useCallback((selected: BulkSelectionDTO) => {
+            dispatch(itemBulkTrashIntent({ selected }));
+            bulk.disable();
+        }, [])
+    );
+
+    const deleteItem = useConfirm(
+        useCallback(({ shareId, itemId }: ItemRevision) => {
+            dispatch(itemDelete.intent({ shareId, itemId }));
+        }, [])
+    );
+
+    const deleteManyItems = useConfirm(
+        useCallback((selected: BulkSelectionDTO) => {
+            dispatch(itemBulkDeleteIntent({ selected }));
+            bulk.disable();
+        }, [])
+    );
+
+    const leaveItem = useConfirm(
+        useCallback(({ shareId }: ItemRevision) => {
+            dispatch(shareLeaveIntent({ shareId, targetType: ShareType.Item }));
+        }, [])
+    );
+
+    const moveTitle = (numberOfItems: number) =>
+        c('Vault Select').ngettext(msgid`Move item to`, `Move items to`, numberOfItems);
+
+    const confirmAutotype = useCallback(({ autotypeProps: { fields, enterAtTheEnd } }: AutotypeConfirmProps) => {
+        void executeAutotype?.({
+            fields,
+            enterAtTheEnd,
+        });
+    }, []);
+
+    const autotypeConfirm = useConfirm(confirmAutotype);
+
+    const autotypeConfirmFromShortcut = useConfirm(confirmAutotype);
+
+    const context = useMemo<ItemActionsContextType>(() => {
+        return {
+            move: (item, mode) =>
+                openVaultSelect({
+                    mode,
+                    shareId: item.shareId,
+                    folderId: item.folderId,
+                    onSubmit: (targetShareId, targetFolderId) => {
+                        moveItem.prompt({ itemId: item.itemId, shareId: item.shareId, targetShareId, targetFolderId });
+                        closeVaultSelect();
+                    },
+                    title: moveTitle(1),
+                }),
+
+            moveMany: (selected, shareId, folderId) =>
+                shareId
+                    ? moveManyItems.prompt({ selected, targetShareId: shareId, targetFolderId: folderId })
+                    : openVaultSelect({
+                          mode: VaultSelectMode.Writable,
+                          shareId: '' /* allow all vaults */,
+                          onSubmit: (targetShareId, targetFolderId) => {
+                              moveManyItems.prompt({ selected, targetShareId, targetFolderId });
+                              closeVaultSelect();
+                          },
+                          title: moveTitle(getBulkSelectionCount(selected)),
+                      }),
+
+            trash: (item) => {
+                if (isAliasItem(item.data)) {
+                    const state = store.getState();
+                    const aliasEmail = item.aliasEmail!;
+                    const relatedLogin = selectItemsByEmail(aliasEmail)(state);
+                    const ack = selectAliasTrashAcknowledged(state);
+                    if ((isDisabledAlias(item) || ack) && !relatedLogin) trashItem.call(item);
+                    else trashItem.prompt(item);
+                } else trashItem.call(item);
+            },
+
+            trashMany: trashManyItems.prompt,
+
+            delete: deleteItem.prompt,
+
+            deleteMany: deleteManyItems.prompt,
+
+            restore: ({ shareId, itemId }) => dispatch(itemRestore.intent({ shareId, itemId })),
+
+            restoreMany: (selected) => {
+                dispatch(itemBulkRestoreIntent({ selected }));
+                bulk.disable();
+            },
+
+            leave: leaveItem.prompt,
+
+            clone: (item: ItemRevision) => {
+                const state = store.getState();
+
+                /** Note: if the item being cloned is not from a vault share,
+                 * resolve the most recently used vault shareID. This avoids
+                 * trying to clone an item from an item share */
+                const share = selectShareOrThrow(item.shareId)(state);
+                const shareId = isVaultShare(share) ? share.shareId : selectMostRecentVaultShareID(state);
+
+                /** Note: preserve current route scope in order to avoid
+                 * changing the filtered items if viewing shared items */
+                navigate<ItemCloneLocationState>(getNewItemRoute(item.data.type, scope.current), {
+                    state: {
+                        clone: partialMerge(item, {
+                            shareId,
+                            /** A folder key belongs to a single share: drop it when
+                             * the clone lands in a different share than the source */
+                            folderId: shareId === item.shareId ? item.folderId : null,
+                            data: {
+                                metadata: {
+                                    name: cloneItemName(item.data.metadata.name),
+                                },
+                            },
+                        }),
+                    },
+                });
+            },
+
+            autotypeConfirm: autotypeConfirm.prompt,
+
+            autotypeConfirmShortcut: autotypeConfirmFromShortcut.prompt,
+        };
+    }, []);
+
+    return (
+        <ItemActionsContext.Provider value={context}>
+            {children}
+            <VaultSelect
+                showFolders
+                downgradeMessage={c('Info')
+                    .t`You have exceeded the number of vaults included in your subscription. Items can only be moved to your first two vaults.`}
+                onClose={closeVaultSelect}
+                {...modalState}
+            />
+
+            {moveItem.pending && (
+                <ConfirmMoveItem {...moveItem.param} onCancel={moveItem.cancel} onConfirm={moveItem.confirm} />
+            )}
+
+            {moveManyItems.pending && (
+                <ConfirmMoveManyItems
+                    {...moveManyItems.param}
+                    onConfirm={moveManyItems.confirm}
+                    onCancel={moveManyItems.cancel}
+                />
+            )}
+
+            {trashItem.pending && (
+                <ConfirmTrashAlias onCancel={trashItem.cancel} onConfirm={trashItem.confirm} item={trashItem.param} />
+            )}
+
+            {trashManyItems.pending && (
+                <ConfirmTrashManyItems
+                    onCancel={trashManyItems.cancel}
+                    onConfirm={trashManyItems.confirm}
+                    selected={trashManyItems.param}
+                />
+            )}
+
+            {deleteItem.pending && (
+                <ConfirmDeleteItem
+                    onCancel={deleteItem.cancel}
+                    onConfirm={deleteItem.confirm}
+                    item={deleteItem.param}
+                />
+            )}
+
+            {deleteManyItems.pending && (
+                <ConfirmDeleteManyItems
+                    onCancel={deleteManyItems.cancel}
+                    onConfirm={deleteManyItems.confirm}
+                    selected={deleteManyItems.param}
+                />
+            )}
+
+            {leaveItem.pending && (
+                <ConfirmLeaveItem onCancel={leaveItem.cancel} onConfirm={leaveItem.confirm} item={leaveItem.param} />
+            )}
+
+            {autotypeConfirm.pending && (
+                <ConfirmAutotype
+                    onClose={autotypeConfirm.cancel}
+                    onConfirm={autotypeConfirm.confirm}
+                    spotlightToClose={autotypeConfirm.param.spotlightToClose}
+                />
+            )}
+
+            {autotypeConfirmFromShortcut.pending && (
+                <ConfirmAutotypeShortcut
+                    onClose={autotypeConfirmFromShortcut.cancel}
+                    onConfirm={autotypeConfirmFromShortcut.confirm}
+                    spotlightToClose={autotypeConfirmFromShortcut.param.spotlightToClose}
+                />
+            )}
+        </ItemActionsContext.Provider>
+    );
+};
+
+export const useItemsActions = (): ItemActionsContextType => useContext(ItemActionsContext)!;

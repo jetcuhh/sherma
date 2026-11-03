@@ -1,0 +1,55 @@
+import type { FileForDownload } from '../../types/data/files';
+import type { DeobfuscatedItemRevision } from '../../types/data/items';
+import type { VaultShareContent } from '../../types/data/shares';
+import type { ItemType } from '../../types/protobuf';
+import type { MaybeNull } from '../../types/utils';
+
+export type ExportedItem<T extends ItemType = ItemType> = Omit<
+    DeobfuscatedItemRevision<T>,
+    'revision' | 'revisionTime' | 'lastUseTime' | 'flags'
+> & { files?: string[] };
+
+export type ExportedFolder = { folderId: string; parentFolderId: MaybeNull<string>; name: string };
+
+/** `folders` is optional as Pass older versions export won't have this property */
+export type ExportedVault = VaultShareContent & { folders?: ExportedFolder[]; items: ExportedItem[] };
+
+export type ExportData = {
+    userId?: string;
+    vaults: Record<string, ExportedVault>;
+    version: string;
+};
+
+export type ExportCSVItem = {
+    createTime: string;
+    modifyTime: string;
+    name: string;
+    note: string;
+    password: string;
+    totp: string;
+    type: ItemType;
+    url: string;
+    /** JSON-encoded full autofill URL list with per-URL modes. Populated whenever a login
+     * has at least one url; `url` keeps the human-readable Default-only list. */
+    autofillUrls: string;
+    email: string;
+    username: string;
+    vault: string;
+};
+
+export enum ExportFormat {
+    CSV = 'csv',
+    PGP = 'pgp',
+    ZIP = 'zip',
+    JSON = 'json',
+}
+
+export type ExportRequestOptions = {
+    format: ExportFormat;
+    passphrase: string;
+    fileAttachments: boolean;
+    storageType: string;
+    port?: string;
+};
+
+export type ExportResult = FileForDownload & { mimeType: string };

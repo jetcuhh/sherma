@@ -1,0 +1,19 @@
+@use '~@proton/pass/styles/common' as *;
+@use '~@proton/styles/scss/lib/em' as *;
+@use '~@proton/pass/styles/extension' as *;
+
+body {
+	background: transparent;
+}
+
+/* Safari high zoom overflows the inner Scroll,
+ * allow document body to scroll as a fallback */
+body.is-safari {
+	overflow-y: auto;
+}
+
+.item-icon {
+	background-color: var(--field-norm);
+	padding: #{em(4)};
+	border-radius: var(--border-radius-md);
+}

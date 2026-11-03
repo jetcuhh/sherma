@@ -1,0 +1,141 @@
+import { getSrp } from '@protontech/crypto/srp';
+import { type PayloadAction, type ThunkAction, type UnknownAction, createSlice } from '@reduxjs/toolkit';
+
+import type { ProtonThunkArguments } from '@proton/redux-shared-store-types/interface';
+import type { TwoFactorCredentials } from '@proton/shared/lib/api/auth';
+import { type AuthReminderResponse, authReminder, deleteAuthReminder } from '@proton/shared/lib/api/auth';
+import type { InfoAuthedResponse } from '@proton/shared/lib/authentication/interface';
+import type { Api } from '@proton/shared/lib/interfaces/Api';
+
+import type { OrganizationState } from '../organization';
+import type { UserState } from '../user';
+import type { UserSettingsState } from '../userSettings';
+import type { PasswordReminderAccountType } from './helpers/getPasswordReminderAccountType';
+
+const name = 'passwordReminder' as const;
+
+interface PasswordReminderState {
+    /**
+     * Whether the password reminders feature is available to this user.
+     */
+    isAvailable: boolean;
+
+    /**
+     * Which segment this user belongs to. Computed alongside `isAvailable` from the same
+     * inputs, so telemetry reports the segment that actually decided the feature gate.
+     *
+     * `undefined` until the listener has run at least once.
+     */
+    accountType: PasswordReminderAccountType | undefined;
+
+    /**
+     * Whether the user's organization enforces password check-ins, which prevents them
+     * from opting out. Always false for individual users.
+     */
+    isEnforced: boolean;
+
+    /**
+     * Whether password reminders isAvailable and the setting is enabled.
+     */
+    isEnabled: boolean;
+
+    /**
+     * Whether next prompt time is in the past.
+     */
+    messageCadenceHasExpired: boolean;
+
+    /**
+     * Whether we show the reminder touchpoints -when password reminders is available, enabled and the messaging cadence has expired
+     */
+    showReminders: boolean;
+}
+
+export interface PasswordReminderReduxState extends UserState, UserSettingsState, OrganizationState {
+    [name]: PasswordReminderState;
+}
+
+export const selectPasswordReminder = (state: PasswordReminderReduxState) => state.passwordReminder;
+
+const initialState: PasswordReminderState = {
+    isAvailable: false,
+    accountType: undefined,
+    isEnforced: false,
+    isEnabled: false,
+    messageCadenceHasExpired: false,
+    showReminders: false,
+};
+const slice = createSlice({
+    name,
+    initialState,
+    reducers: {
+        setIsAvailable: (state, action: PayloadAction<{ isAvailable: boolean }>) => {
+            state.isAvailable = action.payload.isAvailable;
+        },
+        setAccountType: (state, action: PayloadAction<{ accountType: PasswordReminderAccountType }>) => {
+            state.accountType = action.payload.accountType;
+        },
+        setIsEnforced: (state, action: PayloadAction<{ isEnforced: boolean }>) => {
+            state.isEnforced = action.payload.isEnforced;
+        },
+        setIsEnabled: (state, action: PayloadAction<{ isEnabled: boolean }>) => {
+            state.isEnabled = action.payload.isEnabled;
+        },
+        setMessageCadenceHasExpired: (state, action: PayloadAction<{ messageCadenceHasExpired: boolean }>) => {
+            state.messageCadenceHasExpired = action.payload.messageCadenceHasExpired;
+        },
+        setShowReminders: (state, action: PayloadAction<{ showReminders: boolean }>) => {
+            state.showReminders = action.payload.showReminders;
+        },
+        hideReminders: (state) => {
+            state.showReminders = false;
+        },
+    },
+});
+
+export const passwordReminderReducer = { [name]: slice.reducer };
+export const passwordReminderActions = slice.actions;
+
+export const dismissPasswordReminder = (): ThunkAction<
+    Promise<void>,
+    PasswordReminderReduxState,
+    ProtonThunkArguments,
+    UnknownAction
+> => {
+    return async (dispatch, getState, extra) => {
+        await extra.api(deleteAuthReminder());
+
+        dispatch(passwordReminderActions.hideReminders());
+    };
+};
+
+export const submitPasswordReminder = ({
+    password,
+    info,
+    credentials,
+    api,
+}: {
+    password: string;
+    info: InfoAuthedResponse;
+    credentials: TwoFactorCredentials | null;
+    api: Api;
+}): ThunkAction<Promise<void>, PasswordReminderReduxState, ProtonThunkArguments, UnknownAction> => {
+    return async (dispatch) => {
+        const srp = await getSrp(info, { password }, info.Version);
+
+        const { ServerProof } = await api<AuthReminderResponse>(
+            authReminder({
+                ClientEphemeral: srp.clientEphemeral,
+                ClientProof: srp.clientProof,
+                SRPSession: info.SRPSession,
+                ...(credentials?.type === 'code' ? { TwoFactorCode: credentials.payload } : undefined),
+                ...(credentials?.type === 'fido2' ? { FIDO2: credentials.payload } : undefined),
+            })
+        );
+
+        if (ServerProof !== srp.expectedServerProof) {
+            throw new Error('Unexpected server proof');
+        }
+
+        dispatch(passwordReminderActions.hideReminders());
+    };
+};

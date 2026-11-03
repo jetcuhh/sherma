@@ -1,0 +1,202 @@
+import { useState } from 'react';
+
+import { c } from 'ttag';
+
+import { recoverDelegatedAccessStep1Thunk } from '@proton/account/delegatedAccess/outgoingActions';
+import {
+    getViewRecoveryContactInfoRoute,
+    getViewRecoveryContactRecoverRoute,
+} from '@proton/account/delegatedAccess/routes';
+import { ContactView } from '@proton/account/delegatedAccess/shared/ContactView';
+import { useOutgoingController } from '@proton/account/delegatedAccess/shared/OutgoingDelegatedAccessProvider';
+import {
+    getCanOutgoingDelegatedAccessRecoverStep1,
+    getCanOutgoingDelegatedAccessRecoverStep2,
+} from '@proton/account/delegatedAccess/shared/outgoing/helper';
+import type { EnrichedOutgoingDelegatedAccess } from '@proton/account/delegatedAccess/shared/outgoing/interface';
+import { useNotifications } from '@proton/app-context/useNotifications';
+import { useDispatch } from '@proton/redux-shared-store/sharedProvider';
+import clsx from '@proton/utils/clsx';
+
+import Radio from '../../../components/input/Radio';
+import useSettingsLink from '../../../components/link/useSettingsLink';
+import useErrorHandler from '../../../hooks/useErrorHandler';
+import type { ReactivateKeysContentProps } from './interface';
+
+const ContactSelector = ({
+    item,
+    checked,
+    onSelectContact,
+}: {
+    item: ReturnType<typeof useOutgoingController>['outgoingDelegatedAccess']['recoveryContacts']['items'][0];
+    checked: boolean;
+    onSelectContact?: () => void;
+}) => {
+    const id = item.outgoingDelegatedAccess.DelegatedAccessID;
+    const name = item.parsedOutgoingDelegatedAccess.contact.name;
+
+    if (onSelectContact) {
+        return (
+            <button
+                type="button"
+                onClick={onSelectContact}
+                aria-pressed={checked}
+                className={clsx(
+                    'w-full flex items-center flex-nowrap py-3 px-4 text-left interactive',
+                    checked && 'bg-weak'
+                )}
+                aria-label={c('emergency_access').t`Select recovery contact ${name}`}
+            >
+                <div className="flex-1">
+                    <ContactView
+                        id={`${id}-contact`}
+                        {...item.parsedOutgoingDelegatedAccess.contact}
+                        createdAtDate={item.parsedOutgoingDelegatedAccess.createdAtDate}
+                    />
+                </div>
+                <div className="shrink-0" aria-hidden="true">
+                    <Radio
+                        id={`${id}`}
+                        aria-labelledby={`${id}-contact`}
+                        name="recovery-contact"
+                        checked={checked}
+                        tabIndex={-1}
+                        readOnly
+                    />
+                </div>
+            </button>
+        );
+    }
+
+    return (
+        <div className="py-3 px-4">
+            <ContactView
+                id={`${id}-contact`}
+                {...item.parsedOutgoingDelegatedAccess.contact}
+                createdAtDate={item.parsedOutgoingDelegatedAccess.createdAtDate}
+            />
+        </div>
+    );
+};
+
+export const RecoveryContactFormId = 'recovery-contact-form';
+
+const RecoveryContactFormStep1 = ({
+    onLoading,
+    onClose,
+    recoveryContacts,
+}: ReactivateKeysContentProps & { recoveryContacts: EnrichedOutgoingDelegatedAccess[] }) => {
+    const handleError = useErrorHandler();
+    const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+    const { createNotification } = useNotifications();
+    const dispatch = useDispatch();
+    const goToSettings = useSettingsLink();
+
+    const handleSubmit = async (recoveryContact: (typeof recoveryContacts)[0]) => {
+        try {
+            onLoading(true);
+
+            await dispatch(
+                recoverDelegatedAccessStep1Thunk({
+                    outgoingDelegatedAccess: recoveryContact.outgoingDelegatedAccess,
+                })
+            );
+            createNotification({ text: c('emergency_access').t`Recovery request sent` });
+            onClose?.();
+            goToSettings(getViewRecoveryContactInfoRoute(recoveryContact.outgoingDelegatedAccess.DelegatedAccessID));
+        } catch (error) {
+            handleError(error);
+        } finally {
+            onLoading(false);
+        }
+    };
+
+    const recoverableRecoveryContacts = recoveryContacts.filter(getCanOutgoingDelegatedAccessRecoverStep1);
+
+    const recoveryContactId = recoverableRecoveryContacts.findIndex(
+        (value) => value.outgoingDelegatedAccess.DelegatedAccessID === selectedContactId
+    );
+    const recoveryContact = recoverableRecoveryContacts[recoveryContactId] ?? recoverableRecoveryContacts[0];
+    const multipleRecoveryContacts = recoverableRecoveryContacts.length > 1;
+
+    return (
+        <form
+            id={RecoveryContactFormId}
+            onSubmit={(event) => {
+                event.preventDefault();
+                if (recoveryContact) {
+                    void handleSubmit(recoveryContact);
+                }
+            }}
+        >
+            <div className="mb-4">
+                {c('emergency_access')
+                    .t`Ask a recovery contact for help. They’ll get an email to verify your request and unlock your data.`}
+            </div>
+            <div
+                className={clsx(
+                    'mb-4 rounded-xl border overflow-hidden',
+                    multipleRecoveryContacts ? 'border-weak divide-y divide-weak' : 'border-primary'
+                )}
+            >
+                {recoverableRecoveryContacts.map((item) => {
+                    return (
+                        <ContactSelector
+                            key={item.outgoingDelegatedAccess.DelegatedAccessID}
+                            checked={item === recoveryContact}
+                            onSelectContact={
+                                multipleRecoveryContacts
+                                    ? () => {
+                                          setSelectedContactId(item.outgoingDelegatedAccess.DelegatedAccessID);
+                                      }
+                                    : undefined
+                            }
+                            item={item}
+                        />
+                    );
+                })}
+            </div>
+            <div>
+                {c('emergency_access')
+                    .t`Get in touch with them now to see if they can help, and to let them know personally it’s you trying to unlock your data.`}
+            </div>
+        </form>
+    );
+};
+
+const RecoveryContactFormStep2 = ({
+    onClose,
+    recoveryContact,
+}: ReactivateKeysContentProps & { recoveryContact: EnrichedOutgoingDelegatedAccess }) => {
+    const goToSettings = useSettingsLink();
+    return (
+        <form
+            id={RecoveryContactFormId}
+            onSubmit={(event) => {
+                event.preventDefault();
+                onClose?.();
+                const route = getViewRecoveryContactRecoverRoute(
+                    recoveryContact.outgoingDelegatedAccess.DelegatedAccessID
+                );
+                goToSettings(route);
+            }}
+        >
+            <div className="mb-4">{c('emergency_access').t`Your recovery contact has helped you recover data.`}</div>
+            <div className="mb-4 rounded-xl border overflow-hidden">
+                <ContactSelector checked={false} onSelectContact={undefined} item={recoveryContact} />
+            </div>
+        </form>
+    );
+};
+
+export const RecoveryContactForm = (props: ReactivateKeysContentProps) => {
+    const { outgoingDelegatedAccess } = useOutgoingController();
+    const firstRecoverableContact = outgoingDelegatedAccess.recoveryContacts.items.find(
+        getCanOutgoingDelegatedAccessRecoverStep2
+    );
+    return firstRecoverableContact ? (
+        <RecoveryContactFormStep2 recoveryContact={firstRecoverableContact} {...props} />
+    ) : (
+        <RecoveryContactFormStep1 recoveryContacts={outgoingDelegatedAccess.recoveryContacts.items} {...props} />
+    );
+};

@@ -1,0 +1,865 @@
+import { CryptoProxy } from '@protontech/crypto';
+import type { Store } from 'redux';
+
+import type { DecryptedAddressKey } from '@proton/shared/lib/interfaces/Key';
+import type { OrganizationKey } from '@proton/shared/lib/interfaces/OrganizationKey';
+import { getDecryptedAddressKeysHelper } from '@proton/shared/lib/keys/getDecryptedAddressKeys';
+import { getDecryptedOrganizationKeyHelper } from '@proton/shared/lib/keys/getDecryptedOrganizationKey';
+import { getDecryptedUserKeysHelper } from '@proton/shared/lib/keys/getDecryptedUserKeys';
+import { getDecryptedGroupAddressKey } from '@proton/shared/lib/keys/groupKeys';
+
+import { FILE_PENDING_SHARE, FILE_PUBLIC_SHARE } from '../../constants';
+import { getGroup } from '../../store/actions/creators/groups';
+import { asyncRequestDispatcherFactory } from '../../store/request/utils';
+import type { State } from '../../store/types';
+import type { ShareGetResponse, ShareKeyResponse } from '../../types/api/pass';
+import type {
+    PassCryptoManagerContext,
+    PassCryptoWorker,
+    SerializedCryptoContext,
+    ShareContext,
+    ShareManager,
+} from '../../types/crypto/pass-crypto';
+import type { TypedOpenedShare } from '../../types/crypto/pass-types';
+import { PassEncryptionTag } from '../../types/crypto/pass-types';
+import type { FileIdentifier } from '../../types/data/files';
+import { ShareType } from '../../types/data/shares';
+import type { MaybeNull } from '../../types/utils';
+import { first } from '../../utils/array/first';
+import { unwrap } from '../../utils/fp/promises';
+import { logId, logger } from '../../utils/logger';
+import { entriesMap } from '../../utils/object/map';
+import { getPublicKeysForEmail } from '../auth/address';
+import { authStore } from '../auth/store';
+import type { PassCoreProxy } from '../core/core.types';
+import type { Group } from '../groups/groups.types';
+import * as processes from './processes';
+import { createShareManager } from './share-manager';
+import { getSupportedAddresses } from './utils/addresses';
+import { encryptData } from './utils/crypto-helpers';
+import {
+    PassCryptoError,
+    PassCryptoFileError,
+    PassCryptoHydrationError,
+    PassCryptoNotHydratedError,
+    PassCryptoShareError,
+    isPassCryptoError,
+} from './utils/errors';
+import { resolveItemKey } from './utils/helpers';
+import { hydrateFolderKeys, serializeFolderKeys, serializeShareManagers } from './utils/seralize';
+
+function assertHydrated(ctx: PassCryptoManagerContext): asserts ctx is Required<PassCryptoManagerContext> {
+    if (
+        ctx.user === undefined ||
+        ctx.addresses === undefined ||
+        ctx.primaryAddress === undefined ||
+        ctx.userKeys === undefined ||
+        ctx.primaryUserKey === undefined
+    ) {
+        throw new PassCryptoNotHydratedError('Pass crypto manager incorrectly hydrated');
+    }
+}
+
+/** Generate a unique identifier for file keys in the crypto context.
+ * For pending files, we use a mock share ID (`FILE_PENDING_SHARE`) instead of
+ * the actual target share ID. This prevents coupling pending files to specific
+ * shares, allowing users to change the destination share during the upload
+ * process before the item is created. */
+const intoFileUniqueID = (fileIdentifier: FileIdentifier) => {
+    const shareId = fileIdentifier.pending ? FILE_PENDING_SHARE : fileIdentifier.shareId;
+    return `${shareId}::${fileIdentifier.fileID}` + (fileIdentifier.pending ? '::pending' : '');
+};
+
+export const createPassCrypto = (core?: PassCoreProxy, store?: Store<State>): PassCryptoWorker => {
+    const context: PassCryptoManagerContext = {
+        user: undefined,
+        userKeys: [],
+        addresses: [],
+        primaryUserKey: undefined,
+        primaryAddress: undefined,
+        shareManagers: new Map(),
+        fileKeys: new Map(),
+        groups: new Map(),
+        folderKeys: new Map(),
+    };
+
+    const hasShareManager = (shareId: string): boolean => context.shareManagers.has(shareId);
+
+    const getShareManager = (shareId: string): ShareManager => {
+        if (!hasShareManager(shareId)) throw new PassCryptoShareError(`Unknown shareId : cannot resolve share manager`);
+        return context.shareManagers.get(shareId)!;
+    };
+
+    const unregisterInactiveShares = () => {
+        context.shareManagers.forEach((shareManager, shareId) => {
+            if (!shareManager.isActive()) {
+                logger.info(`[PassCrypto] Unregistering share ${logId(shareId)} (inactive)`);
+                context.shareManagers.delete(shareId);
+            }
+        });
+    };
+
+    const getDecryptedAddressKeys = async (addressId: string): Promise<DecryptedAddressKey[]> => {
+        assertHydrated(context);
+
+        const address = context.addresses.find((address) => address.ID === addressId);
+        if (address === undefined) throw new PassCryptoError(`Could not find address with ID ${logId(addressId)}`);
+        return getDecryptedAddressKeysHelper(address.Keys, context.user, context.userKeys, authStore.getPassword()!);
+    };
+
+    /** Resolves the decrypted address key reference */
+    const getPrimaryAddressKeyById = async (addressId: string): Promise<DecryptedAddressKey> => {
+        const primaryAddressKey = first(await getDecryptedAddressKeys(addressId));
+        if (!primaryAddressKey) throw new PassCryptoError(`No primary address key`);
+
+        return primaryAddressKey;
+    };
+
+    /** When user is hydrated, its groups are loaded and their keys stored in context */
+    const setGroup = (group: Group) => {
+        assertHydrated(context);
+        const existing = context.groups.get(group.groupId);
+        // If already exists, just update email else, create with no public keys
+        if (existing) existing.group = group;
+        else context.groups.set(group.groupId, { group, publicKeys: null });
+    };
+
+    /** When asking for a group keys, first check the context
+     * There are some race conditions where the user groups are not loaded yet
+     * In these cases, trigger fetch intent and retry */
+    const getGroupOrFetch = async (groupId: string, force = false) => {
+        let group = context.groups.get(groupId);
+
+        if ((group === undefined || force) && store) {
+            /** There's many cache layer but if we truly miss keys because they are not loaded
+             * This will trigger the request and update the group keys on success. NOTE: on
+             * success `getOrganizationGroup` will hydrate the crypto `groupKeys` accordingly.
+             * see: `packages/pass/store/sagas/organization/organization.group.saga.ts`.
+             * `force` bypasses the cache to fetch updated keys. */
+            const asyncDispatch = asyncRequestDispatcherFactory(store.dispatch);
+            await asyncDispatch(getGroup, groupId);
+            group = context.groups.get(groupId);
+        }
+
+        if (group === undefined) throw new Error(`No groups keys for group id ${groupId}`);
+
+        return group;
+    };
+
+    const getGroupAddressKeys = async (groupId: string, force = false) =>
+        (await getGroupOrFetch(groupId, force)).group.keys;
+
+    const getGroupPublicKeys = async (groupId: string) => {
+        const group = await getGroupOrFetch(groupId);
+        if (group.publicKeys !== null) return group.publicKeys;
+        group.publicKeys = await getPublicKeysForEmail(group.group.email);
+        return group.publicKeys;
+    };
+
+    const getDecryptedGroupKey = async (organizationKey: MaybeNull<OrganizationKey>, groupId: string) => {
+        assertHydrated(context);
+
+        const decrypt = async (force: boolean) => {
+            const groupKeys = await getGroupAddressKeys(groupId, force);
+
+            if (organizationKey) {
+                const decryptedOrganizationKey = await getDecryptedOrganizationKeyHelper({
+                    userKeys: context.userKeys,
+                    Key: organizationKey,
+                    keyPassword: authStore.getPassword()!,
+                });
+
+                return getDecryptedGroupAddressKey(groupKeys, decryptedOrganizationKey.privateKey);
+            }
+
+            return getDecryptedGroupAddressKey(groupKeys, context.primaryUserKey.privateKey, {
+                required: true,
+                value: 'account.key-token.address',
+            });
+        };
+
+        /** Cached group keys may be stale in-session (e.g. group was edited with
+         * new ownership which changed the group key token). If decryption fails,
+         * refresh the group keys and retry once. */
+        return (await decrypt(false)) ?? (await decrypt(true));
+    };
+
+    const openShareKey = async (addressId: string, groupId: MaybeNull<string>, shareKey: ShareKeyResponse) => {
+        assertHydrated(context);
+
+        if (groupId) {
+            const addressKeys = await getDecryptedAddressKeys(addressId);
+            const groupPublicKeys = await getGroupPublicKeys(groupId);
+            return processes.openGroupShareKey({ shareKey, addressKeys, groupPublicKeys });
+        }
+        return processes.openShareKey({ shareKey, userKeys: context.userKeys });
+    };
+
+    const worker: PassCryptoWorker = {
+        get ready() {
+            try {
+                assertHydrated(context);
+                return true;
+            } catch {
+                return false;
+            }
+        },
+
+        getContext: () => context,
+
+        async hydrate({ user, addresses, keyPassword, snapshot, groups, clear }) {
+            logger.info('[PassCrypto] Hydrating crypto state');
+
+            if (clear) worker.clear();
+
+            try {
+                const userKeys = await getDecryptedUserKeysHelper(user, keyPassword);
+                const activeAddresses = addresses.filter(getSupportedAddresses);
+
+                if (userKeys.length === 0) throw new PassCryptoHydrationError('No user keys found');
+                if (activeAddresses.length === 0) throw new PassCryptoHydrationError('No active user addresses found');
+
+                context.user = user;
+                context.addresses = addresses;
+                context.primaryAddress = activeAddresses[0];
+                context.userKeys = userKeys;
+                context.primaryUserKey = userKeys[0];
+
+                if (snapshot) {
+                    const entries = snapshot.shareManagers as [string, SerializedCryptoContext<ShareContext>][];
+                    const shareManagers = await unwrap(entriesMap(entries)(createShareManager.fromSnapshot));
+                    context.shareManagers = new Map(shareManagers);
+
+                    if (snapshot.folderKeys) {
+                        context.folderKeys = await hydrateFolderKeys(snapshot.folderKeys);
+                    }
+
+                    logger.info('[PassCrypto] Hydrated from local snapshot');
+                }
+
+                if (groups) groups.forEach(setGroup);
+            } catch (err) {
+                logger.warn('[PassCrypto] Hydration failed', err);
+                const message = err instanceof Error ? err.message : 'unknown error';
+                throw new PassCryptoHydrationError(`Hydration failure (${message})`);
+            }
+
+            unregisterInactiveShares();
+        },
+
+        clear() {
+            logger.info('[PassCrypto] Clearing state');
+            context.user = undefined;
+            context.userKeys = [];
+            context.addresses = [];
+            context.primaryAddress = undefined;
+            context.primaryUserKey = undefined;
+            context.shareManagers = new Map();
+            context.fileKeys = new Map();
+            context.groups = new Map();
+            context.folderKeys = new Map();
+        },
+
+        setGroup,
+
+        getShareManager,
+
+        getDecryptedAddressKeys,
+
+        async encryptForNativeMessaging(payload, sender) {
+            assertHydrated(context);
+            return processes.encryptForNativeMessaging(payload, sender, context.primaryUserKey.privateKey);
+        },
+
+        async decryptFromNativeMessaging(payload, sender) {
+            assertHydrated(context);
+            return processes.decryptFromNativeMessaging(payload, sender, context.userKeys);
+        },
+
+        /* Creating a vault does not register a share manager :
+         * call PassCrypto::openShare to register it */
+        async createVault(content) {
+            assertHydrated(context);
+
+            return processes.createVault({
+                content,
+                encryptionKey: context.primaryUserKey,
+                signingKey: context.primaryUserKey,
+                addressId: context.primaryAddress.ID,
+            });
+        },
+
+        /* Updating a vault does not register a share manager :
+         * call PassCrypto::openShare to register it.
+         *
+         * ⚠️ Key rotation : We're assuming the shareManager will
+         * always hold the latest rotation keys - In order to future
+         * -proof this, each vault update should be preceded by a
+         * call to retrieve the latest shareKeys */
+        async updateVault({ shareId, content }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const latestRotation = manager.getLatestRotation();
+            const vaultKey = manager.getVaultShareKey(latestRotation);
+
+            return processes.updateVault({ vaultKey, content });
+        },
+
+        canOpenShare(shareId) {
+            try {
+                return worker.getShareManager(shareId).isActive();
+            } catch (_) {
+                return false;
+            }
+        },
+
+        /** Opening a new share has the side-effect of registering a shareManager for this
+         * share. When opening a pre-registered share (most likely hydrated from a snapshot)
+         * - filter the vault keys to only open those we haven't already processed. This can
+         * happen during a vault share content update or during a full data sync. */
+        openShare: async <T extends ShareType = ShareType>(data: {
+            encryptedShare: ShareGetResponse;
+            encryptedShareKeys?: ShareKeyResponse[];
+        }) => {
+            assertHydrated(context);
+
+            try {
+                const { encryptedShare, encryptedShareKeys } = data;
+                const { ShareID: shareId, GroupID: groupId } = encryptedShare;
+                const shareManager = hasShareManager(shareId) ? getShareManager(shareId) : undefined;
+                const groupKeys = groupId ? await getGroupPublicKeys(groupId) : undefined;
+                const canOpenShare = processes.canOpenShare(
+                    encryptedShare,
+                    encryptedShareKeys,
+                    shareManager,
+                    groupKeys
+                );
+
+                /** Return null if share cannot be opened - typically occurs
+                 * during password reset when user keys are unavailable. */
+                if (!canOpenShare) return null;
+
+                const share = await (async () => {
+                    switch (encryptedShare.TargetType) {
+                        case ShareType.Vault: {
+                            /** For vaults, resolve share keys from existing manager or decrypt
+                             * new ones, then find the key matching the content rotation */
+                            const vaultKeys = encryptedShareKeys
+                                ? await Promise.all(
+                                      encryptedShareKeys.map((shareKey) =>
+                                          shareManager?.hasVaultShareKey(shareKey.KeyRotation)
+                                              ? shareManager.getVaultShareKey(shareKey.KeyRotation)
+                                              : openShareKey(
+                                                    encryptedShare.AddressID,
+                                                    encryptedShare.GroupID || null,
+                                                    shareKey
+                                                )
+                                      )
+                                  )
+                                : shareManager!.getVaultShareKeys();
+
+                            const rotation = encryptedShare.ContentKeyRotation!;
+                            const vaultKey = vaultKeys.find((key) => key.rotation === rotation);
+                            if (!vaultKey) throw new PassCryptoShareError(`Missing vault key for rotation ${rotation}`);
+
+                            return processes.openShare({ type: ShareType.Vault, encryptedShare, vaultKey });
+                        }
+
+                        case ShareType.Item:
+                            return processes.openShare({ type: ShareType.Item, encryptedShare });
+
+                        default:
+                            throw new PassCryptoShareError('Unsupported share type');
+                    }
+                })();
+
+                /** Register or update `shareManager` and sync share keys if provided */
+                const manager = shareManager ?? createShareManager(share);
+
+                context.shareManagers.set(shareId, manager);
+
+                if (encryptedShareKeys) await worker.updateShareKeys({ shareId, encryptedShareKeys });
+                manager.setShare(share);
+
+                return manager.getShare() as TypedOpenedShare<T>;
+            } catch (err: any) {
+                throw isPassCryptoError(err) ? err : new PassCryptoError(err);
+            }
+        },
+
+        async updateShareKeys({ shareId, encryptedShareKeys }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const { addressId, groupId } = manager.getShare();
+
+            switch (manager.getType()) {
+                case ShareType.Vault: {
+                    const keys = encryptedShareKeys.filter(({ KeyRotation }) => !manager.hasVaultShareKey(KeyRotation));
+                    const newKeys = keys.map((shareKey) => openShareKey(addressId, groupId, shareKey));
+                    return (await Promise.all(newKeys)).forEach(manager.addVaultShareKey);
+                }
+
+                case ShareType.Item: {
+                    const keys = encryptedShareKeys.filter(({ KeyRotation }) => !manager.hasItemShareKey(KeyRotation));
+                    const newKeys = keys.map((shareKey) => openShareKey(addressId, groupId, shareKey));
+                    return (await Promise.all(newKeys)).forEach(manager.addItemShareKey);
+                }
+            }
+        },
+
+        removeShare: (shareId) => {
+            context.shareManagers.delete(shareId);
+            worker.removeFolderKeys(shareId);
+        },
+
+        /* Encrypt the ItemKey with the parent FolderKey if the item is created
+         * inside a folder, else with the vault key for the latest rotation */
+        async createItem({ shareId, content, folderId }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const encryptionKey = folderId
+                ? worker.getFolderKey({ shareId, folderId })
+                : manager.getVaultShareKey(manager.getLatestRotation());
+
+            return processes.createItem({ content, encryptionKey, folderId });
+        },
+
+        async openItem({ shareId, encryptedItem }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const share = manager.getShare();
+
+            const itemKey = await (async () => {
+                switch (share.targetType) {
+                    case ShareType.Vault: {
+                        const shareKey = encryptedItem.FolderID
+                            ? worker.getFolderKey({ shareId, folderId: encryptedItem.FolderID })
+                            : manager.getVaultShareKey(encryptedItem.KeyRotation!);
+
+                        return processes.openItemKey({
+                            shareKey,
+                            encryptedItemKey: {
+                                Key: encryptedItem.ItemKey!,
+                                KeyRotation: encryptedItem.KeyRotation!,
+                            },
+                        });
+                    }
+
+                    case ShareType.Item: {
+                        return manager.getItemShareKey(encryptedItem.KeyRotation);
+                    }
+                }
+            })();
+
+            return processes.openItem({ encryptedItem, itemKey });
+        },
+
+        /* We're assuming that every call to PassCrypto::updateItem will
+         * be preceded by a request to resolve the latest encrypted item
+         * key for future-proofing */
+        async updateItem({ content, itemKey, lastRevision }) {
+            assertHydrated(context);
+            return processes.updateItem({ itemKey, content, lastRevision });
+        },
+
+        async createFolder({ shareId, content, parentFolderId }) {
+            assertHydrated(context);
+
+            const parentKey = parentFolderId
+                ? worker.getFolderKey({ shareId, folderId: parentFolderId })
+                : (() => {
+                      const manager = getShareManager(shareId);
+                      return manager.getVaultShareKey(manager.getLatestRotation());
+                  })();
+
+            return processes.createFolder({ content, parentKey });
+        },
+
+        async openFolder({ shareId, encryptedFolder }) {
+            assertHydrated(context);
+            const folderId = encryptedFolder.FolderID;
+            const parentFolderId = encryptedFolder.ParentFolderID ?? null;
+
+            const parentKey = parentFolderId
+                ? worker.getFolderKey({ shareId, folderId: parentFolderId })
+                : getShareManager(shareId).getVaultShareKey(encryptedFolder.KeyRotation);
+
+            const result = await processes.openFolder({
+                encryptedFolder,
+                parentKey,
+            });
+
+            worker.registerFolderKey({
+                shareId,
+                folderId,
+                folderKey: result.folderKey,
+            });
+
+            return result.content;
+        },
+
+        async updateFolder({ shareId, folderId, content }) {
+            assertHydrated(context);
+            const folderKey = worker.getFolderKey({ shareId, folderId });
+            return processes.updateFolder({ content, folderKey });
+        },
+
+        async moveFolder({ shareId, folderId, targetParentFolderId }) {
+            assertHydrated(context);
+            const folderKey = worker.getFolderKey({ shareId, folderId });
+
+            const targetKey = targetParentFolderId
+                ? worker.getFolderKey({ shareId, folderId: targetParentFolderId })
+                : getShareManager(shareId).getVaultShareKey(folderKey.rotation);
+
+            return processes.moveFolder({ folderKey, targetKey, targetParentFolderId });
+        },
+
+        async moveItem({ targetShareId, itemId, shareId, encryptedItemKeys, folderId, targetFolderId }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const shareKey = folderId
+                ? worker.getFolderKey({ shareId, folderId })
+                : manager.getVaultShareKey(manager.getLatestRotation());
+
+            const itemKeys = await Promise.all(
+                encryptedItemKeys.map((key) => processes.openItemKey({ encryptedItemKey: key, shareKey }))
+            );
+
+            const targetManager = getShareManager(targetShareId);
+            const targetKey = targetFolderId
+                ? worker.getFolderKey({ shareId: targetShareId, folderId: targetFolderId })
+                : targetManager.getVaultShareKey(targetManager.getLatestRotation());
+
+            return processes.moveItem({ itemId, itemKeys, targetKey, targetFolderId });
+        },
+
+        async createInvite({ shareId, itemId, invitedPublicKey, email, role, targetKeys, hideSensitiveContent }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const share = manager.getShare();
+            const inviteKeys = await processes.createInviteKeys({
+                targetKeys,
+                invitedPublicKey: await CryptoProxy.importPublicKey({ armoredKey: invitedPublicKey }),
+                inviterPrivateKey: (await getPrimaryAddressKeyById(share.addressId)).privateKey,
+            });
+
+            return {
+                Keys: inviteKeys,
+                Email: email,
+                ShareRoleID: role,
+                TargetType: !itemId ? ShareType.Vault : ShareType.Item,
+                ItemID: itemId,
+                HideSensitiveContent: hideSensitiveContent ?? null,
+            };
+        },
+
+        /** New user invites does not support item sharing.
+         * Passing an item share shareId will throw. */
+        async createNewUserInvite({ shareId, email, role, itemId, hideSensitiveContent }) {
+            assertHydrated(context);
+
+            if (!core) throw new PassCryptoError('`PassCoreProxy` not initialized');
+
+            const manager = getShareManager(shareId);
+            const share = manager.getShare();
+            const sharedItem = itemId && share.targetType === ShareType.Item;
+            const rotation = manager.getLatestRotation();
+
+            const createNewUserSignature = processes.createNewUserSignatureFactory(core);
+
+            const signature = await createNewUserSignature({
+                inviterPrivateKey: (await getPrimaryAddressKeyById(share.addressId)).privateKey,
+                invitedEmail: email,
+                shareKey: sharedItem ? manager.getItemShareKey(rotation) : manager.getVaultShareKey(rotation),
+            });
+
+            return {
+                Email: email,
+                ShareRoleID: role,
+                Signature: signature,
+                TargetType: !itemId ? ShareType.Vault : ShareType.Item,
+                ItemID: itemId,
+                HideSensitiveContent: hideSensitiveContent ?? null,
+            };
+        },
+
+        async promoteInvite({ shareId, invitedPublicKey }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const share = manager.getShare();
+            const inviteKeys = await processes.createInviteKeys({
+                targetKeys: manager.getVaultShareKeys(),
+                invitedPublicKey: await CryptoProxy.importPublicKey({ armoredKey: invitedPublicKey }),
+                inviterPrivateKey: (await getPrimaryAddressKeyById(share.addressId)).privateKey,
+            });
+
+            return { Keys: inviteKeys };
+        },
+
+        async acceptVaultInvite({ inviteKeys, invitedAddressId, inviterPublicKeys }) {
+            assertHydrated(context);
+
+            const vaultKeys = await processes.reencryptInviteKeys({
+                userKey: context.primaryUserKey,
+                inviteKeys,
+                invitedPrivateKey: (await getPrimaryAddressKeyById(invitedAddressId)).privateKey,
+                inviterPublicKeys: await Promise.all(
+                    inviterPublicKeys.map((armoredKey) => CryptoProxy.importPublicKey({ armoredKey }))
+                ),
+            });
+
+            return { Keys: vaultKeys };
+        },
+
+        async acceptGroupVaultInvite({ organizationKey, groupId, inviteKeys, inviterPublicKeys }) {
+            assertHydrated(context);
+
+            const decryptedGroupKey = await getDecryptedGroupKey(organizationKey, groupId);
+
+            const vaultKeys = await processes.reencryptInviteKeys({
+                userKey: decryptedGroupKey!,
+                inviteKeys,
+                invitedPrivateKey: decryptedGroupKey!.privateKey,
+                inviterPublicKeys: await Promise.all(
+                    inviterPublicKeys.map((armoredKey) => CryptoProxy.importPublicKey({ armoredKey }))
+                ),
+            });
+
+            return { Keys: vaultKeys };
+        },
+
+        async readVaultInvite({ inviteKey, invitedAddressId, encryptedVaultContent, inviterPublicKeys }) {
+            assertHydrated(context);
+
+            return processes.readVaultInviteContent({
+                inviteKey,
+                encryptedVaultContent,
+                invitedPrivateKey: (await getPrimaryAddressKeyById(invitedAddressId)).privateKey,
+                inviterPublicKeys: await Promise.all(
+                    inviterPublicKeys.map((armoredKey) => CryptoProxy.importPublicKey({ armoredKey }))
+                ),
+            });
+        },
+
+        async readGroupVaultInvite({ inviteKey, organizationKey, groupId, encryptedVaultContent, inviterPublicKeys }) {
+            assertHydrated(context);
+
+            const decryptedGroupKey = await getDecryptedGroupKey(organizationKey, groupId);
+
+            return processes.readVaultInviteContent({
+                inviteKey,
+                encryptedVaultContent,
+                invitedPrivateKey: decryptedGroupKey!.privateKey,
+                inviterPublicKeys: await Promise.all(
+                    inviterPublicKeys.map((armoredKey) => CryptoProxy.importPublicKey({ armoredKey }))
+                ),
+            });
+        },
+
+        registerFileKey: ({ fileKey, ...fileIdentifier }) => {
+            /** Do not assert context here, so it can be used in Secure Links */
+            const { fileID, pending = false } = fileIdentifier;
+            logger.debug(`[PassCrypto] Registering file key ${logId(fileID)} [pending=${pending}]`);
+            context.fileKeys.set(intoFileUniqueID(fileIdentifier), fileKey);
+        },
+
+        unregisterFileKey: (fileIdentifier) => {
+            const { fileID, pending = false } = fileIdentifier;
+            logger.debug(`[PassCrypto] Unregistering file key ${logId(fileID)} [pending=${pending}]`);
+            context.fileKeys.delete(intoFileUniqueID(fileIdentifier));
+        },
+
+        getFileKey: (fileIdentifier) => {
+            const fileKey = context.fileKeys.get(intoFileUniqueID(fileIdentifier));
+            if (!fileKey) throw new PassCryptoFileError(`Could not resolve file key for ${fileIdentifier.fileID}`);
+            return fileKey;
+        },
+
+        registerFolderKey: ({ shareId, folderId, folderKey }) => {
+            logger.debug(`[PassCrypto] Registering folder key ${logId(folderId)} in share ${logId(shareId)}`);
+            const shareFolderKeys = context.folderKeys.get(shareId) ?? new Map();
+            shareFolderKeys.set(folderId, folderKey);
+            context.folderKeys.set(shareId, shareFolderKeys);
+        },
+
+        getFolderKey: ({ shareId, folderId }) => {
+            const folderKey = context.folderKeys.get(shareId)?.get(folderId);
+            if (!folderKey) throw new PassCryptoError(`Could not resolve folder key for ${logId(folderId)}`);
+            return folderKey;
+        },
+
+        removeFolderKeys: (shareId, folderIds) => {
+            /** If no folderIds, the share itself is deleted so remove all its folder keys */
+            if (!folderIds) {
+                context.folderKeys.delete(shareId);
+                return;
+            }
+
+            const shareFolderKeys = context.folderKeys.get(shareId);
+            if (!shareFolderKeys) return;
+
+            folderIds.forEach((folderId) => shareFolderKeys.delete(folderId));
+            if (shareFolderKeys.size === 0) context.folderKeys.delete(shareId);
+        },
+
+        async encryptFileKey({ itemKey, ...fileIdentifier }) {
+            const fileKey = worker.getFileKey(fileIdentifier);
+            return encryptData(itemKey.key, fileKey, PassEncryptionTag.FileKey);
+        },
+
+        async createFileDescriptor({ metadata, encryptionVersion, ...fileIdentifier }) {
+            assertHydrated(context);
+
+            const fileKey = fileIdentifier.fileID ? worker.getFileKey(fileIdentifier) : undefined;
+            return processes.createFileDescriptor(metadata, encryptionVersion, fileKey);
+        },
+
+        async openFileDescriptor({ file, itemKey, shareId }) {
+            assertHydrated(context);
+
+            const { fileKey, metadata } = await processes.openFileDescriptor(
+                file.Metadata,
+                file.FileKey,
+                itemKey,
+                file.EncryptionVersion ?? 1
+            );
+
+            worker.registerFileKey({ fileKey, fileID: file.FileID, shareId });
+            return metadata;
+        },
+
+        async createFileChunk({ chunk, chunkIndex, encryptionVersion, totalChunks, fileID }) {
+            assertHydrated(context);
+
+            if (chunk.size === 0) throw new PassCryptoFileError('File cannot be empty');
+
+            const fileKey = worker.getFileKey({ fileID, pending: true });
+            return processes.createFileChunk(chunk, chunkIndex, totalChunks, fileKey, encryptionVersion);
+        },
+
+        async openFileChunk({ chunk, chunkIndex, fileID, shareId, totalChunks, encryptionVersion }) {
+            /** Do not assert context here, so it can be used in Secure Links */
+            if (chunk.byteLength === 0) throw new PassCryptoFileError('Encrypted chunk cannot be empty');
+
+            const fileKey = worker.getFileKey({ shareId, fileID });
+            return processes.openFileChunk(chunk, chunkIndex, totalChunks, fileKey, encryptionVersion);
+        },
+
+        async createSecureLink({ itemKey }) {
+            assertHydrated(context);
+            return processes.createSecureLink({ itemKey });
+        },
+
+        async openSecureLink({ linkKey, publicLinkContent }) {
+            if (!publicLinkContent.ItemKey || !publicLinkContent.Contents) {
+                throw new Error('Missing data when retrieving secure link content');
+            }
+
+            return processes.openSecureLink({
+                encryptedItemKey: publicLinkContent.ItemKey,
+                content: publicLinkContent.Contents,
+                linkKey,
+            });
+        },
+
+        async createAccessTokenKey() {
+            assertHydrated(context);
+            const { publicKey, privateKey } = context.primaryUserKey;
+            return processes.createAccessTokenKey(publicKey, privateKey);
+        },
+
+        async openAccessTokenKey(encryptedKey) {
+            assertHydrated(context);
+            const { publicKey, privateKey } = context.primaryUserKey;
+            return processes.openAccessTokenKey(encryptedKey, privateKey, publicKey);
+        },
+
+        async createAccessTokenShareKeys({ rawPatKey, shareId }) {
+            const shareKeys = worker.getShareManager(shareId).getVaultShareKeys();
+            return processes.createAccessTokenShareKeys(rawPatKey, shareKeys);
+        },
+
+        async openActionPayload({ encodedPayload, rawPatKey }) {
+            return processes.openActionPayload(encodedPayload, rawPatKey);
+        },
+
+        async openSecureLinkFileDescriptor({
+            encryptedItemKey,
+            encryptedFileKey,
+            encryptedMetadata,
+            encryptionVersion,
+            fileID,
+            linkKey,
+        }) {
+            const { fileKey, metadata } = await processes.openSecureLinkFileDescriptor({
+                encryptedFileKey,
+                encryptedItemKey,
+                encryptedMetadata,
+                encryptionVersion,
+                linkKey,
+            });
+
+            worker.registerFileKey({ fileKey, fileID, shareId: FILE_PUBLIC_SHARE });
+
+            return metadata;
+        },
+
+        async openLinkKey({
+            encryptedLinkKey,
+            linkKeyShareKeyRotation,
+            shareId,
+            itemId,
+            folderId,
+            linkKeyEncryptedWithItemKey,
+        }) {
+            assertHydrated(context);
+
+            const key: CryptoKey = await (async () => {
+                if (!linkKeyEncryptedWithItemKey) {
+                    const vaultKey = getShareManager(shareId).getVaultShareKey(linkKeyShareKeyRotation);
+                    return vaultKey.key;
+                }
+
+                const itemKey = await resolveItemKey(shareId, itemId, folderId);
+                return itemKey.key;
+            })();
+
+            return processes.openLinkKey({ encryptedLinkKey, key });
+        },
+
+        async openItemKey({ encryptedItemKey, shareId, folderId }) {
+            assertHydrated(context);
+
+            const manager = getShareManager(shareId);
+            const rotation = manager.getLatestRotation();
+
+            const shareKey = (() => {
+                switch (manager.getType()) {
+                    case ShareType.Vault:
+                        return folderId
+                            ? worker.getFolderKey({ shareId, folderId })
+                            : manager.getVaultShareKey(rotation);
+                    case ShareType.Item:
+                        return manager.getItemShareKey(rotation);
+                }
+            })();
+
+            return processes.openItemKey({ encryptedItemKey, shareKey });
+        },
+
+        serialize: () => ({
+            shareManagers: serializeShareManagers(context.shareManagers),
+            folderKeys: serializeFolderKeys(context.folderKeys),
+        }),
+    };
+
+    return worker;
+};

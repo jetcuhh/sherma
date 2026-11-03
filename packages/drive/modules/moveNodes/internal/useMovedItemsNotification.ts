@@ -1,0 +1,50 @@
+import { c, msgid } from 'ttag';
+
+import { useNotifications } from '@proton/app-context/useNotifications';
+
+import { handleSdkError } from '../../../legacy/errorHandling';
+import { getEllipsedName } from '../../intl';
+import { useListNotifications } from '../../notifications';
+
+export const useMovedItemsNotification = () => {
+    const { createSuccessMessage } = useListNotifications();
+    const { createNotification } = useNotifications();
+
+    const createMovedItemsNotifications = (
+        successItems: { name: string; uid: string }[],
+        failureItems: { uid: string; error: Error }[],
+        undoAction?: () => Promise<void>
+    ) => {
+        createSuccessMessage(
+            successItems,
+            (name: string) => {
+                const ellipsedName = getEllipsedName(name);
+                return c('Notification').t`"${ellipsedName}" moved`;
+            },
+            (numberOfItems: number) =>
+                c('Notification').ngettext(
+                    msgid`${numberOfItems} item moved`,
+                    `${numberOfItems} items moved`,
+                    numberOfItems
+                ),
+            undoAction
+        );
+
+        if (failureItems.length > 0) {
+            const text =
+                failureItems.length === 1
+                    ? failureItems[0].error.message
+                    : c('Error').ngettext(
+                          msgid`${failureItems.length} item failed to be moved`,
+                          `${failureItems.length} items failed to be moved`,
+                          failureItems.length
+                      );
+            createNotification({ type: 'error', text });
+            failureItems.forEach(({ error }) => handleSdkError(error, { showNotification: false }));
+        }
+    };
+
+    return {
+        createMovedItemsNotifications,
+    };
+};

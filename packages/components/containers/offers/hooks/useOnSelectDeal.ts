@@ -1,0 +1,86 @@
+import { useConfig } from '@proton/app-context/useConfig';
+import type { Currency } from '@proton/payments/core/interface';
+import { getSubscriptionSearchParamsString } from '@proton/payments/core/subscription/search-params';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { getAppHref } from '@proton/shared/lib/apps/helper';
+import { getSlugFromApp } from '@proton/shared/lib/apps/slugHelper';
+import { APPS, APPS_WITH_IN_APP_PAYMENTS } from '@proton/shared/lib/constants';
+import { isElectronApp, isElectronMail } from '@proton/shared/lib/helpers/desktop';
+import { formatURLForAjaxRequest } from '@proton/shared/lib/helpers/url';
+import { getPlanNameFromIDs } from '@proton/shared/lib/payments/plan/helpers';
+import noop from '@proton/utils/noop';
+
+import useSettingsLink from '../../../components/link/useSettingsLink';
+import { openLinkInBrowser } from '../../desktop/openExternalLink';
+import { useHasInboxDesktopInAppPayments } from '../../desktop/useHasInboxDesktopInAppPayments';
+import {
+    type OpenCallbackProps,
+    useOptionalSubscriptionModal,
+} from '../../payments/subscription/SubscriptionModalProvider';
+import type { Deal, Offer } from '../interface';
+
+const useSelectDeal = (callback?: () => void) => {
+    const { APP_NAME } = useConfig();
+
+    const goToSettingsLink = useSettingsLink();
+    const hasInboxDesktopInAppPayments = useHasInboxDesktopInAppPayments();
+
+    const [openSubscriptionModal, loadingSubscriptionModal] = useOptionalSubscriptionModal();
+
+    const handleOnSelectDeal = (offer: Offer, deal: Deal, currency: Currency) => {
+        offer.tracking?.onSelectDeal?.();
+
+        // Open the in-app purchase modal if available
+        const hasInAppPayment =
+            APPS_WITH_IN_APP_PAYMENTS.has(APP_NAME) && (!isElectronMail || hasInboxDesktopInAppPayments);
+        const plan = getPlanNameFromIDs(deal.planIDs);
+
+        if (openSubscriptionModal && hasInAppPayment && !loadingSubscriptionModal && plan) {
+            const subscriptionParams: OpenCallbackProps = {
+                plan,
+                currency,
+                coupon: deal.couponCode,
+                cycle: deal.cycle,
+                maximumCycle: deal.cycle,
+                minimumCycle: deal.cycle,
+                step: SUBSCRIPTION_STEPS.CHECKOUT,
+                upsellRef: deal.ref,
+                onSubscribed: offer.tracking?.onSubscribed,
+            };
+
+            // Generate a mocked request to track upsell activity
+            const urlParameters = { ref: deal.ref, load: 'modalOpen' };
+            const url = formatURLForAjaxRequest(window.location.href, urlParameters);
+            fetch(url).catch(noop);
+
+            void openSubscriptionModal(subscriptionParams);
+            callback?.();
+            return;
+        }
+
+        // Open the settings if the app doesn't support in-app payments
+
+        const search = getSubscriptionSearchParamsString({
+            cycle: deal.cycle,
+            coupon: deal.couponCode,
+            currency,
+            plan: getPlanNameFromIDs(deal.planIDs),
+            fixedPlan: true,
+            ...(!offer.enableCycleSelector ? { fixedCycle: true } : {}),
+            ref: deal.ref,
+        });
+        callback?.();
+
+        const url = `/dashboard?${search}`;
+        if (isElectronApp && !hasInboxDesktopInAppPayments) {
+            openLinkInBrowser(getAppHref(`/${getSlugFromApp(APP_NAME)}${url}`, APPS.PROTONACCOUNT));
+            return;
+        } else {
+            goToSettingsLink(url);
+        }
+    };
+
+    return handleOnSelectDeal;
+};
+
+export default useSelectDeal;

@@ -1,0 +1,127 @@
+import fs from 'fs';
+
+import type { ItemImportIntent } from '../../../../types/data/items.dto';
+import { AutofillMode } from '../../../../types/protobuf';
+import { deobfuscate } from '../../../../utils/obfuscate/xor';
+import type { ImportPayload, ImportVault } from '../../types';
+import { readProtonPassZIP } from './protonpass.zip.reader';
+
+describe('Import Proton Pass ZIP', () => {
+    let payload: ImportPayload;
+    let payloadExcludingCurrentAliases: ImportPayload;
+    let oldFormatPayload: ImportPayload;
+
+    const currentAliases = ['infra.structure078@passdevfree.com'];
+
+    beforeAll(async () => {
+        const sourceData = fs.readFileSync(__dirname + '/mocks/protonpass.zip');
+        const file = new File([sourceData], 'protonpass.zip');
+
+        payload = await readProtonPassZIP(file, {
+            userId: 'SWgOUidqAHPDfImlbYvpp__YSOK3YXRAtOckIo_0qmVNjzqVAOWNS2d60OOR15Cv4RTLBCTVaSa43-036nseXg==',
+            currentAliases: [],
+            onPassphrase: async () => '',
+        });
+
+        payloadExcludingCurrentAliases = await readProtonPassZIP(file, {
+            userId: 'SWgOUidqAHPDfImlbYvpp__YSOK3YXRAtOckIo_0qmVNjzqVAOWNS2d60OOR15Cv4RTLBCTVaSa43-036nseXg==',
+            currentAliases,
+            onPassphrase: async () => '',
+        });
+
+        const legacyFormat = fs.readFileSync(__dirname + '/mocks/protonpass_1.17.zip');
+        const legacyFile = new File([legacyFormat], 'protonpass_1.17.zip');
+
+        oldFormatPayload = await readProtonPassZIP(legacyFile, {
+            userId: '5sxjHzI4mlMVq7-ysH-4YxgbEXsNTUlqmVmosbQKL_NgKXe_E0MroEgbKxH2wHTXXtLS3qr1JR_15SWL5kTVOQ==',
+            currentAliases: [],
+            onPassphrase: async () => '',
+        });
+    });
+
+    it('should be compatible with the old format having username instead of itemEmail & itemUsername', async () => {
+        const [vault] = oldFormatPayload.vaults;
+
+        const { items } = vault;
+
+        const noteItem = items[1] as ItemImportIntent<'note'>;
+        expect(noteItem.type).toEqual('note');
+        expect(noteItem.metadata.name).toEqual('note title');
+        expect(deobfuscate(noteItem.metadata.note)).toEqual('this is my note');
+        expect(noteItem.content).toEqual({});
+        expect(noteItem.createTime).toEqual(1706621831);
+        expect(noteItem.modifyTime).toEqual(1707735222);
+
+        const loginItem = items[2] as ItemImportIntent<'login'>;
+        expect(loginItem.type).toEqual('login');
+        expect(loginItem.metadata.name).toEqual('login title');
+        expect(deobfuscate(loginItem.metadata.note)).toEqual('login note');
+        expect(deobfuscate(loginItem.content.itemEmail)).toEqual('john');
+        expect(deobfuscate(loginItem.content.itemUsername)).toEqual('');
+        expect(deobfuscate(loginItem.content.password)).toEqual('password123');
+        expect(loginItem.content.autofillUrls).toEqual([
+            { url: 'https://example.com/', mode: AutofillMode.Default },
+            { url: 'https://proton.me/', mode: AutofillMode.Default },
+        ]);
+        expect(deobfuscate(loginItem.content.totpUri)).toEqual(
+            'otpauth://totp/login%20title:example%40example.com?issuer=login%20title&secret=ABCDEF&algorithm=SHA1&digits=6&period=30'
+        );
+        expect(loginItem.createTime).toEqual(1707735320);
+        expect(loginItem.modifyTime).toEqual(1707735349);
+    });
+
+    it('should import all items', async () => {
+        const total = payload.vaults.reduce((acc, { items }) => acc + items.length, 0);
+        expect(total).toEqual(9);
+    });
+
+    it('should not import existing aliases', async () => {
+        const aliases = payload.vaults[0].items.filter((item) => item.type === 'alias');
+        const aliasesWithoutCurrentAliases = payloadExcludingCurrentAliases.vaults[0].items.filter(
+            (item) => item.type === 'alias'
+        );
+        expect(aliasesWithoutCurrentAliases.length).toEqual(aliases.length - currentAliases.length);
+    });
+
+    it('should rebuild the folder hierarchy of each vault parent-first', () => {
+        const [personal, notSoPersonal, second, exportVault] = payload.vaults;
+
+        expect(personal.folders.map(({ name, parentId }) => [name, parentId])).toEqual([
+            ['Clients', null],
+            ['Nested', personal.folders[0].id],
+            ['Empty folder', null],
+        ]);
+        expect(notSoPersonal.folders).toEqual([]);
+        expect(second.folders).toEqual([]);
+        expect(exportVault.folders.map(({ name, parentId }) => [name, parentId])).toEqual([
+            ['level1', null],
+            ['level2', exportVault.folders[0].id],
+        ]);
+    });
+
+    it('should place each item in its folder', () => {
+        const [personal, , , exportVault] = payload.vaults;
+
+        const getItemFolderNames = ({ folders, items }: ImportVault) => {
+            const folderNames = new Map(folders.map(({ id, name }) => [id, name]));
+            return items.map(({ metadata, folderId }) => [metadata.name, folderNames.get(folderId ?? '') ?? null]);
+        };
+
+        expect(getItemFolderNames(personal)).toEqual([
+            ['identity', null],
+            ['infra', 'Clients'],
+            ['test', 'Nested'],
+        ]);
+        expect(getItemFolderNames(exportVault)).toEqual([
+            ['sub item', 'level1'],
+            ['folder item', 'level2'],
+        ]);
+    });
+
+    it('should import older exports without folders', () => {
+        const [vault] = oldFormatPayload.vaults;
+
+        expect(vault.folders).toEqual([]);
+        expect(vault.items.every(({ folderId }) => folderId === null)).toBe(true);
+    });
+});

@@ -1,0 +1,149 @@
+import { createSelector } from '@reduxjs/toolkit';
+import { c } from 'ttag';
+
+import type { Address } from '@proton/shared/lib/interfaces/Address';
+import { UserType } from '@proton/shared/lib/interfaces/User';
+import { SETTINGS_PASSWORD_MODE } from '@proton/shared/lib/interfaces/UserSettings';
+import { AuthDeviceState } from '@proton/shared/lib/keys/device';
+
+import type { AuthStore } from '../../lib/auth/store';
+import { isShareHidingSensitiveContent } from '../../lib/shares/share.predicates';
+import { getPassPlan } from '../../lib/user/user.plan';
+import { isWritableVault } from '../../lib/vaults/vault.predicates';
+import {
+    type AutofillModelExperimentGroup,
+    DEFAULT_AUTOFILL_MODEL_EXPERIMENT_GROUP,
+    PassFeature,
+    isAutofillModelExperimentGroup,
+} from '../../types/api/features';
+import { UserPassPlan } from '../../types/api/plan';
+import type { Share } from '../../types/data/shares';
+import type { Maybe, MaybeNull } from '../../types/utils';
+import { oneOf } from '../../utils/fp/predicates';
+import { sortOn } from '../../utils/fp/sort';
+import { UNIX_DAY } from '../../utils/time/constants';
+import { getEpoch } from '../../utils/time/epoch';
+import type { VaultShareItem } from '../reducers';
+import type { State } from '../types';
+import { selectExtraPasswordEnabled } from './settings';
+import { selectShare, selectShareState } from './shares';
+import { createUncachedSelector } from './utils';
+import { selectDefaultVault } from './vaults';
+
+export const selectUserState = ({ user }: State) => user;
+export const selectUser = ({ user: { user } }: State) => user;
+export const selectIsSSO = ({ user: { user } }: State) => Boolean(user?.Flags.sso);
+export const selectUserPlan = ({ user: { plan } }: State) => plan;
+export const selectUserSettings = ({ user: { userSettings } }: State) => userSettings;
+export const selectUserData = ({ user: { userData } }: State) => userData;
+export const selectHasPendingShareAccess = ({ user }: State) => (user.waitingNewUserInvites ?? 0) > 0;
+export const selectSentinelEligible = ({ user }: State) => Boolean(user.userSettings?.HighSecurity.Eligible ?? false);
+export const selectSentinelEnabled = ({ user }: State) => Boolean(user.userSettings?.HighSecurity.Value ?? false);
+export const selectTelemetryEnabled = ({ user }: State) => user.userSettings?.Telemetry === 1;
+export const selectUserType = ({ user }: State) => user.user?.Type;
+export const selectLatestEventId = ({ user: { eventId } }: State) => eventId;
+export const selectLatestUserEventId = ({ user: { userEventId } }: State) => userEventId;
+export const selectFeatureFlags = ({ user: { features } }: State) => features;
+
+/** `features` is `null` until the first successful fetch. */
+export const selectFeatureFlagsReady = ({ user: { features } }: State): boolean => Boolean(features);
+const selectAddresses = ({ user }: State) => user.addresses;
+const selectAuthDevices = (state: State) => state.user.devices;
+export const selectUserStorageUsed = ({ user }: State) => user.plan?.StorageUsed ?? 0;
+export const selectUserStorageQuota = ({ user }: State) => user.plan?.StorageQuota ?? 0;
+export const selectUserStorageMaxFileSize = ({ user }: State) => user.plan?.StorageMaxFileSize ?? 0;
+export const selectUserStorageAllowed = ({ user }: State) => user.plan?.StorageAllowed;
+export const selectUserFolderAllowed = ({ user }: State) => user.plan?.FolderAllowed;
+
+/* Specification for pass specific plans in `/user/access` response :
+ * `business` -> Plan: Business | Trial: null | Limits: none
+ * `paid` -> Plan: Plus | Trial: null | Limits: none
+ * `trial` -> Plan: Plus | Trial: unix timestamp end | Limits
+ * `free` -> Plan: Free | Trial: null | Limits */
+export const selectPassPlan = ({ user: { plan } }: State): UserPassPlan => getPassPlan(plan);
+
+export const selectPlanDisplayName = createSelector([selectPassPlan], (passPlan) => {
+    switch (passPlan) {
+        case UserPassPlan.TRIAL:
+            return c('Info').t`Plus trial`;
+        case UserPassPlan.BUSINESS:
+            return c('Info').t`Business`;
+        case UserPassPlan.FREE:
+            return c('Info').t`Free`;
+        case UserPassPlan.PLUS:
+            return c('Info').t`Plus`;
+    }
+});
+
+export const selectTrialDaysRemaining = ({ user: { plan } }: State): MaybeNull<number> => {
+    if (!plan?.TrialEnd) return null;
+    return Math.ceil(Math.max((plan.TrialEnd - getEpoch()) / UNIX_DAY, 0));
+};
+/* user tier is only used for telemetry */
+export const selectUserTier = ({ user: { user, plan } }: State): string | undefined =>
+    user?.Type === UserType.MANAGED ? 'subuser' : plan?.InternalName;
+
+export const selectAllAddresses = createUncachedSelector(selectAddresses, (addresses): Address[] => Object.values(addresses));
+
+export const selectFeatureFlag =
+    (feature: PassFeature) =>
+    ({ user: { features } }: State): boolean =>
+        features?.[feature] ?? false;
+
+export const selectFeatureFlagVariant =
+    (feature: PassFeature) =>
+    ({ user: { featureVariants } }: State) =>
+        featureVariants?.[feature] ?? null;
+
+/** Single source of truth for whether a share's sensitive content (e.g. a login
+ * password) should be revealable to the current user. `false` only when the
+ * feature flag is on, the share is known, and it has `HIDE_SENSITIVE_CONTENT` set. */
+export const selectCanRevealSensitiveContent = (shareId: Maybe<string>) =>
+    createSelector(
+        [selectFeatureFlag(PassFeature.Pass__V1_44__ShareWithHiddenPassword), selectShare(shareId)],
+        (hiddenPasswordEnabled, share) => !hiddenPasswordEnabled || !share || !isShareHidingSensitiveContent(share)
+    );
+
+export const selectAutofillModelExperimentGroup = (state: State): AutofillModelExperimentGroup => {
+    const name = selectFeatureFlagVariant(PassFeature.PassAutofillModelExperimentGroup)(state)?.name;
+    return name && isAutofillModelExperimentGroup(name) ? name : DEFAULT_AUTOFILL_MODEL_EXPERIMENT_GROUP;
+};
+
+/** Resolves the user's default vault share, ensuring it exists
+ * and is writable to guard against BE discrepancies. */
+const selectDefaultShare = createSelector([selectUserData, selectShareState], (userData, shares): Maybe<VaultShareItem> => {
+    if (!userData.defaultShareId) return;
+    const share: Maybe<Share> = shares[userData.defaultShareId];
+    if (share && isWritableVault(share)) return share;
+});
+
+/** Resolves the default vault share ID. Falls back to the default
+ * vault if the user's default share is missing or read-only. */
+export const selectUserDefaultShareID = createSelector(
+    [selectDefaultShare, selectDefaultVault],
+    (defaultShare, defaultVault): Maybe<string> => defaultShare?.shareId ?? defaultVault?.shareId
+);
+
+export const selectPendingAuthDevices = createSelector([selectAuthDevices, selectAddresses], (authDevices, addresses) =>
+    authDevices
+        .filter(({ State, ActivationAddressID }) =>
+            Boolean(
+                oneOf(AuthDeviceState.PendingActivation, AuthDeviceState.PendingAdminActivation)(State) &&
+                ActivationAddressID &&
+                addresses[ActivationAddressID]
+            )
+        )
+        .sort(sortOn('CreateTime'))
+);
+
+export const selectHasTwoPasswordMode = ({ user }: State) => user.userSettings?.Password.Mode === SETTINGS_PASSWORD_MODE.TWO_PASSWORD_MODE;
+
+export const selectPasswordTypeConfig = (authStore: MaybeNull<AuthStore>) =>
+    createSelector([selectExtraPasswordEnabled, selectIsSSO, selectHasTwoPasswordMode], (extra, sso, twoPwd) => {
+        const hasOfflinePassword = Boolean(authStore?.hasOfflinePassword());
+        return {
+            extra,
+            sso: sso && hasOfflinePassword,
+            twoPwd: twoPwd && hasOfflinePassword,
+        };
+    });

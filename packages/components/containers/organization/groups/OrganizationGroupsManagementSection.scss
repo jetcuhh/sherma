@@ -1,0 +1,20 @@
+.main-area:has(section > .groups-management) {
+	display: flex;
+}
+
+.container-section-sticky:has(section > .groups-management) {
+	display: flex;
+	flex-direction: column;
+}
+
+section:has(> .groups-management) {
+	flex-grow: 1;
+}
+
+.groups-management header > div:first-child {
+	min-inline-size: 0;
+}
+
+.groups-management header > div:last-child {
+	gap: 0.75rem;
+}

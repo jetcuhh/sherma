@@ -1,0 +1,102 @@
+/** Due to a Safari MV3 service-worker registration error, the worker may be
+ * registered in a corrupted state without access to the browser runtime API
+ * after history/cookie clearing. To prevent issues: DO NOT access or call any
+ * browser APIs from the top-level scope of this file. "Top-level" refers to
+ * any bundled code that runs immediately when the file is loaded. This includes
+ * side-effects such as directly executed statements and exported constants. */
+import browser from '@proton/pass/lib/globals/browser';
+import { safeCall } from '@proton/pass/utils/fp/safe-call';
+import noop from '@proton/utils/noop';
+
+import { handleExtensionCommand } from '../../lib/extension/commands';
+import { backgroundMessage } from '../../lib/message/send-message';
+import '../../lib/polyfills/shim';
+import { checkChromeRuntimeError } from '../../lib/utils/chrome';
+import { devReload } from '../../lib/utils/reload';
+import { WorkerMessageType } from '../../types/messages';
+import config from '../config';
+import WorkerMessageBroker from './channel';
+import { CRYPTO_CHUNK_FILES } from './chunks';
+import { createWorkerContext } from './context/factory';
+import './debugger';
+
+if (typeof browser !== 'undefined') {
+    if (BUILD_TARGET === 'chrome' || BUILD_TARGET === 'safari') {
+        /* FIXME: create a custom webpack plugin to automatically register
+         * chunks loaded through `importScripts` for the chromium build
+         * https://bugs.chromium.org/p/chromium/issues/detail?id=1198822#c10*/
+        const globalScope = self as any as ServiceWorkerGlobalScope;
+
+        const localeChunks = Object.keys(config.LOCALES)
+            .filter((locale) => locale !== 'en_US')
+            .map((locale) => `chunk.locales/${locale}-json.js`);
+
+        const passChunks = ['chunk.pass-core.main.js'];
+        const cryptoChunks = ['chunk.crypto-worker-api.js', ...CRYPTO_CHUNK_FILES];
+        const extraChunks = ['chunk.zip.js', 'chunk.csv.reader.js', 'chunk.zip.reader.js'];
+
+        const chunks = localeChunks.concat(passChunks).concat(cryptoChunks).concat(extraChunks);
+        globalScope.oninstall = () => {
+            safeCall(() => importScripts(...chunks.map((path) => browser.runtime.getURL(path))))();
+            /* In order to alleviate MV3 service worker potentially ending up
+             * in a broken state after an update or a manual refresh, force the
+             * incoming service worker to skip its waiting state
+             * https://bugs.chromium.org/p/chromium/issues/detail?id=1271154#c66 */
+            if (BUILD_TARGET === 'chrome') return globalScope.skipWaiting().catch(checkChromeRuntimeError);
+        };
+    }
+
+    if (BUILD_TARGET !== 'safari' && ENV === 'development') {
+        devReload(async () => {
+            const tabs = await browser.tabs.query({});
+            const csUnloads = tabs
+                .filter((tab) => tab.id !== undefined)
+                .map((tab) =>
+                    browser.tabs
+                        .sendMessage(tab.id!, backgroundMessage({ type: WorkerMessageType.UNLOAD_CONTENT_SCRIPT }))
+                        .catch(noop)
+                );
+
+            await Promise.all(csUnloads);
+            setTimeout(() => browser.runtime.reload(), 250);
+        }, '[DEV] Reloading runtime');
+    }
+
+    const context = createWorkerContext(config);
+
+    context.service.autofill.init().catch(noop);
+    browser.runtime.onConnect.addListener(WorkerMessageBroker.ports.onConnect);
+    browser.runtime.onMessageExternal.addListener(WorkerMessageBroker.onMessage);
+    browser.runtime.onMessage.addListener(WorkerMessageBroker.onMessage);
+    browser.runtime.onStartup.addListener(context.service.activation.onStartup);
+    browser.runtime.onInstalled.addListener(context.service.activation.onInstall);
+
+    if (BUILD_TARGET !== 'safari') {
+        browser.runtime.onUpdateAvailable.addListener(context.service.activation.onUpdateAvailable);
+    }
+
+    /* `browser.commands` may be `undefined` on the first SW boot after
+     * the 1.37.0 update that declares the `commands` manifest key. Chromium
+     * gates the API on the effective manifest, and our `skipWaiting()`
+     * above forces eager activation that likely races with that binding.
+     * Listener re-attaches on next SW restart.
+     * FIXME: remove when sufficient users have migrated to 1.37.0 */
+    if (BUILD_TARGET !== 'safari' && browser.commands) {
+        browser.commands.onCommand.addListener(handleExtensionCommand);
+    }
+
+    if (BUILD_TARGET === 'firefox' && ENV === 'production') {
+        const BLOCKING_PATHS = ['/dropdown.html', '/notification.html'];
+        const BLOCKING_REGEX = new RegExp(`^(${BLOCKING_PATHS.map((p) => browser.runtime.getURL(p)).join('|')})`);
+
+        browser.tabs.onUpdated.addListener(async (tabId, _, tab) => {
+            try {
+                /* Block direct access to certain `web_accessible_resources`
+                 * at their direct runtime url: only allow through page actions
+                 * or iframe injections. Only works on FF as we don't have access
+                 * to tab information on chrome for `web_accessible_resources` */
+                if (tab.status === 'complete' && BLOCKING_REGEX.test(tab.url ?? '')) await browser.tabs.remove(tabId);
+            } catch (_) {}
+        });
+    }
+}

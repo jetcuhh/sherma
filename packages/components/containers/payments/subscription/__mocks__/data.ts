@@ -1,0 +1,584 @@
+import { IcArrowUpFromSquare } from '@proton/icons/icons/IcArrowUpFromSquare';
+import { IcBrandProton } from '@proton/icons/icons/IcBrandProton';
+import { IcBrandProtonCalendar } from '@proton/icons/icons/IcBrandProtonCalendar';
+import { IcBrandProtonPass } from '@proton/icons/icons/IcBrandProtonPass';
+import { IcBrandProtonVpn } from '@proton/icons/icons/IcBrandProtonVpn';
+import { IcBrandSimpleLogin } from '@proton/icons/icons/IcBrandSimpleLogin';
+import { IcClockRotateLeft } from '@proton/icons/icons/IcClockRotateLeft';
+import { IcEnvelope } from '@proton/icons/icons/IcEnvelope';
+import { IcEyeSlash } from '@proton/icons/icons/IcEyeSlash';
+import { IcGlobe } from '@proton/icons/icons/IcGlobe';
+import { IcImage } from '@proton/icons/icons/IcImage';
+import { IcKey } from '@proton/icons/icons/IcKey';
+import { IcLifeRing } from '@proton/icons/icons/IcLifeRing';
+import { IcMagicWand } from '@proton/icons/icons/IcMagicWand';
+import { IcMobile } from '@proton/icons/icons/IcMobile';
+import { IcNote } from '@proton/icons/icons/IcNote';
+import { IcPenSquare } from '@proton/icons/icons/IcPenSquare';
+import { IcPencil } from '@proton/icons/icons/IcPencil';
+import { IcShield } from '@proton/icons/icons/IcShield';
+import { IcStorage } from '@proton/icons/icons/IcStorage';
+import { IcUsers } from '@proton/icons/icons/IcUsers';
+import { IcVault } from '@proton/icons/icons/IcVault';
+import { CYCLE, PLANS } from '@proton/payments/core/constants';
+import { buildSubscription } from '@proton/payments/testing/buildSubscription';
+import { selfAccessTypeMask } from '@proton/shared/lib/authentication/sessionAccessType';
+import { ORGANIZATION_STATE } from '@proton/shared/lib/constants';
+import type { OrganizationExtended } from '@proton/shared/lib/interfaces/Organization';
+import type { PendingInvitation } from '@proton/shared/lib/interfaces/PendingInvitation';
+import type { User } from '@proton/shared/lib/interfaces/User';
+import type { UserSettings } from '@proton/shared/lib/interfaces/UserSettings';
+
+export const mailPlusUpsell = {
+    plan: PLANS.MAIL,
+    planKey: PLANS.MAIL,
+    title: 'Mail Plus',
+    description: 'Secure email with advanced features for your everyday communications.',
+    upsellRefLink: 'upsell_mail-button-mailplus-dashboard_settings',
+    features: [
+        {
+            id: 'storage',
+            text: ['', '15 GB', ' storage'],
+            tooltip: 'Storage space is shared across Proton Mail, Proton Calendar, Proton Drive, and Proton Pass',
+            included: true,
+            highlight: false,
+            icon: IcStorage,
+        },
+        {
+            id: 'n-addresses',
+            text: '10 email addresses/aliases',
+            tooltip:
+                'Create multiple email addresses for your online identities, e.g., JohnShopper@proton.me for shopping accounts, JohnNews@proton.me for news subscription',
+            included: true,
+            icon: IcEnvelope,
+        },
+        {
+            id: 'n-domains',
+            text: '1 custom email domain',
+            tooltip: 'Use your own custom email domain addresses, e.g., you@yourname.com',
+            included: true,
+            icon: IcGlobe,
+        },
+        {
+            id: 'n-calendars',
+            text: '25 calendars',
+            tooltip: 'Create up to 25 calendars or add calendars from friends, family, colleagues, and organizations',
+            included: true,
+            icon: IcBrandProtonCalendar,
+        },
+        {
+            icon: IcBrandProtonVpn,
+            id: 'vpn-connections',
+            text: '1 VPN connection',
+            included: true,
+        },
+        {
+            id: 'proton-pass',
+            text: 'Proton Pass with 10 hide-my-email aliases',
+            icon: IcBrandProtonPass,
+            included: true,
+            hideInDowngrade: true,
+        },
+    ],
+    otherCtas: [],
+    price: {
+        value: 399,
+        currency: 'EUR',
+    },
+};
+
+export const unlimitedUpsell = {
+    plan: PLANS.BUNDLE,
+    planKey: PLANS.BUNDLE,
+    title: 'Proton Unlimited',
+    description: 'All premium features from Proton Mail, Calendar, Drive, VPN, and Pass.',
+    upsellRefLink: 'upsell_mail-button-unlimited-dashboard_settings',
+    features: [
+        {
+            id: 'storage',
+            text: ['', '500 GB', ' storage'],
+            tooltip: 'Storage space is shared across Proton Mail, Proton Calendar, Proton Drive, and Proton Pass',
+            included: true,
+            highlight: false,
+            icon: IcStorage,
+        },
+        {
+            id: 'n-addresses',
+            text: '15 email addresses/aliases',
+            tooltip:
+                'Create multiple email addresses for your online identities, e.g., JohnShopper@proton.me for shopping accounts, JohnNews@proton.me for news subscription',
+            included: true,
+            icon: IcEnvelope,
+        },
+        {
+            id: 'n-domains',
+            text: '3 custom email domains',
+            tooltip: 'Use your own custom email domain addresses, e.g., you@yourname.com',
+            included: true,
+            icon: IcGlobe,
+        },
+        {
+            icon: IcBrandProtonCalendar,
+            included: true,
+            id: 'n-calendars',
+            text: '25 calendars',
+            tooltip: 'Create up to 25 calendars or add calendars from friends, family, colleagues, and organizations',
+        },
+        {
+            icon: IcClockRotateLeft,
+            included: true,
+            id: 'version-history',
+            text: '10-year file version history',
+        },
+        {
+            icon: IcBrandProtonVpn,
+            id: 'high-speed-vpn-connections',
+            text: '10 high-speed VPN connections',
+            included: true,
+        },
+        {
+            id: 'proton-pass',
+            text: 'Proton Pass with unlimited hide-my-email aliases',
+            icon: IcBrandProtonPass,
+            included: true,
+            hideInDowngrade: true,
+        },
+        {
+            id: 'sentinel',
+            text: 'Proton Sentinel program',
+            tooltip: `Provides the highest level of account security protection and specialist support`,
+            included: true,
+            icon: IcShield,
+        },
+    ],
+    otherCtas: [],
+    price: {
+        value: 999,
+        currency: 'EUR',
+    },
+};
+
+export const familyUpsell = {
+    plan: PLANS.FAMILY,
+    planKey: PLANS.FAMILY,
+    title: 'Proton Family',
+    description: 'Protect your family’s privacy with all Proton services combined.',
+    upsellRefLink: 'upsell_mail-button-family-dashboard_settings',
+    features: [
+        {
+            id: 'storage',
+            text: ['', '3 TB', ' storage'],
+            tooltip:
+                'Storage space is shared between users across Proton Mail, Proton Calendar, Proton Drive, and Proton Pass',
+            included: true,
+            highlight: false,
+            icon: IcStorage,
+        },
+        {
+            id: 'users',
+            text: 'Up to 6 users',
+            icon: IcUsers,
+            included: true,
+        },
+        {
+            id: 'n-addresses',
+            text: '90 email addresses/aliases',
+            tooltip:
+                'Create up to 90 email addresses/aliases that you can assign to family members. Use them for online identities, e.g., JohnShopper@proton.me for shopping accounts.',
+            included: true,
+            icon: IcEnvelope,
+        },
+        {
+            id: 'n-domains',
+            text: '3 custom email domains',
+            tooltip: 'Use your own custom email domain addresses, e.g., you@yourname.com',
+            included: true,
+            icon: IcGlobe,
+        },
+        {
+            id: 'n-calendars',
+            text: '25 calendars',
+            tooltip: 'Create up to 25 calendars or add calendars from friends, family, colleagues, and organizations',
+            included: true,
+            icon: IcBrandProtonCalendar,
+        },
+        {
+            icon: IcBrandProtonVpn,
+            id: 'high-speed-vpn-connections',
+            text: '10 high-speed VPN connections',
+            included: true,
+        },
+        {
+            id: 'proton-pass',
+            text: 'Proton Pass with unlimited hide-my-email aliases',
+            icon: IcBrandProtonPass,
+            included: true,
+            hideInDowngrade: true,
+        },
+        {
+            id: 'sentinel',
+            text: 'Proton Sentinel program',
+            tooltip: `Provides the highest level of account security protection and specialist support`,
+            included: true,
+            icon: IcShield,
+        },
+        {
+            id: 'proton-scribe',
+            text: 'Proton Scribe writing assistant',
+            included: true,
+            icon: IcMagicWand,
+        },
+    ],
+    otherCtas: [],
+    price: { value: 2399, currency: 'EUR' },
+};
+
+export const duoUpsell = {
+    plan: PLANS.DUO,
+    planKey: PLANS.DUO,
+    title: 'Proton Duo',
+    description: 'Unlimited privacy and more storage for up to 2 people.',
+    upsellRefLink: 'upsell_mail-button-duo-dashboard_settings',
+    features: [
+        {
+            id: 'storage',
+            text: ['', '2 TB', ' storage'],
+            tooltip: 'Storage space is shared across Proton Mail, Proton Calendar, Proton Drive, and Proton Pass',
+            included: true,
+            highlight: false,
+            icon: IcStorage,
+        },
+        {
+            id: 'users',
+            text: 'Up to 2 users',
+            icon: IcUsers,
+            included: true,
+        },
+        {
+            id: 'n-addresses',
+            text: '30 email addresses/aliases',
+            tooltip:
+                'Create up to 30 email addresses/aliases that you can assign to family members. Use them for online identities, e.g., JohnShopper@proton.me for shopping accounts.',
+            included: true,
+            icon: IcEnvelope,
+        },
+        {
+            id: 'n-domains',
+            text: '3 custom email domains',
+            tooltip: 'Use your own custom email domain addresses, e.g., you@yourname.com',
+            included: true,
+            icon: IcGlobe,
+        },
+        {
+            id: 'n-calendars',
+            text: '25 calendars',
+            tooltip: 'Create up to 25 calendars or add calendars from friends, family, colleagues, and organizations',
+            included: true,
+            icon: IcBrandProtonCalendar,
+        },
+        {
+            icon: IcBrandProtonVpn,
+            id: 'high-speed-vpn-connections',
+            text: '10 high-speed VPN connections',
+            included: true,
+        },
+        {
+            id: 'proton-pass',
+            text: 'Proton Pass with unlimited hide-my-email aliases',
+            icon: IcBrandProtonPass,
+            included: true,
+            hideInDowngrade: true,
+        },
+        {
+            id: 'sentinel',
+            text: 'Proton Sentinel program',
+            tooltip: `Provides the highest level of account security protection and specialist support`,
+            included: true,
+            icon: IcShield,
+        },
+        {
+            id: 'proton-scribe',
+            text: 'Proton Scribe writing assistant',
+            included: true,
+            icon: IcMagicWand,
+        },
+    ],
+    otherCtas: [],
+    price: { value: 1499, currency: 'EUR' },
+};
+
+export const mailProfessionalUpsell = {
+    plan: PLANS.MAIL_BUSINESS,
+    planKey: PLANS.MAIL_BUSINESS,
+    title: 'Mail Professional',
+    description: 'Enhanced security and premium features for teams.',
+    upsellRefLink: 'upsell_mail-button-mailpro-dashboard_settings',
+    features: [
+        {
+            icon: IcStorage,
+            id: 'storage-boost-b2b',
+            text: 'Boost your storage space to 50 GB per user',
+        },
+        {
+            icon: IcEnvelope,
+            id: 'n-addresses-b2b',
+            text: '15 email addresses per user',
+        },
+        {
+            icon: IcGlobe,
+            id: 'b2b-n-domains',
+            text: 'Support for 10 custom email domains',
+        },
+        {
+            icon: IcBrandProtonVpn,
+            id: 'vpn-connections',
+            text: '1 VPN connection',
+        },
+        {
+            icon: IcImage,
+            id: 'custom-branding',
+            text: 'Custom workspace branding',
+        },
+        {
+            icon: IcShield,
+            id: 'sentinel',
+            text: 'Proton Sentinel program',
+        },
+    ],
+    otherCtas: [],
+    price: {
+        value: 999,
+        currency: 'EUR',
+    },
+};
+
+export const drivePlusUpsell = {
+    plan: PLANS.DRIVE,
+    planKey: PLANS.DRIVE,
+    title: 'Drive Plus 200 GB',
+    description:
+        '200 GB of cloud storage that lets you store, sync and share files easily. Secured by end-to-end encryption.',
+    upsellRefLink: 'upsell_drive-button-drive-dashboard_settings',
+    features: [
+        {
+            id: 'storage',
+            text: ['', '200 GB', ' storage'],
+            tooltip: 'Storage space is shared across Proton Mail, Proton Calendar, Proton Drive, and Proton Pass',
+            included: true,
+            highlight: false,
+            icon: IcStorage,
+        },
+        {
+            id: 'document-editor',
+            text: 'Online document editor',
+            included: true,
+            icon: IcPencil,
+        },
+        {
+            id: 'version-history',
+            text: '10-year file version history',
+            included: true,
+            icon: IcClockRotateLeft,
+        },
+        {
+            id: 'basic-features',
+            text: 'All basic Proton services (Mail, VPN, Pass)',
+            included: true,
+            icon: IcBrandProton,
+        },
+    ],
+    otherCtas: [],
+    price: {
+        value: 399, // the price 399 is price-per-month calculated fron 12-month cycle (not 24!).
+        // That's because the plans test data don't have the 24 cycle for drive plan
+        currency: 'EUR',
+    },
+};
+
+export const passPlusUpsell = {
+    plan: PLANS.PASS,
+    planKey: PLANS.PASS,
+    title: 'Pass Plus',
+    description: 'For next-level password management and identity protection.',
+    upsellRefLink: 'upsell_pass-button-pass-dashboard_settings',
+    features: [
+        {
+            id: 'logins-and-notes',
+            text: 'Unlimited logins, notes and credit cards',
+            icon: IcNote,
+            included: true,
+        },
+        {
+            id: 'devices',
+            text: 'Unlimited devices',
+            icon: IcMobile,
+            included: true,
+            hideInDowngrade: true,
+        },
+        {
+            id: 'hide-my-email-aliases',
+            text: 'Unlimited hide-my-email aliases',
+            tooltip:
+                'Protect your real email address from being disclosed or leaked with aliases (a randomly-generated email address that forwards emails to your main inbox).',
+            included: true,
+            icon: IcEyeSlash,
+        },
+        {
+            id: 'advanced-alias-features',
+            text: 'Advanced alias features (powered by SimpleLogin)',
+            tooltip:
+                'Custom domains for aliases, additional mailboxes, the ability to send emails from aliases, and more',
+            included: true,
+            icon: IcBrandSimpleLogin,
+        },
+        {
+            id: 'vaults',
+            text: '50 vaults',
+            tooltip: 'Like a folder, a vault is a convenient way to organize your items',
+            included: true,
+            icon: IcVault,
+        },
+        {
+            icon: IcArrowUpFromSquare,
+            included: true,
+            id: 'vault-sharing',
+            text: 'Vault sharing (up to 10 people)',
+        },
+        {
+            id: '2fa-authenticator',
+            text: 'Integrated 2FA authenticator',
+            included: true,
+            icon: IcKey,
+        },
+        {
+            id: 'pass-monitor',
+            text: 'Dark Web Monitoring and Proton Sentinel',
+            icon: IcShield,
+            included: true,
+        },
+        {
+            id: 'custom-fields',
+            text: 'Custom fields',
+            included: true,
+            icon: IcPenSquare,
+        },
+        {
+            id: 'support',
+            text: 'Priority support',
+            included: true,
+            icon: IcLifeRing,
+        },
+    ],
+    otherCtas: [],
+    price: {
+        value: 299,
+        currency: 'EUR',
+    },
+};
+
+export const vpnBusinessUpsell = {
+    plan: PLANS.VPN_BUSINESS,
+    planKey: PLANS.VPN_BUSINESS,
+    title: 'VPN Professional', // the plan got renamed during the Workspace Standard launch
+    description: 'Advanced network security and access management with dedicated secure Gateways',
+    otherCtas: [],
+    price: {
+        value: 5397,
+        currency: 'EUR',
+    },
+};
+
+export const bundle2024Upsell = {
+    planKey: 'bundlepro2024',
+    title: 'Workspace Standard',
+    description: 'All Proton business apps and premium features to protect your entire business.',
+};
+
+export const subscriptionMail = buildSubscription(PLANS.MAIL);
+
+export const subscriptionBundle = buildSubscription({
+    planName: PLANS.BUNDLE,
+    cycle: CYCLE.YEARLY,
+    currency: 'CHF',
+});
+
+export const subscriptionBundlePro = buildSubscription({
+    planName: PLANS.BUNDLE_PRO,
+    cycle: CYCLE.YEARLY,
+    currency: 'CHF',
+});
+
+export const subscriptionMailEssentials = buildSubscription(PLANS.MAIL_PRO);
+
+export const organization = {
+    Name: 'test',
+    UsedDomains: 1,
+    MaxDomains: 3,
+    UsedSpace: 987359925,
+    MaxSpace: 1073741824,
+    UsedAddresses: 7,
+    MaxAddresses: 20,
+    UsedMembers: 2,
+    MaxMembers: 5,
+    Settings: {},
+    State: ORGANIZATION_STATE.ACTIVE,
+    IsBusiness: false,
+} as OrganizationExtended;
+
+export const user = {
+    MaxSpace: 1073741824,
+    MaxUpload: 26214400,
+    UsedSpace: 977359925,
+    isAdmin: true,
+    isFree: false,
+    isMember: false,
+    isPaid: true,
+    isPrivate: true,
+    isSelf: true,
+    isDelinquent: false,
+    hasPaidMail: true,
+    hasPaidVpn: true,
+    canPay: true,
+    accessTypeMask: selfAccessTypeMask,
+} as unknown as User;
+
+export const userSettings = {
+    HighSecurity: {
+        Eligible: false,
+    },
+} as unknown as UserSettings;
+
+export const pendingInvite = {
+    ID: 'ZhhRDNTAVfX9seV5rWSw_2_4rP23tplH2ajNld9iOJc49qiL_cafDdQvHIG3dHXpYsbcmPUKdZjz3Bb7S81Uiw==',
+    InviterEmail: 'testinvites@protontest.com',
+    OrganizationName: 'Test Org',
+} as PendingInvitation;
+
+export const calendars = [
+    {
+        ID: '2lBg7c-llitncK-rleyMCEBnuVHJPd9i5HrdMMZP7OMfioUGTx4Tqx2oGSQjD5vMg8639__wmj9vLZnk2c45sw==',
+    },
+    {
+        ID: '-5TcZlOQHrNakdQHZYduP2M4jyh3Q7j4YwSW-8ib8W3-dUSpdCQglfmOudMGY10c8Kclm--smRSqjz3CzLYLFw==',
+    },
+    {
+        ID: 'Msdl_ju-F7w3nO6dm2Y3GfiCFJQU3jLVD_0Dk4qPyrOYVgeyuwjFY9_DPAOZler_XwNcv27qxg70PkhvIqqGhw==',
+    },
+];
+
+export const addresses = [
+    {
+        ID: 'A17MnOJQ4w_BkRoCb9o9RISXCRfIqCb3NaGUGeM9jyei4Zj2WtGVlyBzZqGhc_oSPv8qund-nP5ZXc-E9oYNAw==',
+        Email: 'testas1@protonmail.com',
+        Status: 1,
+        Receive: 1,
+        Send: 1,
+    },
+    {
+        ID: 'IRSyGs2rcuAUUUv_Rzur_H6PFPUoEpc4iB8pa4BPvuKAJap2BDqD8Rra0Jn1_iY9gLGV1cc0YjjZW34DPBTNaQ==',
+        Email: 'testas1@pm.me',
+        Status: 1,
+        Receive: 1,
+        Send: 1,
+    },
+];

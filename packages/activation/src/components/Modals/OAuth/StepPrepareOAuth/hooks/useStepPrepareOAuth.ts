@@ -1,0 +1,114 @@
+import { useEffect, useState } from 'react';
+
+import { useUser } from '@proton/account/user/hooks';
+import { useCalendars } from '@proton/calendar/calendars/hooks';
+import { useFolders, useLabels } from '@proton/mail/store/labels/hooks';
+import { getVisualCalendars } from '@proton/shared/lib/calendar/calendar';
+import isTruthy from '@proton/utils/isTruthy';
+
+import { ImportProvider, ImportType } from '../../../../../interface';
+import {
+    changeOAuthStep,
+    displayConfirmLeaveModal,
+    submitProducts,
+} from '../../../../../logic/draft/oauthDraft/oauthDraft.actions';
+import {
+    selectOauthDraftProvider,
+    selectOauthImportStateImporterData,
+    selectOauthImportStateProducts,
+} from '../../../../../logic/draft/oauthDraft/oauthDraft.selector';
+import { useEasySwitchDispatch, useEasySwitchSelector } from '../../../../../logic/store';
+import { trackAccountImportEasySwitchCustomizeViewed } from '../../../../../telemetry/accountImportFlow';
+import { getMailCustomLabel, importerHasErrors } from './useStepPrepareOAuth.helpers';
+
+const useStepPrepare = () => {
+    const dispatch = useEasySwitchDispatch();
+
+    const products = useEasySwitchSelector(selectOauthImportStateProducts);
+    const provider = useEasySwitchSelector(selectOauthDraftProvider);
+    const importerData = useEasySwitchSelector(selectOauthImportStateImporterData);
+
+    if (!products || !importerData || !provider) {
+        throw new Error('products or importerData must be defined');
+    }
+
+    const [user] = useUser();
+    const [labels = []] = useLabels();
+    const [folders = []] = useFolders();
+    const [calendars = []] = useCalendars();
+    const visualCalendars = getVisualCalendars(calendars);
+
+    const emailSelected = products.includes(ImportType.MAIL);
+    const contactSelected = products.includes(ImportType.CONTACTS);
+    const calendarSelected = products.includes(ImportType.CALENDAR);
+    const driveSelected = products.includes(ImportType.DRIVE);
+
+    const emailsHasError = !!importerData.emails?.error;
+    const contactsHasError = !!importerData.contacts?.error;
+    const calendarsHasError = !!importerData.calendars?.error;
+    const driveHasError = !!importerData.drive?.error;
+
+    const [emailChecked, setEmailChecked] = useState(emailSelected && !emailsHasError);
+    const [contactChecked, setContactChecked] = useState(contactSelected && !contactsHasError);
+    const [calendarChecked, setCalendarChecked] = useState(calendarSelected && !calendarsHasError);
+    const [driveChecked, setDriveChecked] = useState(driveSelected && !driveHasError);
+
+    const isLabelMapping = provider === ImportProvider.GOOGLE;
+
+    useEffect(() => {
+        trackAccountImportEasySwitchCustomizeViewed({
+            provider,
+            products,
+            importPeriod: emailSelected ? importerData.emails?.fields?.importPeriod : undefined,
+        });
+    }, []);
+
+    const emailTitle = getMailCustomLabel(importerData.emails?.fields?.importPeriod);
+    const hasErrors = importerHasErrors(
+        products,
+        importerData,
+        labels,
+        folders,
+        visualCalendars,
+        emailChecked,
+        calendarChecked,
+        isLabelMapping,
+        !user.hasPaidMail
+    );
+
+    const handleSubmit = () => {
+        const products = [
+            emailChecked && ImportType.MAIL,
+            contactChecked && ImportType.CONTACTS,
+            calendarChecked && ImportType.CALENDAR,
+            driveChecked && ImportType.DRIVE,
+        ].filter(isTruthy);
+
+        dispatch(submitProducts(products));
+        dispatch(changeOAuthStep('importing'));
+    };
+
+    const handleCancel = () => {
+        dispatch(displayConfirmLeaveModal(true));
+    };
+
+    return {
+        products,
+        emailChecked,
+        setEmailChecked,
+        contactChecked,
+        setContactChecked,
+        calendarChecked,
+        setCalendarChecked,
+        driveChecked,
+        setDriveChecked,
+        importerData,
+        handleCancel,
+        handleSubmit,
+        emailTitle,
+        hasErrors,
+        allCheckboxUnselected: !emailChecked && !contactChecked && !calendarChecked && !driveChecked,
+    };
+};
+
+export default useStepPrepare;

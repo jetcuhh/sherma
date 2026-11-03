@@ -1,0 +1,55 @@
+{
+    "name": "@proton/unleash",
+    "description": "Unleash feature flags",
+    "sideEffects": [
+        "**/*.css"
+    ],
+    "exports": {
+        "./useFlag": "./useFlag.ts",
+        "./useGetFlag": "./useGetFlag.ts",
+        "./useVariant": "./useVariant.ts",
+        "./UnleashClient": "./UnleashClient.ts",
+        "./getMaxContactsImportConfig": "./helpers/getMaxContactsImportConfig.ts",
+        "./getUnleashReadyPromise": "./readyPromise.ts",
+        "./standaloneClient": "./standaloneClient.ts",
+        "./UnleashFlagProvider": "./UnleashFlagProvider.tsx",
+        "./UnleashFlagProviderWithToolbar": "./UnleashFlagProviderWithToolbar.tsx",
+        "./UnleashFeatureFlagsVariants": "./UnleashFeatureFlagsVariants.ts",
+        "./Flags": "./UnleashFeatureFlags.ts",
+        "./UnleashCookiesProvider": "./storage/UnleashCookiesProvider.ts",
+        "./testing/mockUnleash": "./testing/mockUnleash.ts",
+        "./testing/mockUseFlag": "./testing/mockUseFlag.ts",
+        "./testing/vitest/mockUnleash": "./testing/vitest/mockUnleash.ts"
+    },
+    "scripts": {
+        "check:types": "tsc --checkers 1",
+        "lint": "oxlint --quiet",
+        "pretty": "prettier --write $(find . -path ./node_modules -prune -o -type f -name '*.js' -o -name '*.ts' -o -name '*.tsx')",
+        "test": "jest",
+        "test:ci": "jest --runInBand --ci --logHeapUsage",
+        "test:watch": "jest --watch"
+    },
+    "dependencies": {
+        "@proton/shared": "workspace:^",
+        "@unleash/proxy-client-react": "^5.1.0",
+        "@unleash/toolbar": "^1.2.1",
+        "date-fns": "^3.6.0",
+        "react": "catalog:",
+        "unleash-proxy-client": "^3.8.0"
+    },
+    "devDependencies": {
+        "@proton/jest-swc-preset": "workspace:^",
+        "@proton/oxlint-config": "workspace:^",
+        "@types/jest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/webpack-env": "catalog:",
+        "@typescript/native": "catalog:",
+        "jest": "catalog:",
+        "jest-environment-jsdom": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "prettier": "catalog:",
+        "typescript": "catalog:"
+    }
+}

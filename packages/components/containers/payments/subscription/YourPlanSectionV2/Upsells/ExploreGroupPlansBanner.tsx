@@ -1,0 +1,73 @@
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import { PLANS, PLAN_NAMES } from '@proton/payments/core/constants';
+import type { Subscription } from '@proton/payments/core/subscription/interface';
+import { SUBSCRIPTION_STEPS } from '@proton/payments/core/subscription/subscription-modal-constants';
+import { DUO_MAX_USERS, FAMILY_MAX_USERS } from '@proton/shared/lib/constants';
+import { Audience } from '@proton/shared/lib/interfaces/Subscription';
+
+import { getSimplePriceString } from '../../../../../components/price/helper';
+import useDashboardPaymentFlow from '../../../../../hooks/useDashboardPaymentFlow';
+import { useSubscriptionModal } from '../../SubscriptionModalProvider';
+import { PlanIcon } from '../PlanIcon';
+import PlanIconName from '../PlanIconName';
+import type { UpsellSectionBaseProps } from '../YourPlanUpsellsSectionV2';
+import UpsellMultiBox from './UpsellMultiBox';
+import { useSubscriptionPriceComparison } from './helper';
+
+interface Props extends UpsellSectionBaseProps {
+    subscription: Subscription;
+}
+
+const ExploreGroupPlansBanner = ({ subscription, app }: Props) => {
+    const [openSubscriptionModal, loadingSubscriptionModal] = useSubscriptionModal();
+    const telemetryFlow = useDashboardPaymentFlow(app);
+    const { cheapestMonthlyPrice } = useSubscriptionPriceComparison(app, subscription, PLANS.FAMILY);
+
+    const pricePerMonthPerUser = cheapestMonthlyPrice ? cheapestMonthlyPrice / FAMILY_MAX_USERS : undefined;
+
+    const handleExplorePlans = () => {
+        void openSubscriptionModal({
+            step: SUBSCRIPTION_STEPS.PLAN_SELECTION,
+            defaultAudience: Audience.FAMILY,
+            telemetryFlow,
+        });
+    };
+
+    const priceString = pricePerMonthPerUser
+        ? getSimplePriceString(subscription.Currency, pricePerMonthPerUser)
+        : undefined;
+
+    return (
+        <UpsellMultiBox
+            header={
+                <PlanIconName
+                    logo={<PlanIcon planName={PLANS.DUO} />}
+                    topLine={c('Upsell').t`Did you know?`}
+                    bottomLine={
+                        // translator: typical sentence is: You can protect up to 2 people with ${PLAN_NAMES[PLANS.DUO]}, and up to 6 with ${PLAN_NAMES[PLANS.FAMILY]}. From only ${priceString}/month per account.
+                        pricePerMonthPerUser &&
+                        c('Upsell')
+                            .t`You can protect up to ${DUO_MAX_USERS} people with ${PLAN_NAMES[PLANS.DUO]}, and up to ${FAMILY_MAX_USERS} with ${PLAN_NAMES[PLANS.FAMILY]}. From only ${priceString}/month per account.`
+                    }
+                />
+            }
+            headerActionArea={
+                <>
+                    <Button
+                        color="norm"
+                        shape="outline"
+                        loading={loadingSubscriptionModal}
+                        onClick={handleExplorePlans}
+                    >
+                        {c('Action').t`Explore group plans`}
+                    </Button>
+                </>
+            }
+            style="card"
+        />
+    );
+};
+
+export default ExploreGroupPlansBanner;

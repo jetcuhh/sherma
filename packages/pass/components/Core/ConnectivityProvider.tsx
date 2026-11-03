@@ -1,0 +1,90 @@
+import type { FC, PropsWithChildren } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { c } from 'ttag';
+
+import { Button } from '@proton/atoms/Button/Button';
+import clsx from '@proton/utils/clsx';
+
+import { useStatefulRef } from '../../hooks/useStatefulRef';
+import { clientOffline } from '../../lib/client';
+import type { ConnectivityService } from '../../lib/network/connectivity.service';
+import { ConnectivityStatus, getConnectivityWarning } from '../../lib/network/connectivity.utils';
+import { offlineResume } from '../../store/actions/creators/client';
+import { selectRequestInFlight } from '../../store/request/selectors';
+import type { MaybeNull } from '../../types/utils';
+import type { AppStatus } from '../../types/worker/state';
+import type { BottomBarProps } from '../Layout/Bar/BottomBar';
+import { BottomBar } from '../Layout/Bar/BottomBar';
+import { useAppState } from './AppStateProvider';
+
+type Props = { service: ConnectivityService };
+type ConnectivityState = { status: ConnectivityStatus };
+
+const ConnectivityContext = createContext<MaybeNull<ConnectivityState>>(null);
+
+export const ConnectivityProvider: FC<PropsWithChildren<Props>> = ({ children, service }) => {
+    const [status, setStatus] = useState(() => service.status);
+    const ctx = useMemo(() => ({ status }), [status]);
+    useEffect(() => service.subscribe((event) => event.type === 'status' && setStatus(event.status)), []);
+
+    return <ConnectivityContext.Provider value={ctx}>{children}</ConnectivityContext.Provider>;
+};
+
+export const useOnline = () => {
+    const ctx = useContext(ConnectivityContext);
+    const offlineBooted = clientOffline(useAppState().status);
+    if (offlineBooted) return false;
+    return ctx ? ctx.status === ConnectivityStatus.ONLINE : true;
+};
+
+export const useOffline = () => !useOnline();
+
+export const useConnectivity = () => useContext(ConnectivityContext)?.status ?? ConnectivityStatus.ONLINE;
+export const useOnlineRef = () => useStatefulRef(useOnline());
+
+const useConnectivityBar = (propsFactory: (status: ConnectivityStatus) => BottomBarProps) => {
+    const connectivity = useConnectivity();
+    const props = propsFactory(connectivity);
+    return <BottomBar {...props} text={props.text ?? getConnectivityWarning(connectivity)} />;
+};
+
+export const useLobbyConnectivityBar = () =>
+    useConnectivityBar((connectivity) => {
+        return {
+            className: clsx('bg-danger fixed bottom-0 left-0'),
+            hidden: connectivity === ConnectivityStatus.ONLINE,
+            text:
+                connectivity === ConnectivityStatus.DOWNTIME
+                    ? c('Info').t`Servers are unreachable`
+                    : c('Info').t`No network connection`,
+        };
+    });
+
+export const useAppConnectivityBar = (status: AppStatus, localID?: number) => {
+    const offline = clientOffline(status);
+    const dispatch = useDispatch();
+    const offlineResuming = useSelector(selectRequestInFlight(offlineResume.requestID()));
+
+    return useConnectivityBar((connectivity) => ({
+        className: clsx('shrink-0', offline ? 'bg-weak border-top' : 'bg-danger'),
+        hidden: connectivity === ConnectivityStatus.ONLINE && !offline,
+        text: offline ? (
+            <div className="flex items-center gap-2">
+                <span>{c('Info').t`Offline mode`}</span>
+
+                <Button
+                    className="text-sm"
+                    onClick={() => dispatch(offlineResume.intent({ localID }))}
+                    shape="underline"
+                    size="small"
+                    loading={offlineResuming}
+                    disabled={offlineResuming}
+                >
+                    {offlineResuming ? c('Info').t`Reconnecting` : c('Info').t`Reconnect`}
+                </Button>
+            </div>
+        ) : undefined,
+    }));
+};

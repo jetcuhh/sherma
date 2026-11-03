@@ -1,0 +1,83 @@
+import { END, eventChannel } from 'redux-saga';
+import { put, select, take, takeEvery } from 'redux-saga/effects';
+import { c } from 'ttag';
+
+import noop from '@proton/utils/noop';
+
+import { acceptInvite } from '../../../lib/invites/invite.requests';
+import { type ShareData, requestShareData } from '../../../lib/shares/share.data';
+import { parseShareResponse } from '../../../lib/shares/share.parser';
+import { createTelemetryEvent } from '../../../lib/telemetry/utils';
+import type { ShareGetResponse } from '../../../types/api/pass';
+import type { Invite } from '../../../types/data/invites';
+import { type Share, ShareType } from '../../../types/data/shares';
+import { TelemetryEventName, TelemetryItemType, TelemetryTargetType } from '../../../types/data/telemetry';
+import type { Maybe } from '../../../types/utils';
+import { startEventPolling, stopEventPolling } from '../../actions/creators/client';
+import { inviteAccept } from '../../actions/creators/invite';
+import { requestProgress } from '../../request/actions';
+import type { RequestProgress } from '../../request/types';
+import { selectInviteByToken } from '../../selectors/invites';
+import type { RootSagaOptions } from '../../types';
+
+type AcceptInviteChannel = RequestProgress<ShareData, null>;
+
+function* acceptInviteWorker(options: RootSagaOptions, action: ReturnType<typeof inviteAccept.intent>) {
+    const telemetry = options.getTelemetry();
+    const {
+        payload,
+        meta: { request },
+    } = action;
+    const requestId = request.id;
+    const { inviteToken } = payload;
+
+    try {
+        yield put(stopEventPolling());
+
+        const invite: Maybe<Invite> = yield select(selectInviteByToken(inviteToken));
+        if (!invite) throw new Error(c('Error').t`This invite is no longer available`);
+
+        const encryptedShare: ShareGetResponse = yield acceptInvite(payload, invite.keys);
+        const share: Maybe<Share> = yield parseShareResponse(encryptedShare);
+        if (!share) throw new Error(c('Error').t`Could not open invited vault`);
+
+        const progressChannel = eventChannel<AcceptInviteChannel>((emitter) => {
+            requestShareData(share, {
+                onItemProgress: (progress) => emitter({ type: 'progress', progress, data: null }),
+            })
+                .then((result) => emitter({ type: 'done', result }))
+                .catch((error) => emitter({ type: 'error', error }))
+                .finally(() => emitter(END));
+
+            return noop;
+        });
+
+        while (true) {
+            const action: AcceptInviteChannel = yield take(progressChannel);
+            if (action.type === 'progress') yield put(requestProgress(requestId, action.progress));
+            if (action.type === 'error') throw action.error;
+            if (action.type === 'done') {
+                const { items, folders } = action.result;
+                yield put(inviteAccept.success(requestId, { inviteToken, share, items, folders }));
+
+                const dimensions =
+                    invite.targetType === ShareType.Item && items[0]
+                        ? {
+                              type: TelemetryTargetType.item as const,
+                              itemType: TelemetryItemType[items[0].data.type],
+                              extensionBrowser: BUILD_TARGET,
+                          }
+                        : { type: TelemetryTargetType.vault as const, extensionBrowser: BUILD_TARGET };
+                void telemetry?.push(createTelemetryEvent(TelemetryEventName.PassInviteAccept, {}, dimensions));
+            }
+        }
+    } catch (err) {
+        yield put(inviteAccept.failure(requestId, err));
+    } finally {
+        yield put(startEventPolling());
+    }
+}
+
+export default function* watcher(options: RootSagaOptions) {
+    yield takeEvery(inviteAccept.intent.match, acceptInviteWorker, options);
+}

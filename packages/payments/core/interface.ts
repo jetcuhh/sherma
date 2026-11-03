@@ -1,0 +1,427 @@
+import type {
+    ApplePayAuthorizedPayload,
+    ApplePayAvailability,
+    BinData,
+    CardFormRenderMode,
+    ChargebeeSavedCardAuthorizationSuccess,
+    ChargebeeSubmitDirectDebitEventPayload,
+    ChargebeeSubmitEventPayload,
+    ChargebeeSubmitEventResponse,
+    ChargebeeVerifySavedCardEventPayload,
+    FormValidationErrors,
+    GetHeightResponse,
+    GooglePayAuthorizedPayload,
+    IdealAuthorizedPayload,
+    MessageBusResponse,
+    MessageBusResponseSuccess,
+    PaymentIntent,
+    PaypalAuthorizedPayload,
+    SetApplePayPaymentIntentPayload,
+    SetGooglePayPaymentIntentPayload,
+    SetIdealPaymentIntentPayload,
+    SetPaypalPaymentIntentPayload,
+    ThreeDsChallengePayload,
+} from '@proton/chargebee/lib/types';
+import type {
+    AmountAndCurrency,
+    Currency,
+    Cycle,
+    PaymentVendorStates,
+    PlanIDs,
+} from '@proton/shared/lib/payments/interface';
+import type { PlansMap } from '@proton/shared/lib/payments/plan/interface';
+import type { SubscriptionPlatform } from '@proton/shared/lib/payments/subscription/constants';
+
+import type { CheckSubscriptionData } from './api/api';
+import type { BillingAddress, FullBillingAddress } from './billing-address/billing-address';
+import type {
+    Autopay,
+    InvoiceState,
+    InvoiceType,
+    PAYMENT_METHOD_TYPES,
+    PAYMENT_TOKEN_STATUS,
+    TransactionState,
+    TransactionType,
+} from './constants';
+import type { PaymentProcessorType } from './payment-processors/interface';
+import type { SubscriptionEstimation } from './subscription/interface';
+
+export interface CreateCardDetailsBackend {
+    Number: string;
+    ExpMonth: string;
+    ExpYear: string;
+    CVC: string;
+    ZIP: string;
+    Country: string;
+}
+
+export interface TokenPayment {
+    Type: PAYMENT_METHOD_TYPES.TOKEN;
+    Details: {
+        Token: string;
+    };
+}
+
+export type WrappedProcessorType = {
+    paymentProcessorType: PaymentProcessorType;
+    paymentMethodType: PlainPaymentMethodType;
+    paymentMethodValue: PaymentMethodType;
+};
+
+export type ExtendedTokenPayment = Partial<TokenPayment> & WrappedProcessorType;
+
+export interface ExistingPayment {
+    PaymentMethodID: string;
+}
+
+export interface TokenPaymentMethod {
+    Payment: TokenPayment;
+}
+
+export type {
+    AmountAndCurrency,
+    Currency,
+    Cycle,
+    CycleMapping,
+    FeatureLimitKey,
+    FreeSubscription,
+    PaymentMethodFlow,
+    PaymentVendorStates,
+    PlanIDs,
+    Pricing,
+} from '@proton/shared/lib/payments/interface';
+
+export interface PaymentTokenResult {
+    Token: string;
+    Status: PAYMENT_TOKEN_STATUS;
+    ApprovalURL?: string;
+    ReturnHost?: string;
+}
+
+export type PlainPaymentMethodType = `${PAYMENT_METHOD_TYPES}`;
+
+export type ChargeablePaymentParameters = Partial<V5PaymentToken> &
+    AmountAndCurrency & {
+        type: PAYMENT_METHOD_TYPES;
+        chargeable: true;
+    };
+
+export type ChargeablePaymentToken = V5PaymentToken &
+    AmountAndCurrency & {
+        type: PAYMENT_METHOD_TYPES;
+        chargeable: true;
+    };
+
+export interface PaymentStatus extends BillingAddress {
+    VendorStates: PaymentVendorStates;
+}
+
+export interface PayPalDetails {
+    BillingAgreementID: string;
+    PayerID: string;
+    Payer: string;
+}
+
+export interface SavedCardDetails {
+    /**
+     * Even though you can't add the name to the card, it's still returned from the API for old users who already
+     * have the card name.
+     */
+    Name?: string | null;
+    ExpMonth: string;
+    ExpYear: string;
+    ZIP: string;
+    Country: string;
+    Last4: string;
+    Brand: string;
+}
+
+export type PaymentMethodCardDetails = {
+    Order: number;
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.CHARGEBEE_CARD;
+    Details: SavedCardDetails;
+    Autopay: Autopay;
+    IsDefault?: boolean;
+};
+
+export type PaymentMethodPaypal = {
+    Order: number;
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.CHARGEBEE_PAYPAL;
+    Details: PayPalDetails;
+    IsDefault?: boolean;
+};
+
+export type SepaDetails = {
+    AccountName: string;
+    Country: string;
+    Last4: string;
+};
+
+export type PaymentMethodSepa = {
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.CHARGEBEE_SEPA_DIRECT_DEBIT;
+    Order: number;
+    Autopay: Autopay;
+    Details: SepaDetails;
+    IsDefault?: boolean;
+};
+
+export type PaymentMethodApplePay = {
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.APPLE_PAY;
+    Order: number;
+    Autopay: Autopay;
+    Details: SavedCardDetails;
+    IsDefault?: boolean;
+};
+
+export type PaymentMethodGooglePay = {
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.GOOGLE_PAY;
+    Order: number;
+    Autopay: Autopay;
+    Details: SavedCardDetails;
+    IsDefault?: boolean;
+};
+
+export type PaymentMethodIdeal = {
+    ID: string;
+    Type: PAYMENT_METHOD_TYPES.CHARGEBEE_IDEAL;
+    Order: number;
+    Autopay: Autopay;
+    Details: SepaDetails;
+    IsDefault?: boolean;
+};
+
+export type SavedPaymentMethod =
+    | PaymentMethodPaypal
+    | PaymentMethodCardDetails
+    | PaymentMethodSepa
+    | PaymentMethodApplePay
+    | PaymentMethodGooglePay
+    | PaymentMethodIdeal;
+
+export type SavedMethodType = SavedPaymentMethod['Type'];
+
+export type SavedMethodDetails = SavedPaymentMethod['Details'];
+
+export interface PreviousSubscription {
+    cycle: Cycle;
+    currency: Currency;
+    /**
+     * When the previous subscription started.
+     */
+    periodStart: number;
+    /**
+     * When the previous subscription ended.
+     */
+    periodEnd: number;
+    /**
+     * When the first term of previous subscription started. Unlike periodStart, this property doesn't change when
+     * subscription is renewed.
+     */
+    createTime: number;
+    /**
+     * The timestamp when the subscription actually ended. E.g. when subscription expires after user cancelled it, or
+     * when CS deleted the subscription by customer request.
+     */
+    cancelTime: number;
+    couponCode: string | null;
+    plans: PlanIDs;
+    /**
+     * Tells if the subscription was web, iOS, Android.
+     */
+    external: SubscriptionPlatform;
+    isTrial: boolean;
+}
+
+export type ExistingPaymentMethod = string;
+
+export type PaymentMethodType = PlainPaymentMethodType | ExistingPaymentMethod;
+
+export interface AvailablePaymentMethod {
+    readonly type: PAYMENT_METHOD_TYPES;
+    readonly paymentMethodId?: string; // defined only for existing payment methods
+    readonly isExpired?: boolean; // defined only for existing credit cards
+    readonly value: PaymentMethodType;
+    readonly isSaved: boolean;
+    readonly isDefault: boolean;
+}
+
+export type V5Payments = {
+    v: 5;
+};
+
+export type V5PaymentToken = {
+    PaymentToken: string;
+} & V5Payments;
+
+export type ChargeableV5PaymentToken = ChargeablePaymentToken;
+
+export type NonChargeableV5PaymentToken = Omit<ChargeableV5PaymentToken, 'chargeable'> & {
+    chargeable: false;
+};
+
+export type AuthorizedV5PaymentToken = {
+    authorized: true;
+};
+
+export type NonAuthorizedV5PaymentToken = {
+    authorized: false;
+    approvalUrl: string;
+};
+
+export type ChargeableV5PaymentParameters = ChargeablePaymentParameters;
+
+export type ChargebeeFetchedPaymentToken = (ChargeableV5PaymentToken | NonChargeableV5PaymentToken) &
+    (AuthorizedV5PaymentToken | NonAuthorizedV5PaymentToken);
+
+export type CheckSubscriptionRequestOptions = {
+    signal?: AbortSignal;
+    silence?: boolean;
+    previousEstimation?: SubscriptionEstimation;
+};
+
+export type MultiCheckOptions = {
+    plansMap: PlansMap;
+} & Omit<CheckSubscriptionRequestOptions, 'previousEstimation'>;
+
+export type GetFullBillingAddressOptions = {
+    withFallback: boolean;
+};
+
+export interface PaymentsApi {
+    checkSubscription: (
+        data: CheckSubscriptionData,
+        requestOptions?: CheckSubscriptionRequestOptions
+    ) => Promise<SubscriptionEstimation>;
+
+    multiCheck: (data: CheckSubscriptionData[], options: MultiCheckOptions) => Promise<SubscriptionEstimation[]>;
+
+    cacheMultiCheck: (data: CheckSubscriptionData, result: SubscriptionEstimation) => void;
+
+    paymentStatus: () => Promise<PaymentStatus>;
+
+    getFullBillingAddress: (options?: GetFullBillingAddressOptions) => Promise<FullBillingAddress>;
+    updateFullBillingAddress: (fullBillingAddress: FullBillingAddress) => Promise<void>;
+    updateInvoiceBillingAddress: (invoiceId: string, fullBillingAddress: FullBillingAddress) => Promise<void>;
+    getInvoiceBillingAddress: (invoiceId: string) => Promise<FullBillingAddress>;
+    getCachedCheck: (data: CheckSubscriptionData) => SubscriptionEstimation | undefined;
+    getCachedCheckByPlans: (plans: CheckSubscriptionData['Plans']) => SubscriptionEstimation[];
+}
+
+export type RemoveEventListener = () => void;
+
+export type InitializeCreditCardOptions = {
+    isNarrow: boolean;
+};
+
+export type ChargebeeIframeHandles = {
+    submitCreditCard: (
+        payload: ChargebeeSubmitEventPayload
+    ) => Promise<MessageBusResponseSuccess<ChargebeeSubmitEventResponse>>;
+    initializeCreditCard: (props: InitializeCreditCardOptions) => Promise<any>;
+    initializeSavedCreditCard: () => Promise<any>;
+    validateSavedCreditCard: (
+        payload: ChargebeeVerifySavedCardEventPayload
+    ) => Promise<MessageBusResponseSuccess<ChargebeeSavedCardAuthorizationSuccess>>;
+    initializePaypal: () => Promise<any>;
+    setPaypalPaymentIntent: (payload: SetPaypalPaymentIntentPayload, abortSignal: AbortSignal) => Promise<any>;
+    getHeight: () => Promise<GetHeightResponse>;
+    getBin: () => Promise<MessageBusResponse<BinData | null>>;
+    validateCardForm: () => Promise<MessageBusResponse<FormValidationErrors>>;
+    changeRenderMode: (renderMode: CardFormRenderMode) => Promise<any>;
+    updateFields: () => Promise<any>;
+    initializeDirectDebit: () => Promise<any>;
+    submitDirectDebit: (payload: ChargebeeSubmitDirectDebitEventPayload) => Promise<MessageBusResponseSuccess<unknown>>;
+    setApplePayPaymentIntent: (payload: SetApplePayPaymentIntentPayload, abortSignal: AbortSignal) => Promise<any>;
+    initializeApplePay: () => Promise<any>;
+    getApplePayCapabilities: (payload: { applePayCapabilitiesEnabled: boolean }) => Promise<ApplePayAvailability>;
+    setGooglePayPaymentIntent: (payload: SetGooglePayPaymentIntentPayload, abortSignal?: AbortSignal) => Promise<any>;
+    initializeGooglePay: () => Promise<any>;
+    initializeIdeal: () => Promise<any>;
+    setIdealPaymentIntent: (payload: SetIdealPaymentIntentPayload, abortSignal: AbortSignal) => Promise<any>;
+};
+
+export type ChargebeeIframeEvents = {
+    onPaypalAuthorized: (callback: (payload: PaypalAuthorizedPayload) => any) => RemoveEventListener;
+    onPaypalFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onPaypalClicked: (callback: () => any) => RemoveEventListener;
+    onPaypalCancelled: (callback: () => any) => RemoveEventListener;
+    onThreeDsChallenge: (callback: (payload: ThreeDsChallengePayload) => any) => RemoveEventListener;
+    onThreeDsSuccess: (callback: (payload: PaymentIntent) => any) => RemoveEventListener;
+    onThreeDsFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onCardVeririfcationSuccess: (
+        callback: (payload: ChargebeeSavedCardAuthorizationSuccess) => any
+    ) => RemoveEventListener;
+    onCardVeririfcationFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onUnhandledError: (
+        callback: (error: any, rawError: any, messagePayload: any, checkpoints: any[]) => any
+    ) => RemoveEventListener;
+
+    onApplePayAuthorized: (callback: (payload: ApplePayAuthorizedPayload) => any) => RemoveEventListener;
+    onApplePayFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onApplePayClicked: (callback: () => any) => RemoveEventListener;
+    onApplePayCancelled: (callback: () => any) => RemoveEventListener;
+
+    onGooglePayAuthorized: (callback: (payload: GooglePayAuthorizedPayload) => any) => RemoveEventListener;
+    onGooglePayFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onGooglePayClicked: (callback: () => any) => RemoveEventListener;
+    onGooglePayCancelled: (callback: () => any) => RemoveEventListener;
+
+    onIdealAuthorized: (callback: (payload: IdealAuthorizedPayload) => any) => RemoveEventListener;
+    onIdealFailure: (callback: (error: any) => any) => RemoveEventListener;
+    onIdealClicked: (callback: () => any) => RemoveEventListener;
+    onIdealCancelled: (callback: () => any) => RemoveEventListener;
+};
+
+type CryptocurrencyType = 'bitcoin';
+
+interface CryptoPayment {
+    Type: 'cryptocurrency';
+    Details: {
+        Coin: CryptocurrencyType;
+    };
+}
+
+export interface WrappedCryptoPayment {
+    Payment: CryptoPayment;
+}
+
+export interface Invoice {
+    ID: string;
+    Type: InvoiceType;
+    State: InvoiceState;
+    Currency: Currency;
+    AmountDue: number;
+    AmountCharged: number;
+    CreateTime: number;
+    ModifyTime: number;
+    AttemptTime: number;
+    Attempts: number;
+    IsExternal: boolean;
+}
+
+export interface InvoiceResponse {
+    Code: number;
+    Invoices: Invoice[];
+    Total: number;
+}
+
+export interface Transaction {
+    TransactionID: number;
+    ExternalID: string;
+    CurrencyCode: Currency;
+    Type: TransactionType;
+    Amount: number;
+    State: TransactionState;
+    CreatedAt: string;
+}
+
+export interface TransactionResponse {
+    Code: number;
+    Transactions: Transaction[];
+    Total: number;
+}

@@ -1,0 +1,28 @@
+.pass-settings--tabs {
+	background-color: var(--background-norm);
+	z-index: 1;
+	overflow-x: auto;
+	scrollbar-width: none;
+
+	&::-webkit-scrollbar {
+		display: none;
+	}
+
+	nav {
+		border-color: var(--border-norm);
+		min-inline-size: max-content;
+	}
+
+	button[role='tab'] {
+		white-space: nowrap;
+	}
+}
+
+/* override checkboxes */
+.checkbox-container {
+	gap: 1rem;
+
+	.checkbox-fakecheck {
+		margin-inline: 0.625rem !important;
+	}
+}
