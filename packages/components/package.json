@@ -149,6 +149,7 @@
         "./components/loader/Loader": "./components/loader/Loader.tsx",
         "./components/loader/LoadingTextStepper": "./components/loader/LoadingTextStepper.tsx",
         "./components/loader/TextLoader": "./components/loader/TextLoader.tsx",
+        "./components/logo/BloblingLogo": "./components/logo/BloblingLogo.tsx",
         "./components/logo/CalendarLogo": "./components/logo/CalendarLogo.tsx",
         "./components/logo/CustomLogo": "./components/logo/CustomLogo.tsx",
         "./components/logo/DriveLogo": "./components/logo/DriveLogo.tsx",

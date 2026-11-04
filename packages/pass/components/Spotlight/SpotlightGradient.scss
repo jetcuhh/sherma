@@ -1,17 +1,7 @@
 .pass-spotlight-gradient {
-	--spotlight-gradient-overlay: rgb(from var(--interaction-norm-contrast) r g b / 0.5);
+	--spotlight-gradient-layers: var(--interaction-norm);
 
-	@at-root .pass-light & {
-		--spotlight-gradient-overlay: transparent;
-	}
-
-	--spotlight-gradient-layers:
-		linear-gradient(0deg, var(--spotlight-gradient-overlay), var(--spotlight-gradient-overlay)),
-		radial-gradient(51.04% 51.04% at 85.42% 18.75%, #9251eb 0%, #5b53ed 100%),
-		linear-gradient(0deg, var(--interaction-weak), var(--interaction-weak));
-
-	box-shadow: 0 0 14px 0 rgb(255 255 255 / 0.1) inset;
-	border: 1px solid rgb(255 255 255 / 0.1);
+	border: 1px solid transparent;
 	background: var(--spotlight-gradient-layers);
 
 	&--safari-ext {
@@ -46,7 +36,7 @@
 	}
 
 	&--with-arrow {
-		--arrow-color: #47327c;
+		--arrow-color: var(--interaction-norm);
 		--arrow-width: 6px;
 		--arrow-offset: 0px;
 
@@ -61,17 +51,16 @@
 			border-inline-start: calc(var(--arrow-width) + var(--arrow-offset)) solid transparent;
 			border-inline-end: calc(var(--arrow-width) + var(--arrow-offset)) solid transparent;
 			border-block-end: calc(var(--arrow-width) + var(--arrow-offset)) solid var(--arrow-color);
-			box-shadow: 0 0 14px 0 rgb(255 255 255 / 0.1) inset;
 			@at-root .pass-light & {
-				--arrow-color: #845aed;
+				--arrow-color: var(--interaction-norm);
 			}
 		}
 
 		&::before {
 			--arrow-offset: 2px;
-			--arrow-color: #433f84;
+			--arrow-color: var(--interaction-norm);
 			@at-root .pass-light & {
-				--arrow-color: #6c65ef;
+				--arrow-color: var(--interaction-norm);
 			}
 
 			z-index: -1;

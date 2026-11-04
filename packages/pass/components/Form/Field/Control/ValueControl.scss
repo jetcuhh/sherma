@@ -4,7 +4,7 @@
 	background-color: var(--field-background-color);
 
 	&--standout {
-		background: linear-gradient(180deg, var(--interaction-norm-major-2) -850%, transparent 150%);
+		background: var(--interaction-norm-minor-2);
 	}
 
 	&--value {

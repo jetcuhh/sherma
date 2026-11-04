@@ -38,7 +38,7 @@
 				z-index: -1;
 				inline-size: calc(100% + 2px);
 				block-size: calc(100% + 2px);
-				background: linear-gradient(to right, var(--upgrade-color-stop-1), var(--upgrade-color-stop-2));
+				background: var(--upgrade-color-stop-1);
 			}
 		}
 	}

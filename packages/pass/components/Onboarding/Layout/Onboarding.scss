@@ -31,7 +31,7 @@ body {
 	--onboarding-opaque-border: #523088;
 	--onboarding-border-radius: 2rem;
 
-	background: radial-gradient(#221850 15%, #191333 35%, var(--background-lowered));
+	background: var(--background-lowered);
 	scroll-behavior: smooth;
 
 	.signup-layout-gap {
@@ -52,35 +52,16 @@ body {
 
 	.border-gradient {
 		border: 3px solid #1085f2;
-
-		@supports (background: conic-gradient(white, black)) {
-			border: 3px solid transparent;
-			background:
-				linear-gradient(var(--onboarding-opaque-bg), var(--onboarding-opaque-bg)) padding-box,
-				conic-gradient(
-						from 0deg at 50% 50%,
-						#1085f2 0deg,
-						#1085f2 45deg,
-						#c486cb 90deg,
-						#c486cb 135deg,
-						#ffc977 180deg,
-						#ffc977 225deg,
-						#f6c592 270deg,
-						#1085f2 315deg,
-						#1085f2 360deg
-					)
-					border-box;
-		}
 	}
 
 	.divider-gradient {
 		opacity: 0.2;
-		background: linear-gradient(90deg, rgb(255 255 255 / 0) 24.06%, #fff 50.09%, rgb(255 255 255 / 0) 75.94%);
+		background: #fff;
 	}
 
 	.banner-gradient-bg {
 		max-inline-size: 80%;
-		background: linear-gradient(30deg, #f6c592 50%, #d397be 90%), #222222;
+		background: #f6c592;
 	}
 
 	.text-40 {
@@ -96,7 +77,7 @@ body {
 	}
 
 	.banner--danger {
-		background: linear-gradient(#3a1604 0%, #2f0e01 100%);
+		background: #331005;
 		border-color: #662708;
 		border-radius: 1rem;
 

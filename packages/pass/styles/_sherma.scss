@@ -1,0 +1,342 @@
+// sherma design layer: clean, minimal, playful. No gradients, flat surfaces,
+// generous radii and a soft "boing" on interaction. Loaded last so it wins.
+
+:root {
+	// Rounder, friendlier shapes
+	--border-radius: 8;
+	--border-radius-sm: 0.5rem;
+	--border-radius-md: 0.75rem;
+	--border-radius-lg: 1rem;
+	--border-radius-xl: 1.25rem;
+	--border-radius-xxl: 1.75rem;
+
+	// Flat look: shadows are replaced by crisp 1px rings
+	--sherma-ring: 0 0 0 1px var(--border-weak);
+	--sherma-ring-strong: 0 0 0 2px var(--interaction-norm);
+
+	// Motion
+	--sherma-boing: cubic-bezier(0.34, 1.56, 0.64, 1);
+	--sherma-boing-duration: 0.28s;
+}
+
+// ---------- Buttons: flat, round, springy ----------
+.button {
+	border-radius: var(--border-radius-md);
+	box-shadow: none;
+	transition:
+		transform var(--sherma-boing-duration) var(--sherma-boing),
+		background-color 0.15s ease-out,
+		border-color 0.15s ease-out,
+		color 0.15s ease-out;
+
+	&:not(:disabled):not([aria-disabled='true']):hover {
+		transform: translateY(-1px);
+	}
+
+	&:not(:disabled):not([aria-disabled='true']):active {
+		transform: scale(0.96);
+	}
+
+	&:focus-visible {
+		outline: none;
+		box-shadow: var(--sherma-ring-strong);
+	}
+}
+
+.button-for-icon {
+	border-radius: var(--border-radius-full);
+}
+
+// ---------- Inputs and cards: flat with a hairline ----------
+.input,
+.field-container,
+.pass-value-control,
+.modal-two-dialog,
+.dropdown-content,
+.card,
+.pass-item-list--item {
+	box-shadow: none;
+}
+
+.dropdown-content,
+.modal-two-dialog,
+.card {
+	border: 1px solid var(--border-weak);
+	border-radius: var(--border-radius-lg);
+}
+
+.input-element:focus,
+.input:focus-within {
+	box-shadow: var(--sherma-ring-strong);
+}
+
+// ---------- Lists: pill hover ----------
+.pass-item-list--item,
+.dropdown-item,
+.menu-item {
+	border-radius: var(--border-radius-md);
+	transition: background-color 0.15s ease-out;
+}
+
+// ---------- Mascot ----------
+.sherma-mascot {
+	display: inline-block;
+	line-height: 0;
+	transform-origin: 50% 100%;
+	image-rendering: pixelated;
+
+	svg {
+		display: block;
+		inline-size: 100%;
+		block-size: 100%;
+	}
+
+	&--idle {
+		animation: sherma-breathe 3.2s ease-in-out infinite;
+	}
+
+	&--happy {
+		animation: sherma-hop 0.7s var(--sherma-boing) 1;
+	}
+
+	&--thinking {
+		animation: sherma-wobble 1.6s ease-in-out infinite;
+	}
+
+	&--sleepy {
+		animation: sherma-sleep 4.5s ease-in-out infinite;
+		filter: saturate(0.6);
+	}
+
+	&--sad {
+		animation: sherma-droop 0.5s ease-out 1 both;
+	}
+}
+
+.sherma-mascot-bubble {
+	position: relative;
+	display: inline-block;
+	padding: 0.375rem 0.75rem;
+	border-radius: var(--border-radius-lg);
+	border: 1px solid var(--border-weak);
+	background: var(--background-norm);
+	color: var(--text-norm);
+	font-size: var(--text-sm, 0.875rem);
+	animation: sherma-pop var(--sherma-boing-duration) var(--sherma-boing) both;
+}
+
+// Confetti burst: flat square bits, no gradients
+.sherma-confetti {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	overflow: visible;
+
+	&-bit {
+		position: absolute;
+		inset-block-start: 50%;
+		inset-inline-start: 50%;
+		inline-size: 0.375rem;
+		block-size: 0.375rem;
+		border-radius: 1px;
+		background: var(--bit-color, var(--interaction-norm));
+		animation: sherma-confetti 0.9s ease-out forwards;
+	}
+}
+
+@keyframes sherma-breathe {
+	0%,
+	100% {
+		transform: scale(1, 1);
+	}
+
+	50% {
+		transform: scale(1.03, 0.97);
+	}
+}
+
+@keyframes sherma-hop {
+	0% {
+		transform: translateY(0) scale(1, 1);
+	}
+
+	30% {
+		transform: translateY(-18%) scale(0.94, 1.08);
+	}
+
+	60% {
+		transform: translateY(0) scale(1.08, 0.92);
+	}
+
+	100% {
+		transform: translateY(0) scale(1, 1);
+	}
+}
+
+@keyframes sherma-wobble {
+	0%,
+	100% {
+		transform: rotate(-4deg);
+	}
+
+	50% {
+		transform: rotate(4deg);
+	}
+}
+
+@keyframes sherma-sleep {
+	0%,
+	100% {
+		transform: scale(1, 1);
+	}
+
+	50% {
+		transform: scale(1.02, 0.96);
+	}
+}
+
+@keyframes sherma-droop {
+	to {
+		transform: translateY(4%) scale(1.04, 0.94);
+	}
+}
+
+@keyframes sherma-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.8);
+	}
+
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes sherma-confetti {
+	0% {
+		opacity: 1;
+		transform: translate(0, 0) rotate(0deg);
+	}
+
+	100% {
+		opacity: 0;
+		transform: translate(var(--dx), var(--dy)) rotate(var(--rot));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.button,
+	.sherma-mascot,
+	.sherma-mascot-bubble,
+	.sherma-confetti-bit {
+		animation: none !important;
+		transition: none !important;
+	}
+
+	.button:hover,
+	.button:active {
+		transform: none !important;
+	}
+
+	.sherma-confetti {
+		display: none;
+	}
+}
+
+// ---------- Accent colors (theme picker) ----------
+// Each accent overrides the interaction palette. Hover/minor shades are mixed
+// from the accent so one definition works in both light and dark mode.
+$sherma-accents: (
+	'blue': #1085f2,
+	'mint': #1ea885,
+	'coral': #f0566a,
+	'sun': #f5a300,
+);
+
+@mixin sherma-accent($color, $contrast) {
+	--primary: #{$color};
+	--interaction-norm: #{$color};
+	--interaction-norm-major-1: color-mix(in srgb, #{$color} 88%, white);
+	--interaction-norm-major-2: color-mix(in srgb, #{$color} 76%, white);
+	--interaction-norm-major-3: color-mix(in srgb, #{$color} 64%, white);
+	--interaction-norm-minor-1: color-mix(in srgb, #{$color} 22%, var(--background-norm));
+	--interaction-norm-minor-2: color-mix(in srgb, #{$color} 12%, var(--background-norm));
+	--interaction-norm-contrast: #{$contrast};
+	--link-norm: #{$color};
+	--focus-outline: #{$color};
+}
+
+@each $name, $color in $sherma-accents {
+	body[data-sherma-accent='#{$name}'] {
+		@if $name == 'sun' {
+			@include sherma-accent($color, #000);
+		} @else {
+			@include sherma-accent($color, #fff);
+		}
+	}
+}
+
+// Ink follows the text color so it stays readable in both light and dark
+body[data-sherma-accent='ink'] {
+	@include sherma-accent(var(--text-norm), var(--background-norm));
+}
+
+// ---------- Accent picker ----------
+.sherma-accent-picker {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+
+.sherma-accent-swatch {
+	position: relative;
+	inline-size: 2.5rem;
+	block-size: 2.5rem;
+	padding: 0;
+	border: 2px solid transparent;
+	border-radius: var(--border-radius-full);
+	background: var(--swatch-color);
+	cursor: pointer;
+	transition: transform var(--sherma-boing-duration) var(--sherma-boing);
+
+	&:hover {
+		transform: scale(1.12);
+	}
+
+	&:active {
+		transform: scale(0.92);
+	}
+
+	&:focus-visible {
+		outline: 2px solid var(--text-norm);
+		outline-offset: 2px;
+	}
+
+	&.is-selected {
+		// ring sits outside the swatch so the color stays visible
+		box-shadow:
+			0 0 0 3px var(--background-norm),
+			0 0 0 5px var(--swatch-color);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		transition: none;
+
+		&:hover,
+		&:active {
+			transform: none;
+		}
+	}
+}
+
+// Quick celebratory squish, e.g. after copying a value
+.sherma-boing {
+	animation: sherma-hop 0.45s var(--sherma-boing) 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sherma-boing {
+		animation: none !important;
+	}
+}

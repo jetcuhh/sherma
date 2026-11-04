@@ -5,6 +5,7 @@ import noop from '@proton/utils/noop';
 
 import { PASS_DEFAULT_THEME } from '../../../constants';
 import { usePassCore } from '../../Core/PassCoreContext';
+import { initAccent } from './accent';
 import { PassThemeOption, themeOptionToDesktop } from './types';
 import { matchDarkTheme } from './utils';
 
@@ -55,6 +56,10 @@ export const PassThemeProvider: FC<PropsWithChildren> = ({ children }) => {
             return () => media?.removeEventListener('change', listener);
         }
     }, [theme]);
+
+    useLayoutEffect(() => {
+        initAccent();
+    }, []);
 
     useLayoutEffect(() => {
         document.body.classList.add(config.className);

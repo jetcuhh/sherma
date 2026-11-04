@@ -3,18 +3,15 @@
 	--gradient-end: 20% 280%;
 	--onboarding-padding-color-1: var(--background-strong);
 	--onboarding-padding-color-2: var(--background-strong);
-	--onboarding-border-color-1: #9834ff;
-	--onboarding-border-color-2: #fcd38d;
+	--onboarding-border-color-1: var(--interaction-norm);
+	--onboarding-border-color-2: var(--interaction-norm);
 
 	& &--gradient {
 		color: var(--text-norm);
 		border-radius: var(--border-radius-md);
 		padding: 1px;
-		border: 1px solid transparent;
-		background:
-			linear-gradient(to right, var(--onboarding-padding-color-1), var(--onboarding-padding-color-2)) padding-box,
-			linear-gradient(87.72deg, var(--onboarding-border-color-1) 0.25%, var(--onboarding-border-color-2) 100%)
-				border-box;
+		border: 1px solid var(--onboarding-border-color-1);
+		background: var(--onboarding-padding-color-1);
 
 		&:hover {
 			--gradient-start: 100% 600%;
@@ -27,9 +24,9 @@
 	}
 
 	& &--active {
-		--onboarding-padding-color-1: #f6c59233;
-		--onboarding-padding-color-2: #a779ff33;
-		--onboarding-border-color-1: #9a34ff71;
-		--onboarding-border-color-2: #fcd38d76;
+		--onboarding-padding-color-1: var(--interaction-norm-minor-1);
+		--onboarding-padding-color-2: var(--interaction-norm-minor-1);
+		--onboarding-border-color-1: var(--interaction-norm);
+		--onboarding-border-color-2: var(--interaction-norm);
 	}
 }

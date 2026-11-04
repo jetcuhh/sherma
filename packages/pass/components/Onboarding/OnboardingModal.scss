@@ -13,11 +13,7 @@ im.$media-expressions: $media-expressions;
 	}
 
 	&-header-background {
-		background: linear-gradient(160deg, #f08fa4 0, #4b3379 25%, #222222 45%), var(--interaction-weak);
-
-		@at-root .pass-light & {
-			background: linear-gradient(160deg, #cf8287 0%, #e7daff 25%, #f7f3ff 45%), #f4f4f4;
-		}
+		background: var(--interaction-norm-minor-1);
 	}
 
 	&--content {

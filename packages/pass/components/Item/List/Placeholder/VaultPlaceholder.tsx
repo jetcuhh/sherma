@@ -4,6 +4,7 @@ import { useSelector } from 'react-redux';
 import { c } from 'ttag';
 
 import { selectAllVaults } from '../../../../store/selectors/shares';
+import { Mascot } from '../../../Layout/Mascot';
 import { useNavigationFilters } from '../../../Navigation/NavigationFilters';
 import { useItems } from '../../Context/ItemsProvider';
 import { NoVaultPlaceholder } from './NoVaultPlaceholder';
@@ -25,7 +26,8 @@ export const VaultPlaceholder: FC = () => {
     if (empty) return <QuickActionsPlaceholder />;
 
     return (
-        <span className="block color-weak text-sm p-2 text-center text-break">
+        <span className="flex flex-column items-center gap-2 color-weak text-sm p-4 text-center text-break">
+            <Mascot mood={hasSearch ? 'thinking' : 'sleepy'} size={56} />
             {hasSearch ? (
                 <span>
                     {c('Warning').t`No items matching`}
